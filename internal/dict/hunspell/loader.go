@@ -50,14 +50,18 @@ func ParseDic(data []byte) (map[string]int, error) {
 }
 
 // ParseDicWithAff 解析 .dic 文件并应用 aff 派生规则
-// 例如 "definite/SM" + SFX S → definites；+ SFX M → definitely
 // 限制：每个词根最多派生 5 个词（避免组合爆炸）
+// 限制：总词条数限制 80000（控制内存）
 func ParseDicWithAff(data []byte, rules *AffRules) (map[string]int, error) {
         words := make(map[string]int)
+        const MAX_WORDS = 50000
         scanner := bufio.NewScanner(strings.NewReader(string(data)))
         scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
         lineNo := 0
         for scanner.Scan() {
+                if len(words) >= MAX_WORDS {
+                        break
+                }
                 lineNo++
                 line := strings.TrimSpace(scanner.Text())
                 if line == "" {
@@ -91,7 +95,6 @@ func ParseDicWithAff(data []byte, rules *AffRules) (map[string]int, error) {
                 // 应用 aff 派生规则（限制总派生数避免爆炸）
                 if rules != nil && flags != "" {
                         derived := rules.Derive(word, flags)
-                        // 限制：词根 + 最多 4 个派生
                         if len(derived) > 5 {
                                 derived = derived[:5]
                         }

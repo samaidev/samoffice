@@ -4,9 +4,8 @@ import type { SpellError } from '../../types/udm'
 
 const spellKey = new PluginKey<DecorationSet>('spellCheck')
 
-// spellCheckPlugin: 接收外部传入的拼写错误列表，在编辑器中渲染装饰
-// 错误词用红色波浪线标记，点击可触发建议
-export function spellCheckPlugin(getErrors: () => SpellError[]) {
+// spellCheckPlugin: 用 plugin state 存错误列表，state 变化时重新计算装饰
+export function spellCheckPlugin() {
   return new Plugin<DecorationSet>({
     key: spellKey,
     state: {
@@ -14,7 +13,13 @@ export function spellCheckPlugin(getErrors: () => SpellError[]) {
         return DecorationSet.empty
       },
       apply(tr, oldState) {
-        // 如果是文档变更，清除旧装饰（外部会重新触发检查）
+        // 通过 meta 更新错误列表
+        const meta = tr.getMeta(spellKey)
+        if (meta !== undefined) {
+          // 重新构建装饰
+          return buildDecorations(tr.doc, meta)
+        }
+        // 文档变更时，清理装饰（外部会重新触发检查）
         if (tr.docChanged) {
           return DecorationSet.empty
         }
@@ -23,45 +28,46 @@ export function spellCheckPlugin(getErrors: () => SpellError[]) {
     },
     props: {
       decorations(state) {
-        const errors = getErrors()
-        if (!errors || errors.length === 0) {
-          return DecorationSet.empty
-        }
-
-        const decorations: Decoration[] = []
-        // 遍历文档，找到所有文本节点，匹配错误词
-        state.doc.descendants((node, pos) => {
-          if (!node.isText || !node.text) return
-          const text = node.text
-          for (const err of errors) {
-            if (!err.word) continue
-            // 在文本中查找错误词的所有出现位置
-            let idx = 0
-            while (true) {
-              const found = text.indexOf(err.word, idx)
-              if (found < 0) break
-              const from = pos + found
-              const to = from + err.word.length
-              decorations.push(
-                Decoration.inline(from, to, {
-                  class: 'spell-error',
-                  'data-suggest': err.suggest?.slice(0, 5).join(',') || '',
-                  title: `建议: ${err.suggest?.slice(0, 3).join(', ') || '无'}`
-                })
-              )
-              idx = found + err.word.length
-            }
-          }
-        })
-
-        return DecorationSet.create(state.doc, decorations)
+        return spellKey.getState(state)
       }
     }
   })
 }
 
-// 更新装饰的外部入口（通过 transaction meta 触发）
-export function setSpellErrors(tr: any, _errors: SpellError[]) {
-  // 装饰通过 props.decorations 动态计算，不需要 meta
-  return tr
+// buildDecorations 根据错误列表在文档中查找并构建装饰
+function buildDecorations(doc: any, errors: SpellError[]): DecorationSet {
+  if (!errors || errors.length === 0) {
+    return DecorationSet.empty
+  }
+
+  const decorations: Decoration[] = []
+  doc.descendants((node: any, pos: number) => {
+    if (!node.isText || !node.text) return
+    const text = node.text
+    for (const err of errors) {
+      if (!err.word) continue
+      let idx = 0
+      while (true) {
+        const found = text.toLowerCase().indexOf(err.word.toLowerCase(), idx)
+        if (found < 0) break
+        const from = pos + found
+        const to = from + err.word.length
+        decorations.push(
+          Decoration.inline(from, to, {
+            class: 'spell-error',
+            'data-suggest': err.suggest?.slice(0, 5).join(',') || '',
+            title: `建议: ${err.suggest?.slice(0, 3).join(', ') || '无'}`
+          })
+        )
+        idx = found + err.word.length
+      }
+    }
+  })
+
+  return DecorationSet.create(doc, decorations)
+}
+
+// setSpellErrors 通过 transaction meta 触发装饰更新
+export function setSpellErrors(tr: any, errors: SpellError[]) {
+  return tr.setMeta(spellKey, errors)
 }

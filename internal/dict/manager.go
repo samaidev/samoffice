@@ -2,6 +2,7 @@ package dict
 
 import (
         "path/filepath"
+        "runtime"
         "strings"
         "sync"
 
@@ -46,13 +47,9 @@ func NewManager(userStore *userdict.Store) *Manager {
                 user:   userStore,
                 loaded: make(map[string]bool),
         }
-        // 异步加载 jieba 词典（不阻塞主线程）
-        go func() {
-                if err := m.zhSeg.LoadBuiltin(); err != nil {
-                        // 加载失败不致命
-                        _ = err
-                }
-        }()
+        // 同步加载 jieba 词典（启动时一次性，加载完触发 GC 释放临时分配）
+        _ = m.zhSeg.LoadBuiltin()
+        runtime.GC()
         return m
 }
 
@@ -88,39 +85,50 @@ func (m *Manager) RegisterLang(lang string, words map[string]int) error {
         m.mu.Lock()
         defer m.mu.Unlock()
 
-        idx := symspell.New(2)
-        for w, f := range words {
-                idx.AddWord(w, f)
-        }
-
-        // 中文：合并 jieba 词典到 SymSpell 索引
+        // 中文：仅填充分词器词典，不进 SymSpell（35万词 maxDist=2 索引会 OOM）
+        // 中文拼写检查通过 zhSeg.HasWord 双重验证
         if lang == "zh" {
                 for w, f := range words {
                         m.zhSeg.AddWord(w, f)
                 }
+                // 合并用户词库
+                if m.user != nil {
+                        entries, _ := m.user.All(lang)
+                        for _, e := range entries {
+                                m.zhSeg.AddWord(e.Word, e.Frequency+1)
+                        }
+                }
+                // 中文用一个小型 SymSpell 索引（仅用户词库 + 少量词），maxDist=1
+                idx := symspell.New(1)
+                if m.user != nil {
+                        entries, _ := m.user.All(lang)
+                        for _, e := range entries {
+                                idx.AddWord(e.Word, e.Frequency+1)
+                        }
+                }
+                idx.Build()
+                m.dicts[lang] = idx
+                m.loaded[lang] = true
+                if cachePath != "" {
+                        go idx.SaveIndex(cachePath)
+                }
+                return nil
+        }
+
+        // 英文等其他语言：大词库用 maxDist=1 控制内存
+        maxDist := 2
+        if len(words) > 50000 {
+                maxDist = 1
+        }
+        idx := symspell.New(maxDist)
+        for w, f := range words {
+                idx.AddWord(w, f)
         }
 
         // 合并用户词库
         if m.user != nil {
                 entries, err := m.user.All(lang)
                 if err == nil {
-                        for _, e := range entries {
-                                idx.AddWord(e.Word, e.Frequency+1)
-                                if lang == "zh" {
-                                        m.zhSeg.AddWord(e.Word, e.Frequency+1)
-                                }
-                        }
-                }
-        }
-
-        // 大词库（>10万）使用 maxDist=1 减少内存；小词库用 maxDist=2
-        if len(words) > 100000 {
-                idx = symspell.New(1)
-                for w, f := range words {
-                        idx.AddWord(w, f)
-                }
-                if m.user != nil {
-                        entries, _ := m.user.All(lang)
                         for _, e := range entries {
                                 idx.AddWord(e.Word, e.Frequency+1)
                         }

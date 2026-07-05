@@ -7,7 +7,7 @@ import { baseKeymap, toggleMark, setBlockType, wrapIn } from 'prosemirror-comman
 import { history, undo, redo } from 'prosemirror-history'
 import { inputRules, wrappingInputRule, textblockTypeInputRule, InputRule } from 'prosemirror-inputrules'
 import { udmToProseMirror, proseMirrorToUDM } from './convert'
-import { spellCheckPlugin } from './spellPlugin'
+import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import type { Document, SpellError } from '../../types/udm'
 
 interface Props {
@@ -74,7 +74,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
           ]
         }),
-        spellCheckPlugin(() => errorsRef.current)
+        spellCheckPlugin()
       ]
     })
 
@@ -152,8 +152,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   useEffect(() => {
     if (viewRef.current) {
-      const tr = viewRef.current.state.tr
-      viewRef.current.dispatch(tr)
+      const view = viewRef.current
+      const tr = setSpellErrors(view.state.tr, spellErrors)
+      view.dispatch(tr)
       setTick((t) => t + 1)
     }
   }, [spellErrors])
