@@ -21,6 +21,7 @@
 package xlsgo
 
 import (
+        "bytes"
         "fmt"
         "strings"
 
@@ -59,6 +60,15 @@ func Open(path string) (*Workbook, error) {
 // Save 保存工作簿
 func (wb *Workbook) Save(path string) error {
         return wb.f.SaveAs(path)
+}
+
+// Bytes 生成 xlsx 字节流
+func (wb *Workbook) Bytes() ([]byte, error) {
+        buf := &bytes.Buffer{}
+        if _, err := wb.f.WriteTo(buf); err != nil {
+                return nil, err
+        }
+        return buf.Bytes(), nil
 }
 
 // Close 关闭工作簿
@@ -241,4 +251,124 @@ func (s *Sheet) FillTable(startCell string, data [][]string) error {
 // ReadAll 读取所有数据为二维数组
 func (s *Sheet) ReadAll() ([][]string, error) {
         return s.wb.f.GetRows(s.name)
+}
+
+// === 高级功能 ===
+
+// FreezePanes 冻结窗格
+// cell: 冻结点，如 "B2" 表示冻结第一行和第一列
+func (s *Sheet) FreezePanes(cell string) error {
+        return s.wb.f.SetPanes(s.name, &excelize.Panes{
+                Freeze:      true,
+                Split:       false,
+                XSplit:      0,
+                YSplit:      0,
+                TopLeftCell: cell,
+                ActivePane:  "bottomRight",
+        })
+}
+
+// AddChart 添加图表
+// chartType: "bar" / "line" / "pie" / "scatter"
+// rangeStr: 数据范围，如 "A1:B5"
+// cell: 图表锚点单元格，如 "D1"
+func (s *Sheet) AddChart(chartType, rangeStr, cell string) error {
+        var ct excelize.ChartType
+        switch chartType {
+        case "bar":
+                ct = excelize.Bar
+        case "line":
+                ct = excelize.Line
+        case "pie":
+                ct = excelize.Pie
+        case "scatter":
+                ct = excelize.Scatter
+        default:
+                ct = excelize.Bar
+        }
+        return s.wb.f.AddChart(s.name, "Chart1", &excelize.Chart{
+                Type: ct,
+                Series: []excelize.ChartSeries{
+                        {
+                                Name:       "Series 1",
+                                Categories: fmt.Sprintf("%s!%s", s.name, rangeStr),
+                                Values:     fmt.Sprintf("%s!%s", s.name, rangeStr),
+                        },
+                },
+                Format: excelize.GraphicOptions{
+                        LockAspectRatio: false,
+                        OffsetX:         15,
+                        OffsetY:         10,
+                },
+        })
+}
+
+// SetConditionalFormat 条件格式：高于阈值高亮
+// rangeStr: 应用范围，如 "B2:B10"
+// rule: "greaterThan:90" / "lessThan:60" / "between:60,90"
+func (s *Sheet) SetConditionalFormat(rangeStr, rule string) error {
+        var format excelize.ConditionalFormatOptions
+
+        if strings.HasPrefix(rule, "greaterThan:") {
+                val := strings.TrimPrefix(rule, "greaterThan:")
+                v := val
+                format.Type = "cellIs"
+                format.Criteria = "greaterThan"
+                format.Value = val
+                _ = v
+        } else if strings.HasPrefix(rule, "lessThan:") {
+                val := strings.TrimPrefix(rule, "lessThan:")
+                format.Type = "cellIs"
+                format.Criteria = "lessThan"
+                format.Value = val
+        } else if strings.HasPrefix(rule, "between:") {
+                vals := strings.Split(strings.TrimPrefix(rule, "between:"), ",")
+                if len(vals) == 2 {
+                        format.Type = "cellIs"
+                        format.Criteria = "between"
+                        format.MinValue = strings.TrimSpace(vals[0])
+                        format.MaxValue = strings.TrimSpace(vals[1])
+                }
+        }
+
+        return s.wb.f.SetConditionalFormat(s.name, rangeStr, []excelize.ConditionalFormatOptions{format})
+}
+
+// AutoFilter 设置自动筛选
+// rangeStr: 筛选范围，如 "A1:D10"
+func (s *Sheet) AutoFilter(rangeStr string) error {
+        return s.wb.f.AutoFilter(s.name, rangeStr, []excelize.AutoFilterOptions{})
+}
+
+// SetColumnColor 设置列字体颜色
+func (s *Sheet) SetColumnColor(col, hexColor string) error {
+        style, err := s.wb.f.NewStyle(&excelize.Style{
+                Font: &excelize.Font{Color: hexColor},
+        })
+        if err != nil {
+                return err
+        }
+        return s.wb.f.SetColStyle(s.name, col, style)
+}
+
+// SetRowHeight 设置行高
+func (s *Sheet) SetRowHeight(row int, height float64) error {
+        return s.wb.f.SetRowHeight(s.name, row, height)
+}
+
+// AddDataValidation 添加数据验证（下拉列表）
+// rangeStr: 应用范围
+// list: 下拉选项，如 `"Yes,No,Maybe"`
+func (s *Sheet) AddDataValidation(rangeStr, list string) error {
+        dv := excelize.NewDataValidation(true)
+        dv.ShowDropDown = true
+        dv.SetDropList(strings.Split(list, ","))
+        dv.Sqref = rangeStr
+        return s.wb.f.AddDataValidation(s.name, dv)
+}
+
+// MustCellName 坐标转单元格名（忽略错误）
+func MustCellName(col, row int) string {
+        name, _ := excelize.CoordinatesToCellName(col, row)
+        return name
 }

@@ -16,6 +16,7 @@ import (
         "github.com/zai/gooffice/internal/dict"
         "github.com/zai/gooffice/internal/dict/hunspell"
         "github.com/zai/gooffice/internal/dict/userdict"
+        "github.com/zai/gooffice/internal/officelib"
         "github.com/zai/gooffice/internal/parser"
         "github.com/zai/gooffice/internal/server/api"
         "go.uber.org/zap"
@@ -58,6 +59,9 @@ func main() {
         h := api.New(registry, dictMgr)
         h.Register(r)
         r.GET("/api/doc/local", h.LocalFileOpen)
+
+        // officelib API（智能体调用）
+        officelib.Register(r)
 
         // 静态前端资源
         frontendDir := "./frontend/dist"
