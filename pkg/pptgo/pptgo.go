@@ -546,8 +546,8 @@ func (s *Slide) slideXML(num int) string {
                 sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="%d" name="ArtText %d"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
 <p:spPr><a:xfrm%s><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>
 <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>%s</p:spPr>
-<p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/>%s</a:p></p:txBody></p:sp>`,
-                        shapeID, i+1, rotXML, at.X, at.Y, at.W, at.H, fillXML+effectLst, runProps+fmt.Sprintf(`<a:t>%s</a:t>`, escapeXML(at.Text))))
+<p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r>%s<a:t>%s</a:t></a:r></a:p></p:txBody></p:sp>`,
+                        shapeID, i+1, rotXML, at.X, at.Y, at.W, at.H, fillXML+effectLst, runProps, escapeXML(at.Text)))
         }
 
         // 流程图（自动布局 + 连线）

@@ -634,14 +634,21 @@ func (d *Document) headerXML() string {
 }
 
 func (d *Document) footerXML() string {
-        content := d.footer
+        // 页脚文本和页码字段必须作为独立的 XML 元素，不能拼接后 escapeXML
+        var inner string
+        if d.footer != "" {
+                inner += fmt.Sprintf(`<w:r><w:t xml:space="preserve">%s</w:t></w:r>`, escapeXML(d.footer))
+        }
         if d.pageNum {
-                content += ` <w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`
+                if d.footer != "" {
+                        inner += `<w:r><w:t xml:space="preserve"> </w:t></w:r>`
+                }
+                inner += `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve">PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`
         }
         return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t xml:space="preserve">%s</w:t></w:r></w:p>
-</w:ftr>`, escapeXML(content))
+<w:p><w:pPr><w:jc w:val="center"/></w:pPr>%s</w:p>
+</w:ftr>`, inner)
 }
 
 func (d *Document) corePropsXML() string {
