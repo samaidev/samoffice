@@ -10,6 +10,7 @@ import (
         "net/http"
         "os"
         "path/filepath"
+        "strings"
 
         "github.com/gin-gonic/gin"
         "github.com/zai/gooffice/internal/dict"
@@ -63,10 +64,23 @@ func main() {
         if _, err := os.Stat(frontendDir); err == nil {
                 r.Static("/assets", filepath.Join(frontendDir, "assets"))
                 r.StaticFile("/", filepath.Join(frontendDir, "index.html"))
-                // SPA fallback
+                // SPA fallback：仅对非 API 路径返回 index.html
                 r.NoRoute(func(c *gin.Context) {
+                        if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+                                c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+                                return
+                        }
                         c.File(filepath.Join(frontendDir, "index.html"))
                 })
+                // 对 API 路径的错误 method 返回 405
+                r.NoMethod(func(c *gin.Context) {
+                        if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+                                c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
+                                return
+                        }
+                        c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
+                })
+                r.HandleMethodNotAllowed = true
         } else {
                 logger.Warn("frontend/dist not found, running API-only mode",
                         zap.String("dir", frontendDir))
