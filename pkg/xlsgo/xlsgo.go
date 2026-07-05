@@ -23,7 +23,9 @@ package xlsgo
 import (
         "bytes"
         "fmt"
+        "sort"
         "strings"
+        "time"
 
         "github.com/xuri/excelize/v2"
 )
@@ -51,6 +53,15 @@ func New() *Workbook {
 // Open 打开已有 xlsx 文件
 func Open(path string) (*Workbook, error) {
         f, err := excelize.OpenFile(path)
+        if err != nil {
+                return nil, err
+        }
+        return &Workbook{f: f, sheets: f.GetSheetList(), activeIdx: 0}, nil
+}
+
+// ParseBytes 从字节流解析工作簿
+func ParseBytes(data []byte) (*Workbook, error) {
+        f, err := excelize.OpenReader(bytes.NewReader(data))
         if err != nil {
                 return nil, err
         }
@@ -369,6 +380,274 @@ func (s *Sheet) AddDataValidation(rangeStr, list string) error {
 
 // MustCellName 坐标转单元格名（忽略错误）
 func MustCellName(col, row int) string {
-        name, _ := excelize.CoordinatesToCellName(col, row)
-        return name
+	name, _ := excelize.CoordinatesToCellName(col, row)
+	return name
+}
+
+// === 补齐方法：与 UI 表格操作对齐 ===
+
+// DeleteSheet 删除工作表
+func (wb *Workbook) DeleteSheet(name string) error {
+	idx, err := wb.f.GetSheetIndex(name)
+	if err != nil || idx < 0 {
+		return fmt.Errorf("sheet %q not found", name)
+	}
+	return wb.f.DeleteSheet(name)
+}
+
+// DuplicateSheet 复制工作表，返回新表
+func (wb *Workbook) DuplicateSheet(srcName, newName string) (*Sheet, error) {
+	idx, err := wb.f.GetSheetIndex(srcName)
+	if err != nil || idx < 0 {
+		return nil, fmt.Errorf("sheet %q not found", srcName)
+	}
+	if err := wb.f.CopySheet(idx, idx); err != nil {
+		return nil, err
+	}
+	// CopySheet 创建副本名为 "SheetN(1)"，重命名
+	copies := wb.f.GetSheetList()
+	// 找到新创建的副本（名字含 srcName）
+	for _, n := range copies {
+		if n != srcName && strings.HasPrefix(n, srcName) {
+			wb.f.SetSheetName(n, newName)
+			return &Sheet{wb: wb, name: newName}, nil
+		}
+	}
+	return &Sheet{wb: wb, name: newName}, nil
+}
+
+// SheetCount 返回工作表数
+func (wb *Workbook) SheetCount() int {
+	return len(wb.f.GetSheetList())
+}
+
+// SetCellBool 设置布尔值
+func (s *Sheet) SetCellBool(cell string, value bool) error {
+	return s.wb.f.SetCellValue(s.name, cell, value)
+}
+
+// SetCellDate 设置日期值
+func (s *Sheet) SetCellDate(cell string, value time.Time) error {
+	return s.wb.f.SetCellValue(s.name, cell, value)
+}
+
+// SetCellLink 设置超链接
+func (s *Sheet) SetCellLink(cell, link string) error {
+	return s.wb.f.SetCellHyperLink(s.name, cell, link, "External")
+}
+
+// GetCellType 返回单元格数据类型
+func (s *Sheet) GetCellType(cell string) (string, error) {
+	ct, err := s.wb.f.GetCellType(s.name, cell)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d", int(ct)), nil
+}
+
+// GetMergedCells 返回所有合并区域（格式 "A1:B2"）
+func (s *Sheet) GetMergedCells() ([]string, error) {
+	cells, err := s.wb.f.GetMergeCells(s.name)
+	if err != nil {
+		return nil, err
+	}
+	var result []string
+	for _, mc := range cells {
+		result = append(result, mc[0]) // mc[0] 是 "A1:B2" 范围
+	}
+	return result, nil
+}
+
+// UnmergeCell 取消合并单元格
+func (s *Sheet) UnmergeCell(rangeStr string) error {
+	parts := strings.SplitN(rangeStr, ":", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid range %q, expected A1:B2", rangeStr)
+	}
+	return s.wb.f.UnmergeCell(s.name, parts[0], parts[1])
+}
+
+// InsertRow 在指定行前插入空行
+func (s *Sheet) InsertRow(row int, n int) error {
+	return s.wb.f.InsertRows(s.name, row, n)
+}
+
+// InsertCol 在指定列前插入空列
+func (s *Sheet) InsertCol(col string, n int) error {
+	return s.wb.f.InsertCols(s.name, col, n)
+}
+
+// RemoveRow 删除指定行
+func (s *Sheet) RemoveRow(row int, n int) error {
+	for i := 0; i < n; i++ {
+		if err := s.wb.f.RemoveRow(s.name, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveCol 删除指定列
+func (s *Sheet) RemoveCol(col string, n int) error {
+	for i := 0; i < n; i++ {
+		if err := s.wb.f.RemoveCol(s.name, col); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetRowHidden 隐藏/显示行
+func (s *Sheet) SetRowHidden(row int, hidden bool) error {
+	return s.wb.f.SetRowVisible(s.name, row, !hidden)
+}
+
+// SetColHidden 隐藏/显示列
+func (s *Sheet) SetColHidden(col string, hidden bool) error {
+	return s.wb.f.SetColVisible(s.name, col, !hidden)
+}
+
+// ProtectSheet 保护工作表
+func (s *Sheet) ProtectSheet(password string) error {
+	return s.wb.f.ProtectSheet(s.name, &excelize.SheetProtectionOptions{
+		Password: password,
+	})
+}
+
+// UnprotectSheet 取消保护
+func (s *Sheet) UnprotectSheet() error {
+	return s.wb.f.UnprotectSheet(s.name)
+}
+
+// SetCellFillColor 设置单元格背景色
+func (s *Sheet) SetCellFillColor(cell, hexColor string) error {
+	style, err := s.wb.f.NewStyle(&excelize.Style{
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Pattern: 1,
+			Color:   []string{hexColor},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return s.wb.f.SetCellStyle(s.name, cell, cell, style)
+}
+
+// borderStyleMap 边框样式字符串 → int
+var borderStyleMap = map[string]int{
+	"none":   0,
+	"thin":   1,
+	"medium": 2,
+	"dashed": 3,
+	"dotted": 4,
+	"thick":  5,
+	"double": 6,
+	"hair":   7,
+}
+
+// SetCellBorder 设置单元格边框
+func (s *Sheet) SetCellBorder(cell, style string) error {
+	st, ok := borderStyleMap[strings.ToLower(style)]
+	if !ok {
+		st = 1 // 默认 thin
+	}
+	sid, err := s.wb.f.NewStyle(&excelize.Style{
+		Border: []excelize.Border{
+			{Type: "left", Color: "000000", Style: st},
+			{Type: "top", Color: "000000", Style: st},
+			{Type: "right", Color: "000000", Style: st},
+			{Type: "bottom", Color: "000000", Style: st},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return s.wb.f.SetCellStyle(s.name, cell, cell, sid)
+}
+
+// SetCellFontSize 设置单元格字号
+func (s *Sheet) SetCellFontSize(cell string, size float64) error {
+	st, err := s.wb.f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Size: size},
+	})
+	if err != nil {
+		return err
+	}
+	return s.wb.f.SetCellStyle(s.name, cell, cell, st)
+}
+
+// SetCellAlign 设置单元格对齐
+func (s *Sheet) SetCellAlign(cell, hAlign, vAlign string) error {
+	st, err := s.wb.f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{
+			Horizontal: hAlign,
+			Vertical:   vAlign,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return s.wb.f.SetCellStyle(s.name, cell, cell, st)
+}
+
+// Sort 对指定范围排序
+// rangeStr: "A1:B10", order: "asc" / "desc"
+func (s *Sheet) Sort(rangeStr, order string) error {
+	// excelize v2 的 Sort 不直接暴露，通过 GetRows + 重新写入实现
+	rows, err := s.wb.f.GetRows(s.name)
+	if err != nil {
+		return err
+	}
+	// 解析范围
+	startCol, startRow, err := excelize.CellNameToCoordinates(strings.Split(rangeStr, ":")[0])
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(rangeStr, ":")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid range")
+	}
+	_, endRow, err := excelize.CellNameToCoordinates(parts[1])
+	if err != nil {
+		return err
+	}
+
+	// 提取数据行
+	var dataRows [][]string
+	for r := startRow; r <= endRow && r <= len(rows); r++ {
+		if r-1 < len(rows) {
+			dataRows = append(dataRows, rows[r-1])
+		}
+	}
+	if len(dataRows) == 0 {
+		return nil
+	}
+
+	// 按第一列排序
+	headerRow := dataRows[0]
+	dataPart := dataRows[1:]
+	sort.Slice(dataPart, func(i, j int) bool {
+		a, b := "", ""
+		if startCol-1 < len(dataPart[i]) {
+			a = dataPart[i][startCol-1]
+		}
+		if startCol-1 < len(dataPart[j]) {
+			b = dataPart[j][startCol-1]
+		}
+		if order == "desc" {
+			return a > b
+		}
+		return a < b
+	})
+
+	// 重新写入
+	result := append([][]string{headerRow}, dataPart...)
+	for ri, rowData := range result {
+		for ci, val := range rowData {
+			cell, _ := excelize.CoordinatesToCellName(startCol+ci, startRow+ri)
+			s.wb.f.SetCellValue(s.name, cell, val)
+		}
+	}
+	return nil
 }
