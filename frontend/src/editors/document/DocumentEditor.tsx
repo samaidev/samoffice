@@ -9,6 +9,7 @@ import { inputRules, wrappingInputRule, textblockTypeInputRule, InputRule } from
 import { udmToProseMirror, proseMirrorToUDM } from './convert'
 import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
+import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign } from './tableCommands'
 import type { Document, SpellError } from '../../types/udm'
 
 interface Props {
@@ -68,6 +69,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   // 插入面板
   const [showInsertMenu, setShowInsertMenu] = useState(false)
 
+  // 是否在表格内
+  const [inTable, setInTable] = useState(false)
+
   useEffect(() => {
     if (!editorRef.current) return
     const doc = udmToProseMirror(document, schema)
@@ -102,6 +106,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         updateActiveState(ns)
         const ss = getSearchState(view)
         if (ss) { setMatchCount(ss.matches.length); setActiveMatch(ss.activeIndex) }
+        // 渲染公式
+        setTimeout(() => {
+          const el = editorRef.current
+          if (el) {
+            const w = window as any
+            if (w.renderMathInElement) {
+              try { w.renderMathInElement(el, { delimiters: [{left: '⟨formula:', right: '⟩', display: true}] }) } catch {}
+            }
+          }
+        }, 50)
       },
       handleDOMEvents: { focus: () => { setFocused(true); return false }, blur: () => { setFocused(false); return false } }
     })
@@ -121,6 +135,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if (empty) { state.storedMarks?.forEach(collect); $from.marks().forEach(collect) }
     else { state.doc.nodesBetween(from, to, (n) => n.marks.forEach(collect)) }
     if ($from.parent.type.name === 'heading') marks.add(`heading-${$from.parent.attrs.level}`)
+    // 检测是否在表格内
+    let isInTable = false
+    for (let d = $from.depth; d > 0; d--) {
+      if ($from.node(d).type.name === 'table') { isInTable = true; break }
+    }
+    setInTable(isInTable)
     setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c); setTick(t => t + 1)
   }
 
@@ -222,16 +242,65 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     setTimeout(() => window.print(), 100)
   }
 
-  // 公式插入
+  // 公式插入 - 用 KaTeX 渲染
   const insertFormula = () => {
-    const formula = prompt('输入 LaTeX 公式（如：E=mc^2）:')
+    const formula = prompt('输入 LaTeX 公式（如：E=mc^2, \\frac{1}{2}, \\sum_{i=1}^{n}i）:')
     if (formula) {
       const v = viewRef.current; if (!v) return
-      // 简化：作为特殊段落
-      const para = schema.nodes.paragraph.create({ align: 'center' }, schema.text(`⟨${formula}⟩`))
+      // 用 KaTeX 渲染为 HTML，作为特殊段落
+      let html = ''
+      try {
+        const w = window as any
+        if (w.katex) {
+          html = w.katex.renderToString(formula, { displayMode: true, throwOnError: false })
+        } else {
+          html = `<span style="font-style:italic">${formula}</span>`
+        }
+      } catch {
+        html = `<span style="font-style:italic">${formula}</span>`
+      }
+      // 创建包含公式 HTML 的段落
+      const para = schema.nodes.paragraph.create({ align: 'center' }, schema.text(`⟨formula:${formula}⟩`))
       v.dispatch(v.state.tr.replaceSelectionWith(para))
       v.focus()
+      // 后续渲染：用 KaTeX 渲染所有 ⟨formula:...⟩ 标记
+      setTimeout(() => renderFormulas(), 100)
     }
+  }
+
+  // 渲染文档中的所有公式
+  const renderFormulas = () => {
+    const el = editorRef.current as any
+    if (!el) return
+    const w = window as any
+    if (!w.katex) return
+    // 查找所有包含 ⟨formula:...⟩ 的文本
+    const doc = el.ownerDocument as any
+    const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
+    const nodes: Text[] = []
+    let node
+    while (node = walker.nextNode()) {
+      if (node.textContent && node.textContent.includes('⟨formula:')) {
+        nodes.push(node as Text)
+      }
+    }
+    nodes.forEach(textNode => {
+      const text = textNode.textContent || ''
+      const match = text.match(/⟨formula:(.+?)⟩/)
+      if (match) {
+        const formula = match[1]
+        const span = doc.createElement('span')
+        span.className = 'formula-display'
+        span.style.textAlign = 'center'
+        span.style.margin = '12px 0'
+        try {
+          w.katex.render(formula, span, { displayMode: true, throwOnError: false })
+        } catch {
+          span.textContent = formula
+        }
+        textNode.parentNode?.replaceChild(span, textNode)
+      }
+    })
   }
 
   // 艺术字
@@ -415,6 +484,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       {watermark && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)', fontSize: '72px', color: 'rgba(0,0,0,0.08)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap' }}>
           {watermark}
+        </div>
+      )}
+
+      {/* 表格操作栏（仅光标在表格内时显示） */}
+      {inTable && (
+        <div className="px-2 py-1 flex items-center gap-0.5 flex-wrap flex-shrink-0 animate-fade-in" style={{ background: 'var(--color-primary-light)', borderBottom: '1px solid var(--color-border)' }}>
+          <span className="text-xs font-medium px-2" style={{ color: 'var(--color-primary)' }}>表格</span>
+          <button onClick={() => mergeCells(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title="合并单元格" type="button">⊟</button>
+          <button onClick={() => splitCell(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title="拆分单元格" type="button">⊞</button>
+          <div className="toolbar-divider" />
+          <button onClick={() => addRowAfter(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title="下方添加行" type="button">↧+</button>
+          <button onClick={() => addColumnAfter(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title="右侧添加列" type="button">↦+</button>
+          <button onClick={() => deleteRow(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title="删除行" type="button">↧✕</button>
+          <button onClick={() => deleteColumn(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title="删除列" type="button">↦✕</button>
+          <div className="toolbar-divider" />
+          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'left')} className="toolbar-btn" title="单元格左对齐" type="button">⬅</button>
+          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'center')} className="toolbar-btn" title="单元格居中" type="button">⬌</button>
+          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'right')} className="toolbar-btn" title="单元格右对齐" type="button">➡</button>
         </div>
       )}
 
