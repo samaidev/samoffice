@@ -49,7 +49,7 @@ function App() {
     if (!backend) return
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.docx,.md,.markdown'
+    input.accept = '.docx,.md,.markdown,.xlsx,.pptx'
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) return
@@ -67,35 +67,67 @@ function App() {
     input.click()
   }
 
-  const handleSave = async () => {
+  const handleSave = async (format: 'docx' | 'pdf') => {
     if (!backend) return
-    setStatus('保存中...')
+    setStatus(`导出 ${format.toUpperCase()} 中...`)
     try {
-      const resp = await fetch('/api/doc/save', {
+      const endpoint = format === 'docx' ? '/api/doc/save' : '/api/doc/export-pdf'
+      const mime = format === 'docx'
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        : 'application/pdf'
+      const resp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(doc)
       })
       if (resp.ok) {
-        // 下载文件
         const blob = await resp.blob()
+        if (blob.type !== mime && blob.size < 500) {
+          // 可能是错误响应
+          const text = await blob.text()
+          setStatus(`导出失败: ${text}`)
+          return
+        }
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
         const title = doc.meta?.title || 'untitled'
-        a.download = `${title}.docx`
+        a.download = `${title}.${format}`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
-        setStatus('已保存为 docx 文件')
+        setStatus(`已导出 ${format.toUpperCase()} 文件`)
       } else {
         const errText = await resp.text()
-        setStatus(`保存失败: ${errText}`)
+        setStatus(`导出失败: ${errText}`)
       }
     } catch (e: any) {
-      setStatus(`保存失败: ${e.message}`)
+      setStatus(`导出失败: ${e.message}`)
     }
+  }
+
+  const handleInsertImage = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/png,image/jpeg,image/gif'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      // 转 data URI
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataUri = reader.result as string
+        // 在文档末尾插入图片 block
+        setDoc((d) => ({
+          ...d,
+          blocks: [...d.blocks, { src: dataUri, width: 400, height: 300, alt: file.name } as any]
+        }))
+        setStatus(`已插入图片: ${file.name}`)
+      }
+      reader.readAsDataURL(file)
+    }
+    input.click()
   }
 
   const handleLearnWord = async (word: string) => {
@@ -120,12 +152,19 @@ function App() {
             className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded"
           >文件</button>
           <button
-            onClick={handleSave}
+            onClick={() => handleSave('docx')}
             className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded"
-          >保存</button>
+          >存为 docx</button>
+          <button
+            onClick={() => handleSave('pdf')}
+            className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded"
+          >导出 PDF</button>
+          <button
+            onClick={handleInsertImage}
+            className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded"
+          >插入图片</button>
           <button className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded">编辑</button>
           <button className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded">视图</button>
-          <button className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded">插入</button>
           <button className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded">格式</button>
           <button className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-700 rounded">工具</button>
         </div>

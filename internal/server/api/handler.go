@@ -11,10 +11,12 @@ import (
         "github.com/zai/gooffice/internal/dict"
         "github.com/zai/gooffice/internal/parser"
         "github.com/zai/gooffice/internal/renderer/docx"
+        "github.com/zai/gooffice/internal/renderer/pdf"
 )
 
 // alias for clarity
 var _ = docx.New
+var _ = pdf.New
 
 // Handler 持有所有依赖的 API handler
 type Handler struct {
@@ -31,6 +33,7 @@ func (h *Handler) Register(r *gin.Engine) {
         r.GET("/api/health", h.health)
         r.POST("/api/doc/open", h.openDocument)
         r.POST("/api/doc/save", h.saveDocument)
+        r.POST("/api/doc/export-pdf", h.exportPDF)
         r.GET("/api/dict/check", h.spellCheck)
         r.POST("/api/dict/learn", h.learnWord)
         r.GET("/api/dict/suggest", h.suggest)
@@ -86,6 +89,29 @@ func (h *Handler) saveDocument(c *gin.Context) {
         }
         c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
         c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
+}
+
+// exportPDF 接收 UDM JSON 导出为 PDF 文件
+func (h *Handler) exportPDF(c *gin.Context) {
+        var doc core.Document
+        if err := c.ShouldBindJSON(&doc); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+
+        r := pdf.New()
+        data, err := r.Render(&doc)
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        filename := doc.Meta.Title
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
+        c.Data(http.StatusOK, "application/pdf", data)
 }
 
 // spellCheck GET /api/dict/check?text=xxx&lang=en
