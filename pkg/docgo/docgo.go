@@ -116,6 +116,12 @@ type List struct {
 
 func (l *List) elementType() string { return "list" }
 
+// Items 返回列表项
+func (l *List) Items() []string { return l.items }
+
+// IsOrdered 是否有序列表
+func (l *List) IsOrdered() bool { return l.ordered }
+
 // Table 表格
 type Table struct {
         rows   [][]string
@@ -127,6 +133,15 @@ type Table struct {
 }
 
 func (t *Table) elementType() string { return "table" }
+
+// Rows 返回表格所有行数据
+func (t *Table) Rows() [][]string { return t.rows }
+
+// HasHeader 是否有表头
+func (t *Table) HasHeader() bool { return t.header }
+
+// BorderStyle 返回边框样式
+func (t *Table) BorderStyle() string { return t.borderStyle }
 
 // Image 图片
 type Image struct {

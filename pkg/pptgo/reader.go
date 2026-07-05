@@ -335,11 +335,12 @@ func applyShapeToSlide(sh *pptShape, slide *Slide) {
 		return
 	}
 	if sh.IsContent {
-		// content shape：所有 bullets 文本作为要点
+		// content shape：Text 和 Bullets 都作为要点
+		if sh.Text != "" {
+			slide.bullets = append(slide.bullets, sh.Text)
+		}
 		if len(sh.Bullets) > 0 {
 			slide.bullets = append(slide.bullets, sh.Bullets...)
-		} else if sh.Text != "" {
-			slide.bullets = append(slide.bullets, sh.Text)
 		}
 		return
 	}
