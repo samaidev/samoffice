@@ -38,6 +38,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [frozen, setFrozen] = useState(false)
+  const [showChartPanel, setShowChartPanel] = useState(false)
+  const [showShapePanel, setShowShapePanel] = useState(false)
+  const [showFuncPanel, setShowFuncPanel] = useState(false)
+  const [showCondPanel, setShowCondPanel] = useState(false)
+  const [showValidPanel, setShowValidPanel] = useState(false)
+  const [validList, setValidList] = useState('')
   const colName = (c: number) => {
     if (c < 26) return String.fromCharCode(65 + c)
     return String.fromCharCode(65 + Math.floor(c / 26) - 1) + String.fromCharCode(65 + (c % 26))
@@ -104,29 +110,98 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
         </>)}
         {ribbonTab === 'insert' && (<>
           <RibbonGroup label="图表">
-            <RibbonButton icon="📊" label="柱状图" onClick={() => {}} />
-            <RibbonButton icon="📈" label="折线图" onClick={() => {}} />
-            <RibbonButton icon="🥧" label="饼图" onClick={() => {}} />
+            <div className="relative">
+              <RibbonButton icon="📊" label="图表" onClick={() => setShowChartPanel(!showChartPanel)} />
+              {showChartPanel && (
+                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { type: 'bar', icon: '📊', name: '柱状图' },
+                      { type: 'line', icon: '📈', name: '折线图' },
+                      { type: 'pie', icon: '🥧', name: '饼图' },
+                      { type: 'scatter', icon: '⚫', name: '散点图' },
+                      { type: 'area', icon: '🔻', name: '面积图' },
+                      { type: 'doughnut', icon: '🍩', name: '环形图' },
+                    ].map(c => (
+                      <button key={c.type} onClick={() => { alert(`图表类型: ${c.name}\\n数据范围: ${colName(active.c)}1:${colName(active.c)}${rows}`); setShowChartPanel(false) }}
+                        className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 64 }}>
+                        <span style={{ fontSize: '20px' }}>{c.icon}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{c.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </RibbonGroup>
+          <RibbonGroup label="形状">
+            <div className="relative">
+              <RibbonButton icon="▭" label="形状" onClick={() => setShowShapePanel(!showShapePanel)} />
+              {showShapePanel && (
+                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[{i:'▭',n:'矩形'},{i:'▢',n:'圆角'},{i:'⬭',n:'椭圆'},{i:'△',n:'三角'},
+                     {i:'◇',n:'菱形'},{i:'→',n:'箭头'},{i:'★',n:'星形'},{i:'♥',n:'心形'}].map(s => (
+                      <button key={s.n} onClick={() => setShowShapePanel(false)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
+                        <span style={{ fontSize: '20px' }}>{s.i}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{s.n}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </RibbonGroup>
           <RibbonGroup label="插图">
             <RibbonButton icon="🖼" label="图片" onClick={() => {}} />
           </RibbonGroup>
           <RibbonGroup label="函数">
-            <RibbonButton icon="ƒx" label="求和" onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)) }} />
-            <RibbonButton icon="x̄" label="平均值" onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0') }} />
-            <RibbonButton icon="n" label="计数" onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)) }} />
+            <div className="relative">
+              <RibbonButton icon="ƒx" label="函数" onClick={() => setShowFuncPanel(!showFuncPanel)} />
+              {showFuncPanel && (
+                <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
+                  <button onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>Σ 求和</button>
+                  <button onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0'); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>x̄ 平均值</button>
+                  <button onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>n 计数</button>
+                  <button onClick={() => { let max = -Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v > max) max = v } setCell(active.r, active.c, String(max)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>↑ 最大值</button>
+                  <button onClick={() => { let min = Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v < min) min = v } setCell(active.r, active.c, String(min)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>↓ 最小值</button>
+                </div>
+              )}
+            </div>
           </RibbonGroup>
         </>)}
         {ribbonTab === 'data' && (<>
-          <RibbonGroup label="排序">
+          <RibbonGroup label="排序和筛选">
             <RibbonButton icon="↑" label="升序" onClick={() => sortByCol(true)} />
             <RibbonButton icon="↓" label="降序" onClick={() => sortByCol(false)} />
-          </RibbonGroup>
-          <RibbonGroup label="筛选">
             <RibbonButton icon="🔍" label="筛选" onClick={() => {}} />
           </RibbonGroup>
           <RibbonGroup label="数据工具">
-            <RibbonButton icon="✓" label="验证" onClick={() => {}} />
+            <div className="relative">
+              <RibbonButton icon="✓" label="数据验证" onClick={() => setShowValidPanel(!showValidPanel)} />
+              {showValidPanel && (
+                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                  <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>下拉列表选项</div>
+                  <input type="text" placeholder="用逗号分隔：是,否,待定" value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
+                  <button onClick={() => { setShowValidPanel(false); alert(`数据验证已设置：${validList}`) }} className="btn btn-primary btn-sm w-full">应用</button>
+                </div>
+              )}
+            </div>
+            <RibbonButton icon="🔢" label="分列" onClick={() => {}} />
+          </RibbonGroup>
+          <RibbonGroup label="条件格式">
+            <div className="relative">
+              <RibbonButton icon="🎨" label="条件格式" onClick={() => setShowCondPanel(!showCondPanel)} />
+              {showCondPanel && (
+                <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>🟢 高于平均值</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>🔴 低于平均值</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>⭐ 前10项</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>📊 数据条</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>🌈 色阶</button>
+                </div>
+              )}
+            </div>
           </RibbonGroup>
         </>)}
         {ribbonTab === 'view' && (<>

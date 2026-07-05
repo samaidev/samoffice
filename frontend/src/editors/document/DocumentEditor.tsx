@@ -88,6 +88,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [miniToolbarPos, setMiniToolbarPos] = useState({ x: 0, y: 0 })
   const [showContextMenu, setShowContextMenu] = useState(false)
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
+  const [showShapePanel, setShowShapePanel] = useState(false)
+  const [showArtPanel, setShowArtPanel] = useState(false)
 
   useEffect(() => {
     if (!editorRef.current) return
@@ -292,14 +294,80 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
         {ribbonTab === 'insert' && (<>
           <RibbonGroup label="表格"><RibbonButton icon="📊" label="表格" onClick={() => exec('insertTable')} /></RibbonGroup>
-          <RibbonGroup label="插图">
+          <RibbonGroup label="图片">
             <RibbonButton icon="🖼" label="图片" onClick={insertImage} />
             <RibbonButton icon="—" label="水平线" onClick={() => exec('horizontalRule')} />
             <RibbonButton icon="⏎" label="分页符" onClick={() => exec('pageBreak')} />
           </RibbonGroup>
+          <RibbonGroup label="形状">
+            <div className="relative">
+              <RibbonButton icon="▭" label="形状" onClick={() => setShowShapePanel(!showShapePanel)} />
+              {showShapePanel && (
+                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[{t:'rect',i:'▭',n:'矩形'},{t:'roundRect',i:'▢',n:'圆角'},{t:'ellipse',i:'⬭',n:'椭圆'},{t:'triangle',i:'△',n:'三角'},
+                     {t:'diamond',i:'◇',n:'菱形'},{t:'rightArrow',i:'→',n:'箭头'},{t:'star5',i:'★',n:'星形'},{t:'heart',i:'♥',n:'心形'}].map(s => (
+                      <button key={s.t} onClick={() => { exec('textBox'); setShowShapePanel(false) }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
+                        <span style={{ fontSize: '20px' }}>{s.i}</span>
+                        <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{s.n}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </RibbonGroup>
+          <RibbonGroup label="艺术字">
+            <div className="relative">
+              <RibbonButton icon="🎨" label="艺术字" onClick={() => setShowArtPanel(!showArtPanel)} />
+              {showArtPanel && (
+                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { name: '渐变紫', color: '#4f46e5', grad: '4f46e5,818cf8', shadow: true },
+                      { name: '描边蓝', color: '#3b82f6', outline: true },
+                      { name: '发光绿', color: '#10b981', grad: '10b981,34d399', glow: true },
+                      { name: '阴影橙', color: '#f59e0b', grad: 'f59e0b,fbbf24', shadow: true },
+                      { name: '反射红', color: '#ef4444', shadow: true },
+                      { name: '纯黑', color: '#000000', shadow: true },
+                    ].map(p => (
+                      <button key={p.name} onClick={() => {
+                        const text = prompt('艺术字内容：'); if (!text) return
+                        const v = viewRef.current; if (!v) return
+                        const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '32px' })]
+                        if (p.grad) marks.push(schema.marks.textColor.create({ color: p.color }))
+                        else marks.push(schema.marks.textColor.create({ color: p.color }))
+                        v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, marks))))
+                        v.focus(); setShowArtPanel(false)
+                      }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 72 }}>
+                        <span style={{ fontSize: '18px', fontWeight: 700, color: p.color, textShadow: p.shadow ? '2px 2px 4px rgba(0,0,0,0.3)' : 'none' }}>Aa</span>
+                        <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{p.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </RibbonGroup>
+          <RibbonGroup label="流程图">
+            <RibbonButton icon="🔀" label="流程图" onClick={() => {
+              const v = viewRef.current; if (!v) return
+              const rows = [
+                ['步骤', '内容'],
+                ['开始', '用户输入'],
+                ['处理', 'AI 分析'],
+                ['判断', '是否完成'],
+                ['结束', '输出结果'],
+              ]
+              const tableRows = rows.map((row, r) => schema.nodes.table_row.create(null,
+                row.map(cell => schema.nodes.table_cell.create({ isHeader: r === 0 }, schema.nodes.paragraph.create(null, schema.text(cell))))
+              ))
+              v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.table.create(null, tableRows)))
+              v.focus()
+            }} />
+          </RibbonGroup>
           <RibbonGroup label="文本">
             <RibbonButton icon="📦" label="文本框" onClick={() => exec('textBox')} />
-            <RibbonButton icon="🎨" label="艺术字" onClick={insertWordArt} />
             <RibbonButton icon="Σ" label="公式" onClick={insertFormula} />
           </RibbonGroup>
           <RibbonGroup label="链接">
