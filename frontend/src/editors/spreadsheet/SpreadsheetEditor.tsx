@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useI18n } from '../../i18n'
 
 interface Cell { value: string; formula?: string }
 interface Props { initialRows?: number; initialCols?: number; title?: string }
@@ -26,13 +27,14 @@ function RibbonGroup({ label, children }: any) {
   )
 }
 
-export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = '工作表 1' }: Props) {
+export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }: Props) {
+  const { t } = useI18n()
   const [rows, setRows] = useState(initialRows)
   const [cols, setCols] = useState(initialCols)
   const [data, setData] = useState<Record<string, Cell>>({})
   const [active, setActive] = useState<{ r: number; c: number }>({ r: 0, c: 0 })
   const [sheets, setSheets] = useState([
-    { id: 1, name: title, active: true },
+    { id: 1, name: title || t('app.sheet1'), active: true },
     { id: 2, name: 'Sheet2', active: false },
   ])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
@@ -68,7 +70,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
   }
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
-    { id: 'home', label: '开始' }, { id: 'insert', label: '插入' }, { id: 'data', label: '数据' }, { id: 'view', label: '视图' },
+    { id: 'home', label: t('sheet.ribbon.home') }, { id: 'insert', label: t('sheet.ribbon.insert') }, { id: 'data', label: t('sheet.ribbon.data') }, { id: 'view', label: t('sheet.ribbon.view') },
   ]
 
   return (
@@ -80,50 +82,50 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
             style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
         ))}
         <div className="flex-1" />
-        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{rows} 行 × {cols} 列</span>
+        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{rows} {t('sheet.rows')} × {cols} {t('sheet.cols')}</span>
       </div>
 
       {/* Ribbon 内容区 */}
       <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b overflow-x-auto" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px' }}>
         {ribbonTab === 'home' && (<>
-          <RibbonGroup label="单元格">
-            <RibbonButton icon="📋" label="复制" onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />
-            <RibbonButton icon="📥" label="粘贴" onClick={() => { navigator.clipboard.readText().then(t => setCell(active.r, active.c, t)) }} />
+          <RibbonGroup label={t('sheet.cell')}>
+            <RibbonButton icon="📋" label={t('sheet.copy')} onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />
+            <RibbonButton icon="📥" label={t('sheet.paste')} onClick={() => { navigator.clipboard.readText().then(t => setCell(active.r, active.c, t)) }} />
           </RibbonGroup>
-          <RibbonGroup label="字体">
-            <RibbonButton icon="B" label="加粗" onClick={() => {}} />
-            <RibbonButton icon="🎨" label="颜色" onClick={() => {}} />
+          <RibbonGroup label={t('sheet.font')}>
+            <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => {}} />
+            <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="对齐">
-            <RibbonButton icon="⬅" label="左对齐" onClick={() => {}} />
-            <RibbonButton icon="⬌" label="居中" onClick={() => {}} />
-            <RibbonButton icon="➡" label="右对齐" onClick={() => {}} />
+          <RibbonGroup label={t('sheet.alignment')}>
+            <RibbonButton icon="⬅" label={t('sheet.alignLeft')} onClick={() => {}} />
+            <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => {}} />
+            <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="数字">
-            <RibbonButton icon="%" label="百分比" onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCell(active.r, active.c, `${parseFloat(v) * 100}%`) }} />
-            <RibbonButton icon="0.0" label="小数" onClick={() => {}} />
+          <RibbonGroup label={t('sheet.number')}>
+            <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCell(active.r, active.c, `${parseFloat(v) * 100}%`) }} />
+            <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="单元格操作">
-            <RibbonButton icon="↧+" label="添加行" onClick={() => setRows(r => r + 1)} />
-            <RibbonButton icon="↦+" label="添加列" onClick={() => setCols(c => c + 1)} />
+          <RibbonGroup label={t('sheet.cellOps')}>
+            <RibbonButton icon="↧+" label={t('sheet.addRow')} onClick={() => setRows(r => r + 1)} />
+            <RibbonButton icon="↦+" label={t('sheet.addColumn')} onClick={() => setCols(c => c + 1)} />
           </RibbonGroup>
         </>)}
         {ribbonTab === 'insert' && (<>
-          <RibbonGroup label="图表">
+          <RibbonGroup label={t('sheet.chart')}>
             <div className="relative">
-              <RibbonButton icon="📊" label="图表" onClick={() => setShowChartPanel(!showChartPanel)} />
+              <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => setShowChartPanel(!showChartPanel)} />
               {showChartPanel && (
                 <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
-                      { type: 'bar', icon: '📊', name: '柱状图' },
-                      { type: 'line', icon: '📈', name: '折线图' },
-                      { type: 'pie', icon: '🥧', name: '饼图' },
-                      { type: 'scatter', icon: '⚫', name: '散点图' },
-                      { type: 'area', icon: '🔻', name: '面积图' },
-                      { type: 'doughnut', icon: '🍩', name: '环形图' },
+                      { type: 'bar', icon: '📊', name: t('sheet.chart.bar') },
+                      { type: 'line', icon: '📈', name: t('sheet.chart.line') },
+                      { type: 'pie', icon: '🥧', name: t('sheet.chart.pie') },
+                      { type: 'scatter', icon: '⚫', name: t('sheet.chart.scatter') },
+                      { type: 'area', icon: '🔻', name: t('sheet.chart.area') },
+                      { type: 'doughnut', icon: '🍩', name: t('sheet.chart.donut') },
                     ].map(c => (
-                      <button key={c.type} onClick={() => { alert(`图表类型: ${c.name}\\n数据范围: ${colName(active.c)}1:${colName(active.c)}${rows}`); setShowChartPanel(false) }}
+                      <button key={c.type} onClick={() => { alert(t('sheet.chartType') + c.name + '\\n' + t('sheet.dataRange') + colName(active.c) + '1:' + colName(active.c) + rows); setShowChartPanel(false) }}
                         className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 64 }}>
                         <span style={{ fontSize: '20px' }}>{c.icon}</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{c.name}</span>
@@ -134,14 +136,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
               )}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="形状">
+          <RibbonGroup label={t('sheet.shapes')}>
             <div className="relative">
-              <RibbonButton icon="▭" label="形状" onClick={() => setShowShapePanel(!showShapePanel)} />
+              <RibbonButton icon="▭" label={t('sheet.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
                 <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
                   <div className="grid grid-cols-4 gap-2">
-                    {[{i:'▭',n:'矩形'},{i:'▢',n:'圆角'},{i:'⬭',n:'椭圆'},{i:'△',n:'三角'},
-                     {i:'◇',n:'菱形'},{i:'→',n:'箭头'},{i:'★',n:'星形'},{i:'♥',n:'心形'}].map(s => (
+                    {[{i:'▭',n:t('doc.shape.rect')},{i:'▢',n:t('doc.shape.rounded')},{i:'⬭',n:t('doc.shape.ellipse')},{i:'△',n:t('doc.shape.triangle')},
+                     {i:'◇',n:t('doc.shape.diamond')},{i:'→',n:t('doc.shape.arrow')},{i:'★',n:t('doc.shape.star')},{i:'♥',n:t('doc.shape.heart')}].map(s => (
                       <button key={s.n} onClick={() => setShowShapePanel(false)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
                         <span style={{ fontSize: '20px' }}>{s.i}</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{s.n}</span>
@@ -152,67 +154,67 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
               )}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="插图">
-            <RibbonButton icon="🖼" label="图片" onClick={() => {}} />
+          <RibbonGroup label={t('sheet.illustration')}>
+            <RibbonButton icon="🖼" label={t('sheet.image')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="函数">
+          <RibbonGroup label={t('sheet.function')}>
             <div className="relative">
-              <RibbonButton icon="ƒx" label="函数" onClick={() => setShowFuncPanel(!showFuncPanel)} />
+              <RibbonButton icon="ƒx" label={t('sheet.function')} onClick={() => setShowFuncPanel(!showFuncPanel)} />
               {showFuncPanel && (
                 <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
-                  <button onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>Σ 求和</button>
-                  <button onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0'); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>x̄ 平均值</button>
-                  <button onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>n 计数</button>
-                  <button onClick={() => { let max = -Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v > max) max = v } setCell(active.r, active.c, String(max)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>↑ 最大值</button>
-                  <button onClick={() => { let min = Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v < min) min = v } setCell(active.r, active.c, String(min)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>↓ 最小值</button>
+                  <button onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.sum')}</button>
+                  <button onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0'); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.average')}</button>
+                  <button onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.count')}</button>
+                  <button onClick={() => { let max = -Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v > max) max = v } setCell(active.r, active.c, String(max)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.max')}</button>
+                  <button onClick={() => { let min = Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v < min) min = v } setCell(active.r, active.c, String(min)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.min')}</button>
                 </div>
               )}
             </div>
           </RibbonGroup>
         </>)}
         {ribbonTab === 'data' && (<>
-          <RibbonGroup label="排序和筛选">
-            <RibbonButton icon="↑" label="升序" onClick={() => sortByCol(true)} />
-            <RibbonButton icon="↓" label="降序" onClick={() => sortByCol(false)} />
-            <RibbonButton icon="🔍" label="筛选" onClick={() => {}} />
+          <RibbonGroup label={t('sheet.sortFilter')}>
+            <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => sortByCol(true)} />
+            <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => sortByCol(false)} />
+            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="数据工具">
+          <RibbonGroup label={t('sheet.dataTools')}>
             <div className="relative">
-              <RibbonButton icon="✓" label="数据验证" onClick={() => setShowValidPanel(!showValidPanel)} />
+              <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => setShowValidPanel(!showValidPanel)} />
               {showValidPanel && (
                 <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-                  <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>下拉列表选项</div>
-                  <input type="text" placeholder="用逗号分隔：是,否,待定" value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
-                  <button onClick={() => { setShowValidPanel(false); alert(`数据验证已设置：${validList}`) }} className="btn btn-primary btn-sm w-full">应用</button>
+                  <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('sheet.dropdownOptions')}</div>
+                  <input type="text" placeholder={t('sheet.dropdownPlaceholder')} value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
+                  <button onClick={() => { setShowValidPanel(false); alert(t('sheet.validationSet', { list: validList })) }} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>
                 </div>
               )}
             </div>
-            <RibbonButton icon="🔢" label="分列" onClick={() => {}} />
+            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="条件格式">
+          <RibbonGroup label={t('sheet.conditionalFormat')}>
             <div className="relative">
-              <RibbonButton icon="🎨" label="条件格式" onClick={() => setShowCondPanel(!showCondPanel)} />
+              <RibbonButton icon="🎨" label={t('sheet.conditionalFormat')} onClick={() => setShowCondPanel(!showCondPanel)} />
               {showCondPanel && (
                 <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>🟢 高于平均值</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>🔴 低于平均值</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>⭐ 前10项</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>📊 数据条</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>🌈 色阶</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.dataBar')}</button>
+                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.colorScale')}</button>
                 </div>
               )}
             </div>
           </RibbonGroup>
         </>)}
         {ribbonTab === 'view' && (<>
-          <RibbonGroup label="缩放">
-            <RibbonButton icon="−" label="缩小" onClick={() => setZoom(Math.max(50, zoom - 25))} />
+          <RibbonGroup label={t('sheet.zoom')}>
+            <RibbonButton icon="−" label={t('sheet.zoomOut')} onClick={() => setZoom(Math.max(50, zoom - 25))} />
             <div className="flex flex-col items-center px-2"><span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-text)' }}>{zoom}%</span></div>
-            <RibbonButton icon="+" label="放大" onClick={() => setZoom(Math.min(150, zoom + 25))} />
+            <RibbonButton icon="+" label={t('sheet.zoomIn')} onClick={() => setZoom(Math.min(150, zoom + 25))} />
             <RibbonButton icon="▮" label="100%" onClick={() => setZoom(100)} />
           </RibbonGroup>
-          <RibbonGroup label="窗口">
-            <RibbonButton icon="📌" label={frozen ? '取消冻结' : '冻结窗格'} onClick={() => setFrozen(!frozen)} active={frozen} />
+          <RibbonGroup label={t('sheet.window')}>
+            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} />
           </RibbonGroup>
         </>)}
       </div>
@@ -221,7 +223,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
       <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
         <div className="font-mono font-semibold px-2 py-0.5 rounded" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)', minWidth: '50px', textAlign: 'center' }}>{colName(active.c)}{active.r + 1}</div>
         <span style={{ color: 'var(--color-text-muted)' }}>fx</span>
-        <input value={getCell(active.r, active.c).value} onChange={e => setCell(active.r, active.c, e.target.value)} className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs" style={{ background: 'transparent', color: 'var(--color-text)' }} placeholder="输入值或公式..." />
+        <input value={getCell(active.r, active.c).value} onChange={e => setCell(active.r, active.c, e.target.value)} className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs" style={{ background: 'transparent', color: 'var(--color-text)' }} placeholder={t('sheet.formulaPlaceholder')} />
       </div>
 
       {/* 表格主体 */}
@@ -262,16 +264,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title = 
           <button key={s.id} onClick={() => switchSheet(s.id)} className={`px-3 py-1 text-xs rounded-t-md transition-all whitespace-nowrap ${s.active ? 'font-semibold' : 'opacity-60 hover:opacity-100'}`}
             style={{ background: s.active ? 'var(--color-primary-light)' : 'transparent', color: s.active ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: s.active ? '2px solid var(--color-primary)' : '2px solid transparent' }}>{s.name}</button>
         ))}
-        <button onClick={addSheet} className="px-2 py-1 text-xs rounded transition-colors hover:opacity-70" style={{ color: 'var(--color-text-muted)' }} title="新建工作表">+</button>
+        <button onClick={addSheet} className="px-2 py-1 text-xs rounded transition-colors hover:opacity-70" style={{ color: 'var(--color-text-muted)' }} title={t('sheet.newSheet')}>+</button>
       </div>
 
       {/* 底部状态栏 */}
       <div className="px-3 py-1.5 text-xs flex items-center gap-3 flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>就绪</span>
+        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>{t('sheet.ready')}</span>
         <div className="flex-1" />
         <span className="font-mono">{colName(active.c)}{active.r + 1}</span>
         <span style={{ color: 'var(--color-border-strong)' }}>|</span>
-        <span className="truncate max-w-[120px]">{getCell(active.r, active.c).value || '空'}</span>
+        <span className="truncate max-w-[120px]">{getCell(active.r, active.c).value || t('sheet.empty')}</span>
       </div>
     </div>
   )

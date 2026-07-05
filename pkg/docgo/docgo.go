@@ -692,12 +692,7 @@ func parseCoreProps(r io.Reader, doc *Document) {
 }
 
 func parseDocumentXML(r io.Reader, doc *Document) {
-        data, _ := io.ReadAll(r)
-        s := string(data)
-        lines := extractParagraphs(s)
-        for _, line := range lines {
-                if line != "" { doc.AddParagraph(line) }
-        }
+	parseDocumentStructural(r, doc)
 }
 
 func extractParagraphs(xml string) []string {

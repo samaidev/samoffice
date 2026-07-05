@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useI18n } from '../../i18n'
 
 interface Props {
   initialContent?: string
@@ -16,6 +17,7 @@ interface TocItem {
 }
 
 export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Props) {
+  const { t } = useI18n()
   const [content, setContent] = useState(initialContent)
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [toc, setToc] = useState<TocItem[]>([])
@@ -31,7 +33,7 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
   const renderMarkdown = useCallback((md: string): string => {
     const w = window as any
     if (typeof w.marked === 'undefined') {
-      return '<p style="color:#999">Markdown 渲染器加载中...</p>'
+      return '<p style="color:#999">' + t('md.loading') + '</p>'
     }
     try {
       w.marked.setOptions({ gfm: true, breaks: true })
@@ -55,9 +57,9 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
       }
       return w.marked.parse(md, { renderer })
     } catch (e: any) {
-      return `<p style="color:red">渲染错误: ${e.message}</p>`
+      return `<p style="color:red">${t('md.renderError', { msg: e.message })}</p>`
     }
-  }, [])
+  }, [t])
 
   const extractToc = useCallback((md: string): TocItem[] => {
     const lines = md.split('\n')
@@ -144,14 +146,14 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
           style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}
         >
           <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-            {mode === 'markdown' ? '📝 Markdown' : '🌐 HTML'}
+            {mode === 'markdown' ? t('md.markdown') : t('md.html')}
           </span>
           <div className="flex-1" />
           <div className="flex rounded-md overflow-hidden" style={{ border: '1px solid var(--color-border)' }}>
             {([
-              { id: 'editor', label: '编辑', icon: '✏️' },
-              { id: 'split', label: '分屏', icon: '⇆' },
-              { id: 'preview', label: '预览', icon: '👁' },
+              { id: 'editor', label: t('md.edit'), icon: '✏️' },
+              { id: 'split', label: t('md.split'), icon: '⇆' },
+              { id: 'preview', label: t('md.preview'), icon: '👁' },
             ] as const).map(v => (
               <button
                 key={v.id}
@@ -188,7 +190,7 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
                   fontFamily: "'JetBrains Mono', 'SFMono-Regular', Consolas, monospace"
                 }}
                 placeholder={mode === 'markdown'
-                  ? '# 标题\n\n正文内容...\n\n```python\nprint("hello")\n```'
+                  ? t('md.placeholder')
                   : '<!DOCTYPE html>\n<html>\n<body>\n  <h1>Hello</h1>\n</body>\n</html>'}
                 spellCheck={false}
               />
@@ -216,7 +218,7 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
           style={{ background: 'var(--color-surface)', borderLeft: '1px solid var(--color-border)' }}
         >
           <div className="text-xs font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--color-text-secondary)' }}>
-            <span>📑</span> 目录
+            <span>📑</span> {t('md.toc')}
             <span className="badge ml-auto">{toc.length}</span>
           </div>
           <div className="space-y-0.5">

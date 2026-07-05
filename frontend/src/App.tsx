@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createBackend } from './services/backend'
 import type { Backend, Document, SpellError } from './types/udm'
 import { DocumentEditor } from './editors/document/DocumentEditor'
@@ -6,30 +6,34 @@ import { SpreadsheetEditor } from './editors/spreadsheet/SpreadsheetEditor'
 import { SlideEditor } from './editors/slide/SlideEditor'
 import { MarkdownHtmlEditor } from './editors/markdown/MarkdownHtmlEditor'
 import { AboutPage } from './components/AboutPage'
+import { useI18n } from './i18n'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
 
-const EMPTY_DOC: Document = {
-  meta: { title: '未命名文档' },
-  blocks: [
-    { inline: [{ content: '欢迎使用 GoOffice', bold: true }], style: '', align: '' },
-    { inline: [{ content: '一款用 Go + Web 构建的跨平台办公套件' }], style: '', align: '' }
-  ]
-}
+function App() {
+  const { t, lang, setLang } = useI18n()
 
-const SAMPLE_MD = `# GoOffice Markdown 示例
+  const emptyDoc = useMemo<Document>(() => ({
+    meta: { title: t('app.untitled') },
+    blocks: [
+      { inline: [{ content: t('app.welcome'), bold: true }], style: '', align: '' },
+      { inline: [{ content: t('app.subtitle') }], style: '', align: '' }
+    ]
+  }), [t])
 
-欢迎使用 **GoOffice** 的 Markdown 编辑器，支持 *实时预览* 和 \`代码高亮\`。
+  const sampleMd = useMemo(() => `${t('sample.md.title')}
 
-## 功能特性
+${t('sample.md.intro')}
 
-- 分屏编辑 + 预览
-- 自动生成目录
-- 代码语法高亮
-- 表格、列表、引用
+${t('sample.md.features')}
 
-## 代码示例
+${t('sample.md.split')}
+${t('sample.md.toc')}
+${t('sample.md.highlight')}
+${t('sample.md.tables')}
+
+${t('sample.md.codeExample')}
 
 \`\`\`go
 package main
@@ -48,23 +52,23 @@ def greet(name):
 print(greet("SamAI"))
 \`\`\`
 
-## 表格
+${t('sample.md.table')}
 
-| 功能 | 状态 |
+| ${t('sample.md.feature')} | ${t('sample.md.status')} |
 |------|------|
-| 文档 | ✅ |
-| 表格 | ✅ |
-| 演示 | ✅ |
+| ${t('sample.md.doc')} | ✅ |
+| ${t('sample.md.sheet')} | ✅ |
+| ${t('sample.md.slide')} | ✅ |
 | Markdown | ✅ |
 
-> 这是一个引用块，来自 SamAI 集团公益开源项目。
+${t('sample.md.quote')}
 
-### 三级标题
+${t('sample.md.h3')}
 
-更多内容...
-`
+${t('sample.md.more')}
+`, [t])
 
-const SAMPLE_HTML = `<!DOCTYPE html>
+  const sampleHtml = useMemo(() => `<!DOCTYPE html>
 <html>
 <head>
   <style>
@@ -75,24 +79,22 @@ const SAMPLE_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <h1>Hello from GoOffice</h1>
-  <p>这是一个 HTML 编辑器示例。</p>
+  <p>${t('sample.html.body')}</p>
   <div class="card">
-    <strong>SamAI Group</strong> · 公益开源
+    <strong>SamAI Group</strong> · ${t('sample.html.opensource')}
   </div>
   <ul>
-    <li>实时预览</li>
-    <li>源码编辑</li>
-    <li>安全沙箱（script 标签自动移除）</li>
+    <li>${t('sample.html.preview')}</li>
+    <li>${t('sample.html.source')}</li>
+    <li>${t('sample.html.sandbox')}</li>
   </ul>
 </body>
-</html>`
+</html>`, [t])
 
-function App() {
   const [backend, setBackend] = useState<Backend | null>(null)
   const [tab, setTab] = useState<Tab>('document')
-  const [doc, setDoc] = useState<Document>(EMPTY_DOC)
+  const [doc, setDoc] = useState<Document>(emptyDoc)
   const [spellErrors, setSpellErrors] = useState<SpellError[]>([])
-  const [lang, setLang] = useState<'en' | 'zh'>('zh')
   const [filePath, setFilePath] = useState('')
   const [toast, setToast] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -102,8 +104,8 @@ function App() {
   const [theme, setTheme] = useState<Theme>('auto')
   const [wordCount, setWordCount] = useState(0)
   const [charCount, setCharCount] = useState(0)
-  const [mdContent, setMdContent] = useState(SAMPLE_MD)
-  const [htmlContent, setHtmlContent] = useState(SAMPLE_HTML)
+  const [mdContent, setMdContent] = useState(sampleMd)
+  const [htmlContent, setHtmlContent] = useState(sampleHtml)
   const spellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -180,15 +182,15 @@ function App() {
       const file = input.files?.[0]
       if (!file) return
       setLoading(true)
-      showToast(`正在打开 ${file.name}...`)
+      showToast(t('app.opening', { name: file.name }))
       try {
         const result = await backend.uploadFile(file)
         setDoc(result.document)
         setFilePath(file.name)
-        showToast(`已打开 ${file.name}`)
+        showToast(t('app.opened', { name: file.name }))
         triggerSpellCheck(JSON.stringify(result.document.blocks))
       } catch (e: any) {
-        showToast(`打开失败: ${e.message}`)
+        showToast(t('app.openFailed', { msg: e.message }))
       } finally {
         setLoading(false)
       }
@@ -200,7 +202,7 @@ function App() {
     if (!backend) return
     setMenuOpen(false)
     setLoading(true)
-    showToast(`导出 ${format.toUpperCase()} 中...`)
+    showToast(t('app.exporting', { format: format.toUpperCase() }))
     try {
       const endpoint = format === 'docx' ? '/api/doc/save' : '/api/doc/export-pdf'
       const mime = format === 'docx'
@@ -214,7 +216,7 @@ function App() {
       if (resp.ok) {
         const blob = await resp.blob()
         if (blob.type !== mime && blob.size < 500) {
-          showToast(`导出失败: ${await blob.text()}`)
+          showToast(t('app.exportFailed', { msg: await blob.text() }))
           return
         }
         const url = URL.createObjectURL(blob)
@@ -226,12 +228,12 @@ function App() {
         a.click()
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
-        showToast(`已导出 ${format.toUpperCase()}`)
+        showToast(t('app.exported', { format: format.toUpperCase() }))
       } else {
-        showToast(`导出失败: ${await resp.text()}`)
+        showToast(t('app.exportFailed', { msg: await resp.text() }))
       }
     } catch (e: any) {
-      showToast(`导出失败: ${e.message}`)
+      showToast(t('app.exportFailed', { msg: e.message }))
     } finally {
       setLoading(false)
     }
@@ -252,7 +254,7 @@ function App() {
           ...d,
           blocks: [...d.blocks, { src: dataUri, width: 400, height: 300, alt: file.name } as any]
         }))
-        showToast(`已插入图片: ${file.name}`)
+        showToast(t('app.imageInserted', { name: file.name }))
       }
       reader.readAsDataURL(file)
     }
@@ -262,7 +264,7 @@ function App() {
   const handleLearnWord = async (word: string) => {
     if (!backend) return
     await backend.learnWord(word, lang, 'manual')
-    showToast(`已加入词典: ${word}`)
+    showToast(t('app.wordLearned', { word }))
     triggerSpellCheck(JSON.stringify(doc.blocks))
   }
 
@@ -271,13 +273,13 @@ function App() {
   }
 
   const themeIcon = theme === 'light' ? '☀️' : theme === 'dark' ? '🌙' : '🖥'
-  const themeLabel = theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'
+  const themeLabel = theme === 'light' ? t('app.theme.light') : theme === 'dark' ? t('app.theme.dark') : t('app.theme.auto')
 
   const menuItems = [
-    { icon: '📂', label: '打开文件', onClick: handleOpenFile, shortcut: 'Ctrl+O' },
-    { icon: '📄', label: '存为 docx', onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' },
-    { icon: '📕', label: '导出 PDF', onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' },
-    { icon: '🖼', label: '插入图片', onClick: handleInsertImage },
+    { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
+    { icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' },
+    { icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' },
+    { icon: '🖼', label: t('app.insertImage'), onClick: handleInsertImage },
   ]
 
   return (
@@ -325,7 +327,7 @@ function App() {
           <button
             onClick={() => setMenuOpen(!menuOpen)}
             className="p-2 rounded-md hover:bg-white/15 transition-colors"
-            aria-label="菜单"
+            aria-label={t('app.menu')}
           >
             <div className="w-5 h-0.5 bg-white mb-1.5 rounded transition-all" style={{ transform: menuOpen ? 'rotate(45deg) translate(4px, 4px)' : '' }}></div>
             <div className="w-5 h-0.5 bg-white mb-1.5 rounded transition-all" style={{ opacity: menuOpen ? 0 : 1 }}></div>
@@ -338,7 +340,7 @@ function App() {
         {/* 主题切换 */}
         <button
           onClick={toggleTheme}
-          data-tooltip={`主题: ${themeLabel}`}
+          data-tooltip={`${t('app.theme')}: ${themeLabel}`}
           className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0"
         >
           <span className="text-sm">{themeIcon}</span>
@@ -347,7 +349,7 @@ function App() {
         {/* 模式标识 */}
         <div className="text-xs opacity-80 hidden md:flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 rounded-full ${backend?.mode === 'local' ? 'bg-green-300' : 'bg-blue-300'} animate-pulse`}></span>
-          {backend?.mode === 'local' ? '本地' : '远程'}
+          {backend?.mode === 'local' ? t('app.local') : t('app.remote')}
         </div>
 
         {/* 拼写错误徽章 */}
@@ -393,16 +395,16 @@ function App() {
         style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
       >
         {([
-          { id: 'document', icon: '📄', label: '文档' },
-          { id: 'spreadsheet', icon: '📊', label: '表格' },
-          { id: 'slide', icon: '🎞', label: '演示' },
-          { id: 'markdown', icon: '📝', label: 'MD' },
-          { id: 'html', icon: '🌐', label: 'HTML' },
-          { id: 'about', icon: 'ℹ️', label: '关于' },
-        ] as const).map((t) => (
+          { id: 'document', icon: '📄', label: t('tab.document') },
+          { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
+          { id: 'slide', icon: '🎞', label: t('tab.slide') },
+          { id: 'markdown', icon: '📝', label: t('tab.markdown') },
+          { id: 'html', icon: '🌐', label: t('tab.html') },
+          { id: 'about', icon: 'ℹ️', label: t('tab.about') },
+        ]).map((t) => (
           <button
             key={t.id}
-            onClick={() => setTab(t.id)}
+            onClick={() => setTab(t.id as Tab)}
             className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${
               tab === t.id
                 ? 'border-indigo-600 text-indigo-600'
@@ -456,7 +458,7 @@ function App() {
               </div>
             </div>
           )}
-          {tab === 'spreadsheet' && <SpreadsheetEditor title="工作表 1" />}
+          {tab === 'spreadsheet' && <SpreadsheetEditor title={t('app.sheet1')} />}
           {tab === 'slide' && <SlideEditor />}
           {tab === 'markdown' && (
             <MarkdownHtmlEditor
@@ -488,7 +490,7 @@ function App() {
             <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--color-border)' }}>
               <div className="flex items-center gap-2">
                 <span className="badge badge-danger">{spellErrors.length}</span>
-                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>拼写检查</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>{t('app.spellCheck')}</span>
               </div>
               <button
                 onClick={() => setSpellPanelOpen(false)}
@@ -509,7 +511,7 @@ function App() {
                       onClick={() => handleLearnWord(e.word)}
                       className="text-xs hover:underline flex-shrink-0 ml-2"
                       style={{ color: 'var(--color-primary)' }}
-                    >+ 词典</button>
+                    >{t('app.addToDict')}</button>
                   </div>
                   {e.suggest.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
@@ -522,7 +524,7 @@ function App() {
                       ))}
                     </div>
                   ) : (
-                    <div className="text-xs italic" style={{ color: 'var(--color-text-muted)' }}>无建议</div>
+                    <div className="text-xs italic" style={{ color: 'var(--color-text-muted)' }}>{t('app.noSuggestions')}</div>
                   )}
                 </div>
               ))}
@@ -546,7 +548,7 @@ function App() {
             <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--color-border)' }}>
               <div className="flex items-center gap-2">
                 <span className="badge badge-danger">{spellErrors.length}</span>
-                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>拼写检查</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>{t('app.spellCheck')}</span>
               </div>
               <button
                 onClick={() => setSpellPanelOpen(false)}
@@ -563,7 +565,7 @@ function App() {
                       onClick={() => handleLearnWord(e.word)}
                       className="text-xs hover:underline"
                       style={{ color: 'var(--color-primary)' }}
-                    >+ 词典</button>
+                    >{t('app.addToDict')}</button>
                   </div>
                   {e.suggest.length > 0 && (
                     <div className="flex flex-wrap gap-1">
@@ -589,17 +591,17 @@ function App() {
             <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
           )}
           <span className="truncate max-w-[150px] sm:max-w-md">
-            {filePath || '就绪'}
+            {filePath || t('app.ready')}
           </span>
         </div>
         <div className="flex-1" />
         {tab === 'document' && (
           <span className="hidden sm:inline opacity-70">
-            {wordCount} 字 · {charCount} 字符
+            {wordCount} {t('app.words')} · {charCount} {t('app.chars')}
           </span>
         )}
         {spellErrors.length > 0 && (
-          <span className="opacity-70 hidden sm:inline">{spellErrors.length} 拼写错误</span>
+          <span className="opacity-70 hidden sm:inline">{spellErrors.length} {t('app.spellErrors')}</span>
         )}
         <span className="opacity-50">v0.3.0</span>
       </footer>

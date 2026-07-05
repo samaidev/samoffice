@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useI18n } from '../../i18n'
 
 interface Slide {
   id: number; title: string; content: string; bg: string
@@ -47,55 +48,57 @@ function RibbonGroup({ label, children }: any) {
   )
 }
 
-const LAYOUTS = [
-  { id: 'title', name: '标题', icon: '🎯' }, { id: 'content', name: '内容', icon: '📝' }, { id: 'blank', name: '空白', icon: '⬜' },
-] as const
-
-const PRESET_COLORS = [
-  { name: '白', value: '#ffffff' }, { name: '浅灰', value: '#f8fafc' }, { name: '米黄', value: '#fef3c7' },
-  { name: '天蓝', value: '#dbeafe' }, { name: '薄荷', value: '#dcfce7' }, { name: '粉红', value: '#fce7f3' },
-  { name: '深灰', value: '#1e293b' }, { name: '靛蓝', value: '#312e81' },
-]
-
-const TRANSITIONS = [
-  { id: '', name: '无' }, { id: 'fade', name: '淡入' }, { id: 'push', name: '推入' },
-  { id: 'wipe', name: '擦除' }, { id: 'cover', name: '覆盖' }, { id: 'cut', name: '切换' },
-  { id: 'zoom', name: '缩放' }, { id: 'morph', name: '变形' },
-]
-
-const SHAPES = [
-  { type: 'rect', icon: '▭', name: '矩形' }, { type: 'roundRect', icon: '▢', name: '圆角' },
-  { type: 'ellipse', icon: '⬭', name: '椭圆' }, { type: 'triangle', icon: '△', name: '三角' },
-  { type: 'diamond', icon: '◇', name: '菱形' }, { type: 'rightArrow', icon: '→', name: '箭头' },
-  { type: 'star5', icon: '★', name: '星形' }, { type: 'hexagon', icon: '⬡', name: '六边形' },
-  { type: 'pentagon', icon: '⬠', name: '五边形' }, { type: 'heart', icon: '♥', name: '心形' },
-  { type: 'cloud', icon: '☁', name: '云形' }, { type: 'callout', icon: '💬', name: '标注' },
-]
-
-const ENTRANCE_ANIMS = [
-  { effect: 'fade', name: '淡入' }, { effect: 'fly', name: '飞入' },
-  { effect: 'zoom', name: '缩放' }, { effect: 'wipe', name: '擦除' }, { effect: 'bounce', name: '弹跳' },
-]
-const EMPHASIS_ANIMS = [
-  { effect: 'pulse', name: '脉冲' }, { effect: 'spin', name: '旋转' },
-]
-const EXIT_ANIMS = [
-  { effect: 'fade', name: '淡出' }, { effect: 'fly', name: '飞出' }, { effect: 'zoom', name: '缩小' },
-]
-
-const ART_PRESETS = [
-  { name: '渐变紫', color: '#4f46e5', gradient: '4f46e5,818cf8', shadow: true },
-  { name: '描边蓝', color: '#3b82f6', outline: '1e40af', glow: true },
-  { name: '发光绿', color: '#10b981', glow: true, gradient: '10b981,34d399' },
-  { name: '阴影橙', color: '#f59e0b', shadow: true, gradient: 'f59e0b,fbbf24' },
-  { name: '反射红', color: '#ef4444', shadow: true, outline: '991b1b' },
-  { name: '纯白', color: '#ffffff', shadow: true },
-]
-
 export function SlideEditor() {
+  const { t } = useI18n()
+
+  const LAYOUTS = [
+    { id: 'title', name: t('slide.layout.title'), icon: '🎯' }, { id: 'content', name: t('slide.layout.content'), icon: '📝' }, { id: 'blank', name: t('slide.layout.blank'), icon: '⬜' },
+  ] as const
+
+  const PRESET_COLORS = [
+    { name: t('color.white'), value: '#ffffff' }, { name: t('color.lightGray'), value: '#f8fafc' }, { name: t('color.beige'), value: '#fef3c7' },
+    { name: t('color.skyBlue'), value: '#dbeafe' }, { name: t('color.mint'), value: '#dcfce7' }, { name: t('color.pink'), value: '#fce7f3' },
+    { name: t('color.darkGray'), value: '#1e293b' }, { name: t('color.indigo'), value: '#312e81' },
+  ]
+
+  const TRANSITIONS = [
+    { id: '', name: t('transition.none') }, { id: 'fade', name: t('transition.fade') }, { id: 'push', name: t('transition.push') },
+    { id: 'wipe', name: t('transition.wipe') }, { id: 'cover', name: t('transition.cover') }, { id: 'cut', name: t('transition.switch') },
+    { id: 'zoom', name: t('transition.zoom') }, { id: 'morph', name: t('transition.morph') },
+  ]
+
+  const SHAPES = [
+    { type: 'rect', icon: '▭', name: t('slide.shape.rect') }, { type: 'roundRect', icon: '▢', name: t('slide.shape.rounded') },
+    { type: 'ellipse', icon: '⬭', name: t('slide.shape.ellipse') }, { type: 'triangle', icon: '△', name: t('slide.shape.triangle') },
+    { type: 'diamond', icon: '◇', name: t('slide.shape.diamond') }, { type: 'rightArrow', icon: '→', name: t('slide.shape.arrow') },
+    { type: 'star5', icon: '★', name: t('slide.shape.star') }, { type: 'hexagon', icon: '⬡', name: t('slide.shape.hexagon') },
+    { type: 'pentagon', icon: '⬠', name: t('slide.shape.pentagon') }, { type: 'heart', icon: '♥', name: t('slide.shape.heart') },
+    { type: 'cloud', icon: '☁', name: t('slide.shape.cloud') }, { type: 'callout', icon: '💬', name: t('slide.shape.callout') },
+  ]
+
+  const ENTRANCE_ANIMS = [
+    { effect: 'fade', name: t('anim.fadeIn') }, { effect: 'fly', name: t('anim.flyIn') },
+    { effect: 'zoom', name: t('anim.zoom') }, { effect: 'wipe', name: t('anim.wipe') }, { effect: 'bounce', name: t('anim.bounce') },
+  ]
+  const EMPHASIS_ANIMS = [
+    { effect: 'pulse', name: t('anim.pulse') }, { effect: 'spin', name: t('anim.spin') },
+  ]
+  const EXIT_ANIMS = [
+    { effect: 'fade', name: t('anim.fadeOut') }, { effect: 'fly', name: t('anim.flyOut') }, { effect: 'zoom', name: t('anim.shrink') },
+  ]
+
+  const ART_PRESETS = [
+    { name: t('art.purple'), color: '#4f46e5', gradient: '4f46e5,818cf8', shadow: true },
+    { name: t('art.blue'), color: '#3b82f6', outline: '1e40af', glow: true },
+    { name: t('art.green'), color: '#10b981', glow: true, gradient: '10b981,34d399' },
+    { name: t('art.orange'), color: '#f59e0b', shadow: true, gradient: 'f59e0b,fbbf24' },
+    { name: t('art.red'), color: '#ef4444', shadow: true, outline: '991b1b' },
+    { name: t('art.white'), color: '#ffffff', shadow: true },
+  ]
+
   const [slides, setSlides] = useState<Slide[]>([
-    { id: 1, title: '演示文稿标题', content: '副标题或描述', bg: '#ffffff', layout: 'title', transition: 'fade', notes: '', shapes: [], artTexts: [], animations: [] },
-    { id: 2, title: '内容幻灯片', content: '在此添加您的内容', bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] },
+    { id: 1, title: t('slide.titleDefault'), content: t('slide.subtitleDefault'), bg: '#ffffff', layout: 'title', transition: 'fade', notes: '', shapes: [], artTexts: [], animations: [] },
+    { id: 2, title: t('slide.contentSlide'), content: t('slide.contentPlaceholder'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] },
   ])
   const [active, setActive] = useState(0)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
@@ -108,7 +111,7 @@ export function SlideEditor() {
   const [showAnimPanel, setShowAnimPanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
 
-  const addSlide = () => { setSlides(s => [...s, { id: Date.now(), title: `幻灯片 ${s.length + 1}`, content: '在此添加内容', bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }]); setActive(slides.length) }
+  const addSlide = () => { setSlides(s => [...s, { id: Date.now(), title: t('slide.slideN', { n: s.length + 1 }), content: t('slide.addContentHere'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }]); setActive(slides.length) }
   const deleteSlide = (idx: number) => { if (slides.length <= 1) return; setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
   const duplicateSlide = (idx: number) => { setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
   const updateActive = (patch: Partial<Slide>) => setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl))
@@ -130,7 +133,7 @@ export function SlideEditor() {
 
   // 艺术字操作
   const addArtText = (preset: any) => {
-    const text = prompt('艺术字内容：', 'GoOffice')
+    const text = prompt(t('slide.prompt.wordArt'), 'GoOffice')
     if (!text) return
     const newArt: ArtTextItem = {
       text, x: 100, y: 100, w: 400, h: 80,
@@ -157,8 +160,8 @@ export function SlideEditor() {
   const prevPresent = () => { if (presentSlide > 0) setPresentSlide(presentSlide - 1) }
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
-    { id: 'home', label: '开始' }, { id: 'insert', label: '插入' }, { id: 'design', label: '设计' },
-    { id: 'animations', label: '动画' }, { id: 'transition', label: '切换' }, { id: 'view', label: '视图' },
+    { id: 'home', label: t('slide.ribbon.home') }, { id: 'insert', label: t('slide.ribbon.insert') }, { id: 'design', label: t('slide.ribbon.design') },
+    { id: 'animations', label: t('slide.ribbon.animation') }, { id: 'transition', label: t('slide.ribbon.transition') }, { id: 'view', label: t('slide.ribbon.view') },
   ]
 
   const presentingSlide = slides[presentSlide] || slides[0]
@@ -178,29 +181,29 @@ export function SlideEditor() {
       {/* Ribbon 内容区 */}
       <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b overflow-x-auto" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px' }}>
         {ribbonTab === 'home' && (<>
-          <RibbonGroup label="幻灯片">
-            <RibbonButton icon="+" label="新建" onClick={addSlide} />
-            <RibbonButton icon="⎘" label="复制" onClick={() => duplicateSlide(active)} />
-            <RibbonButton icon="✕" label="删除" onClick={() => deleteSlide(active)} disabled={slides.length <= 1} />
+          <RibbonGroup label={t('slide.slides')}>
+            <RibbonButton icon="+" label={t('slide.new')} onClick={addSlide} />
+            <RibbonButton icon="⎘" label={t('slide.copy')} onClick={() => duplicateSlide(active)} />
+            <RibbonButton icon="✕" label={t('slide.delete')} onClick={() => deleteSlide(active)} disabled={slides.length <= 1} />
           </RibbonGroup>
-          <RibbonGroup label="布局">
+          <RibbonGroup label={t('slide.layoutGroup')}>
             {LAYOUTS.map(l => <RibbonButton key={l.id} icon={l.icon} label={l.name} onClick={() => updateActive({ layout: l.id as Slide['layout'] })} active={current.layout === l.id} />)}
           </RibbonGroup>
-          <RibbonGroup label="字体">
-            <RibbonButton icon="B" label="加粗" onClick={() => {}} />
-            <RibbonButton icon="🎨" label="颜色" onClick={() => {}} />
+          <RibbonGroup label={t('slide.font')}>
+            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => {}} />
+            <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="段落">
-            <RibbonButton icon="⬅" label="左对齐" onClick={() => {}} />
-            <RibbonButton icon="⬌" label="居中" onClick={() => {}} />
-            <RibbonButton icon="➡" label="右对齐" onClick={() => {}} />
+          <RibbonGroup label={t('slide.paragraph')}>
+            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => {}} />
+            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => {}} />
+            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => {}} />
           </RibbonGroup>
         </>)}
 
         {ribbonTab === 'insert' && (<>
-          <RibbonGroup label="形状">
+          <RibbonGroup label={t('slide.shapes')}>
             <div className="relative">
-              <RibbonButton icon="▭" label="形状" onClick={() => setShowShapePanel(!showShapePanel)} />
+              <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
                 <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
                   <div className="grid grid-cols-4 gap-2">
@@ -215,9 +218,9 @@ export function SlideEditor() {
               )}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="艺术字">
+          <RibbonGroup label={t('slide.wordArt')}>
             <div className="relative">
-              <RibbonButton icon="🎨" label="艺术字" onClick={() => setShowArtPanel(!showArtPanel)} />
+              <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => setShowArtPanel(!showArtPanel)} />
               {showArtPanel && (
                 <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
                   <div className="grid grid-cols-3 gap-2">
@@ -232,32 +235,32 @@ export function SlideEditor() {
               )}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="插图">
-            <RibbonButton icon="🖼" label="图片" onClick={() => {}} />
-            <RibbonButton icon="📊" label="图表" onClick={() => {}} />
+          <RibbonGroup label={t('slide.illustration')}>
+            <RibbonButton icon="🖼" label={t('slide.image')} onClick={() => {}} />
+            <RibbonButton icon="📊" label={t('slide.chart')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="流程图">
-            <RibbonButton icon="🔀" label="流程图" onClick={() => {
+          <RibbonGroup label={t('slide.flowchart')}>
+            <RibbonButton icon="🔀" label={t('slide.flowchart')} onClick={() => {
               const newShapes: ShapeItem[] = [
-                { type: 'roundRect', x: 100, y: 200, w: 160, h: 60, fill: '#4f46e5', text: '开始', shadow: true, glow: false, gradient: '', rotation: 0 },
-                { type: 'rect', x: 320, y: 200, w: 160, h: 60, fill: '#10b981', text: '处理', shadow: true, glow: false, gradient: '', rotation: 0 },
-                { type: 'diamond', x: 540, y: 200, w: 160, h: 60, fill: '#f59e0b', text: '判断', shadow: true, glow: false, gradient: '', rotation: 0 },
-                { type: 'roundRect', x: 760, y: 200, w: 160, h: 60, fill: '#ef4444', text: '结束', shadow: true, glow: false, gradient: '', rotation: 0 },
+                { type: 'roundRect', x: 100, y: 200, w: 160, h: 60, fill: '#4f46e5', text: t('slide.flow.start'), shadow: true, glow: false, gradient: '', rotation: 0 },
+                { type: 'rect', x: 320, y: 200, w: 160, h: 60, fill: '#10b981', text: t('slide.flow.process'), shadow: true, glow: false, gradient: '', rotation: 0 },
+                { type: 'diamond', x: 540, y: 200, w: 160, h: 60, fill: '#f59e0b', text: t('slide.flow.decision'), shadow: true, glow: false, gradient: '', rotation: 0 },
+                { type: 'roundRect', x: 760, y: 200, w: 160, h: 60, fill: '#ef4444', text: t('slide.flow.end'), shadow: true, glow: false, gradient: '', rotation: 0 },
               ]
               updateActive({ shapes: [...current.shapes, ...newShapes] })
             }} />
           </RibbonGroup>
-          <RibbonGroup label="链接">
-            <RibbonButton icon="🔗" label="超链接" onClick={() => {}} />
-            <RibbonButton icon="⚓" label="书签" onClick={() => {}} />
+          <RibbonGroup label={t('slide.link')}>
+            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => {}} />
+            <RibbonButton icon="⚓" label={t('slide.bookmark')} onClick={() => {}} />
           </RibbonGroup>
-          <RibbonGroup label="文本">
-            <RibbonButton icon="📝" label="脚注" onClick={() => { const n = prompt('备注：', current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
+          <RibbonGroup label={t('slide.text')}>
+            <RibbonButton icon="📝" label={t('slide.footnote')} onClick={() => { const n = prompt(t('slide.prompt.notes'), current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
           </RibbonGroup>
         </>)}
 
         {ribbonTab === 'design' && (<>
-          <RibbonGroup label="背景">
+          <RibbonGroup label={t('slide.background')}>
             <div className="flex items-center gap-1 px-2">
               {PRESET_COLORS.map(c => (
                 <button key={c.value} onClick={() => updateActive({ bg: c.value })} className="w-7 h-7 rounded-md border-2 transition-transform hover:scale-110"
@@ -265,29 +268,29 @@ export function SlideEditor() {
               ))}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="形状样式">
-            <RibbonButton icon="🌈" label="渐变填充" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { gradient: '6366f1,818cf8' }) }} />
-            <RibbonButton icon="💫" label="发光" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { glow: !current.shapes[current.shapes.length-1].glow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].glow} />
-            <RibbonButton icon="🌑" label="阴影" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { shadow: !current.shapes[current.shapes.length-1].shadow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].shadow} />
-            <RibbonButton icon="🔄" label="旋转" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { rotation: (current.shapes[current.shapes.length-1].rotation + 15) % 360 }) }} />
+          <RibbonGroup label={t('slide.shapeStyle')}>
+            <RibbonButton icon="🌈" label={t('slide.gradient')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { gradient: '6366f1,818cf8' }) }} />
+            <RibbonButton icon="💫" label={t('slide.glow')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { glow: !current.shapes[current.shapes.length-1].glow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].glow} />
+            <RibbonButton icon="🌑" label={t('slide.shadow')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { shadow: !current.shapes[current.shapes.length-1].shadow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].shadow} />
+            <RibbonButton icon="🔄" label={t('slide.rotate')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { rotation: (current.shapes[current.shapes.length-1].rotation + 15) % 360 }) }} />
           </RibbonGroup>
         </>)}
 
         {ribbonTab === 'animations' && (<>
-          <RibbonGroup label="进入动画">
+          <RibbonGroup label={t('slide.entranceAnim')}>
             <div className="relative">
-              <RibbonButton icon="➡" label="进入" onClick={() => setShowAnimPanel(!showAnimPanel)} />
+              <RibbonButton icon="➡" label={t('slide.enter')} onClick={() => setShowAnimPanel(!showAnimPanel)} />
               {showAnimPanel && (
                 <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-                  <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--color-text-muted)' }}>进入</div>
+                  <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.enter')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {ENTRANCE_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'entrance')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}
                   </div>
-                  <div className="text-[10px] font-bold uppercase mt-3 mb-2" style={{ color: 'var(--color-text-muted)' }}>强调</div>
+                  <div className="text-[10px] font-bold uppercase mt-3 mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.emphasis')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {EMPHASIS_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'emphasis')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}
                   </div>
-                  <div className="text-[10px] font-bold uppercase mt-3 mb-2" style={{ color: 'var(--color-text-muted)' }}>退出</div>
+                  <div className="text-[10px] font-bold uppercase mt-3 mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.exit')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {EXIT_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'exit')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}
                   </div>
@@ -295,10 +298,10 @@ export function SlideEditor() {
               )}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="动画窗格">
+          <RibbonGroup label={t('slide.animPane')}>
             <div className="flex flex-col gap-0.5 max-h-[48px] overflow-y-auto">
               {current.animations.length === 0 ? (
-                <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>无动画</span>
+                <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{t('slide.noAnim')}</span>
               ) : current.animations.map((a, i) => (
                 <div key={i} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--color-text-secondary)' }}>
                   <span style={{ color: a.category === 'entrance' ? '#10b981' : a.category === 'emphasis' ? '#f59e0b' : '#ef4444' }}>●</span>
@@ -308,8 +311,8 @@ export function SlideEditor() {
               ))}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="计时">
-            <RibbonButton icon="⏱" label={autoPlay ? `自动${autoPlaySec}s` : '手动'} onClick={() => setAutoPlay(!autoPlay)} active={autoPlay} />
+          <RibbonGroup label={t('slide.timing')}>
+            <RibbonButton icon="⏱" label={autoPlay ? `${t('slide.auto')}${autoPlaySec}s` : t('slide.manual')} onClick={() => setAutoPlay(!autoPlay)} active={autoPlay} />
             {autoPlay && (
               <select value={autoPlaySec} onChange={e => setAutoPlaySec(parseInt(e.target.value))} className="text-xs rounded-md px-2 py-1" style={{ width: 50, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
                 <option value={3}>3s</option><option value={5}>5s</option><option value={10}>10s</option><option value={15}>15s</option>
@@ -319,7 +322,7 @@ export function SlideEditor() {
         </>)}
 
         {ribbonTab === 'transition' && (<>
-          <RibbonGroup label="切换效果">
+          <RibbonGroup label={t('slide.transitionEffect')}>
             <div className="flex items-center gap-1 px-2">
               {TRANSITIONS.map(t => (
                 <button key={t.id} onClick={() => updateActive({ transition: t.id })} className="px-3 py-1.5 text-xs rounded-md transition-colors"
@@ -327,25 +330,25 @@ export function SlideEditor() {
               ))}
             </div>
           </RibbonGroup>
-          <RibbonGroup label="备注">
-            <RibbonButton icon="📝" label="演讲者备注" onClick={() => { const n = prompt('备注：', current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
+          <RibbonGroup label={t('slide.notes')}>
+            <RibbonButton icon="📝" label={t('slide.speakerNotes')} onClick={() => { const n = prompt(t('slide.prompt.notes'), current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
           </RibbonGroup>
         </>)}
 
         {ribbonTab === 'view' && (<>
-          <RibbonGroup label="缩放">
-            <RibbonButton icon="−" label="缩小" onClick={() => setZoom(Math.max(50, zoom - 25))} />
+          <RibbonGroup label={t('slide.zoom')}>
+            <RibbonButton icon="−" label={t('slide.zoomOut')} onClick={() => setZoom(Math.max(50, zoom - 25))} />
             <div className="flex flex-col items-center px-2"><span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-text)' }}>{zoom}%</span></div>
-            <RibbonButton icon="+" label="放大" onClick={() => setZoom(Math.min(150, zoom + 25))} />
+            <RibbonButton icon="+" label={t('slide.zoomIn')} onClick={() => setZoom(Math.min(150, zoom + 25))} />
             <RibbonButton icon="▮" label="100%" onClick={() => setZoom(100)} />
           </RibbonGroup>
-          <RibbonGroup label="导航">
-            <RibbonButton icon="←" label="上一张" onClick={() => switchSlide(Math.max(0, active - 1))} disabled={active === 0} />
-            <RibbonButton icon="→" label="下一张" onClick={() => switchSlide(Math.min(slides.length - 1, active + 1))} disabled={active === slides.length - 1} />
+          <RibbonGroup label={t('slide.navigation')}>
+            <RibbonButton icon="←" label={t('slide.prev')} onClick={() => switchSlide(Math.max(0, active - 1))} disabled={active === 0} />
+            <RibbonButton icon="→" label={t('slide.next')} onClick={() => switchSlide(Math.min(slides.length - 1, active + 1))} disabled={active === slides.length - 1} />
           </RibbonGroup>
-          <RibbonGroup label="放映">
-            <RibbonButton icon="▶" label="从头开始" onClick={() => { setActive(0); startPresent() }} />
-            <RibbonButton icon="▶" label="从当前" onClick={startPresent} />
+          <RibbonGroup label={t('slide.slideshow')}>
+            <RibbonButton icon="▶" label={t('slide.fromStart')} onClick={() => { setActive(0); startPresent() }} />
+            <RibbonButton icon="▶" label={t('slide.fromCurrent')} onClick={startPresent} />
           </RibbonGroup>
         </>)}
       </div>
@@ -355,7 +358,7 @@ export function SlideEditor() {
         {/* 左侧缩略图 */}
         <div className="w-40 lg:w-48 flex-shrink-0 overflow-auto p-2 border-r" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
           <div className="flex items-center justify-between mb-2 px-1">
-            <span className="text-xs font-semibold" style={{ color: 'var(--color-text-secondary)' }}>幻灯片</span>
+            <span className="text-xs font-semibold" style={{ color: 'var(--color-text-secondary)' }}>{t('slide.slides')}</span>
             <button onClick={addSlide} className="text-sm font-medium px-2 py-0.5 rounded" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)' }}>+</button>
           </div>
           <div className="space-y-2">
@@ -387,19 +390,19 @@ export function SlideEditor() {
               {/* 文字内容 */}
               {current.layout === 'title' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10">
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} className="text-2xl sm:text-3xl md:text-4xl font-bold text-center outline-none bg-transparent w-full" style={{ letterSpacing: '-0.02em', color: isDark ? '#f1f5f9' : '#0f172a' }} placeholder="点击添加标题" />
-                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} className="text-sm sm:text-base md:text-lg text-center mt-3 outline-none bg-transparent w-full" style={{ color: isDark ? '#cbd5e1' : '#64748b' }} placeholder="点击添加副标题" />
+                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} className="text-2xl sm:text-3xl md:text-4xl font-bold text-center outline-none bg-transparent w-full" style={{ letterSpacing: '-0.02em', color: isDark ? '#f1f5f9' : '#0f172a' }} placeholder={t('slide.placeholder.title')} />
+                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} className="text-sm sm:text-base md:text-lg text-center mt-3 outline-none bg-transparent w-full" style={{ color: isDark ? '#cbd5e1' : '#64748b' }} placeholder={t('slide.placeholder.subtitle')} />
                 </div>
               )}
               {current.layout === 'content' && (
                 <>
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} className="text-xl sm:text-2xl font-bold mb-4 outline-none bg-transparent relative z-10" style={{ color: isDark ? '#f1f5f9' : '#0f172a' }} placeholder="点击添加标题" />
+                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} className="text-xl sm:text-2xl font-bold mb-4 outline-none bg-transparent relative z-10" style={{ color: isDark ? '#f1f5f9' : '#0f172a' }} placeholder={t('slide.placeholder.title')} />
                   <div className="w-12 h-1 rounded mb-4" style={{ background: 'var(--color-primary)' }}></div>
-                  <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none leading-relaxed relative z-10" style={{ color: isDark ? '#cbd5e1' : '#334155' }} placeholder="点击添加内容" />
+                  <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none leading-relaxed relative z-10" style={{ color: isDark ? '#cbd5e1' : '#334155' }} placeholder={t('slide.placeholder.content')} />
                 </>
               )}
               {current.layout === 'blank' && (
-                <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder="空白幻灯片" />
+                <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder={t('slide.placeholder.blank')} />
               )}
 
               {/* 形状渲染层 */}
@@ -460,15 +463,15 @@ export function SlideEditor() {
 
       {/* 底部状态栏 */}
       <div className="px-3 py-1.5 text-xs flex items-center gap-3 flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>就绪</span>
+        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>{t('slide.ready')}</span>
         <div className="flex-1" />
-        <span>幻灯片 #{active + 1} / {slides.length}</span>
-        {current.shapes.length > 0 && <span>📊 形状 {current.shapes.length}</span>}
-        {current.animations.length > 0 && <span>✨ 动画 {current.animations.length}</span>}
-        {current.transition && <span style={{ color: 'var(--color-primary)' }}>切换: {TRANSITIONS.find(t => t.id === current.transition)?.name}</span>}
-        {current.notes && <span>📝 备注</span>}
-        {autoPlay && <span style={{ color: 'var(--color-primary)' }}>⏱ 自动 {autoPlaySec}s</span>}
-        <button onClick={startPresent} className="btn btn-primary btn-sm">▶ 放映</button>
+        <span>{t('slide.slideNum')} #{active + 1} / {slides.length}</span>
+        {current.shapes.length > 0 && <span>📊 {t('slide.shapesCount')} {current.shapes.length}</span>}
+        {current.animations.length > 0 && <span>✨ {t('slide.animsCount')} {current.animations.length}</span>}
+        {current.transition && <span style={{ color: 'var(--color-primary)' }}>{t('slide.transitionLabel')}{TRANSITIONS.find(t => t.id === current.transition)?.name}</span>}
+        {current.notes && <span>📝 {t('slide.notes')}</span>}
+        {autoPlay && <span style={{ color: 'var(--color-primary)' }}>⏱ {t('slide.auto')} {autoPlaySec}s</span>}
+        <button onClick={startPresent} className="btn btn-primary btn-sm">▶ {t('slide.play')}</button>
       </div>
 
       {/* 全屏放映模式 */}
