@@ -4,6 +4,7 @@ import (
         "strings"
         "sync"
 
+        "github.com/zai/gooffice/internal/dict/chinese"
         "github.com/zai/gooffice/internal/dict/symspell"
         "github.com/zai/gooffice/internal/dict/userdict"
 )
@@ -14,10 +15,11 @@ import (
 //  3. 拼写检查 + 纠错建议
 //  4. 用户词库自学习
 type Manager struct {
-        dicts   map[string]*symspell.SymSpell // lang → index
-        user    *userdict.Store
-        mu      sync.RWMutex
-        loaded  map[string]bool
+        dicts    map[string]*symspell.SymSpell // lang → index
+        zhSeg    *chinese.Segmenter            // 中文分词器
+        user     *userdict.Store
+        mu       sync.RWMutex
+        loaded   map[string]bool
 }
 
 type SpellError struct {
@@ -37,6 +39,7 @@ type Candidate struct {
 func NewManager(userStore *userdict.Store) *Manager {
         return &Manager{
                 dicts:  make(map[string]*symspell.SymSpell),
+                zhSeg:  chinese.New(),
                 user:   userStore,
                 loaded: make(map[string]bool),
         }
@@ -53,12 +56,22 @@ func (m *Manager) RegisterLang(lang string, words map[string]int) error {
                 idx.AddWord(w, f)
         }
 
+        // 中文：同时填充分词器词典
+        if lang == "zh" {
+                for w, f := range words {
+                        m.zhSeg.AddWord(w, f)
+                }
+        }
+
         // 合并用户词库
         if m.user != nil {
                 entries, err := m.user.All(lang)
                 if err == nil {
                         for _, e := range entries {
                                 idx.AddWord(e.Word, e.Frequency+1)
+                                if lang == "zh" {
+                                        m.zhSeg.AddWord(e.Word, e.Frequency+1)
+                                }
                         }
                 }
         }
@@ -73,15 +86,31 @@ func (m *Manager) RegisterLang(lang string, words map[string]int) error {
 func (m *Manager) SpellCheck(text, lang string) []SpellError {
         m.mu.RLock()
         idx, ok := m.dicts[lang]
+        zhSeg := m.zhSeg
         m.mu.RUnlock()
         if !ok {
-                return nil
+                return []SpellError{}
         }
 
-        var errs []SpellError
-        tokens := tokenize(text)
+        var errs []SpellError = make([]SpellError, 0)
+        var tokens []token
+
+        if lang == "zh" && zhSeg != nil {
+                // 中文：用分词器切分
+                for _, t := range zhSeg.SegmentForSpellCheck(text) {
+                        tokens = append(tokens, token{word: t.Word, start: t.Start, end: t.End})
+                }
+        } else {
+                // 其他语言：按字符切分
+                tokens = tokenize(text)
+        }
+
         for _, t := range tokens {
                 if isSkipWord(t.word) {
+                        continue
+                }
+                // 中文：单字 token 跳过（无意义）
+                if lang == "zh" && len([]rune(t.word)) <= 1 {
                         continue
                 }
                 lower := strings.ToLower(t.word)
@@ -92,7 +121,7 @@ func (m *Manager) SpellCheck(text, lang string) []SpellError {
                 if has, _ := m.user.Has(lower, lang); has {
                         continue
                 }
-                suggests := idx.Lookup(lower, 5)
+                suggests := idx.Lookup(lower, 8)
                 words := make([]string, 0, len(suggests))
                 for _, c := range suggests {
                         words = append(words, c.Word)

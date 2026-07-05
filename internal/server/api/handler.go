@@ -10,7 +10,11 @@ import (
         "github.com/zai/gooffice/internal/core"
         "github.com/zai/gooffice/internal/dict"
         "github.com/zai/gooffice/internal/parser"
+        "github.com/zai/gooffice/internal/renderer/docx"
 )
+
+// alias for clarity
+var _ = docx.New
 
 // Handler 持有所有依赖的 API handler
 type Handler struct {
@@ -61,19 +65,27 @@ func (h *Handler) openDocument(c *gin.Context) {
         })
 }
 
-// saveDocument 接收 UDM JSON 保存为文件
+// saveDocument 接收 UDM JSON 保存为 docx 文件并返回
 func (h *Handler) saveDocument(c *gin.Context) {
         var doc core.Document
         if err := c.ShouldBindJSON(&doc); err != nil {
                 c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
                 return
         }
-        // TODO: 调用 renderer 输出 docx/md
-        c.JSON(http.StatusOK, gin.H{
-                "status":  "ok",
-                "blocks":  len(doc.Blocks),
-                "message": "save not fully implemented, content received",
-        })
+
+        r := docx.New()
+        data, err := r.Render(&doc)
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        filename := doc.Meta.Title
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
+        c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
 }
 
 // spellCheck GET /api/dict/check?text=xxx&lang=en

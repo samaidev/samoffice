@@ -77,9 +77,21 @@ function App() {
         body: JSON.stringify(doc)
       })
       if (resp.ok) {
-        setStatus('已保存（演示版：仅接收内容）')
+        // 下载文件
+        const blob = await resp.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        const title = doc.meta?.title || 'untitled'
+        a.download = `${title}.docx`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        setStatus('已保存为 docx 文件')
       } else {
-        setStatus('保存失败')
+        const errText = await resp.text()
+        setStatus(`保存失败: ${errText}`)
       }
     } catch (e: any) {
       setStatus(`保存失败: ${e.message}`)
@@ -162,6 +174,7 @@ function App() {
             <div className="max-w-4xl mx-auto shadow-md min-h-full">
               <DocumentEditor
                 document={doc}
+                spellErrors={spellErrors}
                 onChange={(d) => setDoc(d)}
                 onSpellCheck={triggerSpellCheck}
               />
