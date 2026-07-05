@@ -13,13 +13,11 @@ export function spellCheckPlugin() {
         return DecorationSet.empty
       },
       apply(tr, oldState) {
-        // 通过 meta 更新错误列表
         const meta = tr.getMeta(spellKey)
         if (meta !== undefined) {
-          // 重新构建装饰
-          return buildDecorations(tr.doc, meta)
+          const decos = buildDecorations(tr.doc, meta)
+          return decos
         }
-        // 文档变更时，清理装饰（外部会重新触发检查）
         if (tr.docChanged) {
           return DecorationSet.empty
         }

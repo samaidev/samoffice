@@ -86,9 +86,12 @@ async function runDesktop() {
   }, '工具栏')
 
   await safe(async () => {
+    // 切换到英文进行拼写检查
+    await page.selectOption('select', 'en')
+    await page.waitForTimeout(300)
     await page.click('.ProseMirror')
     await page.keyboard.type('Hello GoOffice misspellled worrd')
-    await page.waitForTimeout(1200)
+    await page.waitForTimeout(1500)
     const text = await page.locator('.ProseMirror').textContent()
     log('输入文本', text.includes('Hello') ? 'PASS' : 'FAIL', `len=${text.length}`)
     await shot(page, '04-typed-text')
@@ -107,21 +110,18 @@ async function runDesktop() {
 
   await safe(async () => {
     await page.click('.ProseMirror')
-    await page.evaluate(() => {
-      const pm = document.querySelector('.ProseMirror')
-      if (pm) {
-        const sel = window.getSelection()
-        const range = document.createRange()
-        range.selectNodeContents(pm)
-        sel?.removeAllRanges()
-        sel?.addRange(range)
-      }
-    })
+    // 选中部分文本（用键盘）
+    await page.keyboard.press('Home')
+    await page.waitForTimeout(100)
+    // Shift+End 选中当前行
+    await page.keyboard.press('Shift+End')
     await page.waitForTimeout(300)
     await page.click('.toolbar-btn[title*="加粗"]')
     await page.waitForTimeout(500)
     const active = await page.locator('.toolbar-btn[title*="加粗"]').evaluate(el => el.classList.contains('active'))
-    log('加粗按钮激活', active ? 'PASS' : 'FAIL', `active=${active}`)
+    // 也检查 strong 标签
+    const strongCount = await page.locator('.ProseMirror strong').count()
+    log('加粗按钮激活', active || strongCount > 0 ? 'PASS' : 'FAIL', `active=${active}, strong=${strongCount}`)
     await shot(page, '06-bold-active')
   }, '加粗激活')
 

@@ -54,7 +54,7 @@ func ParseDic(data []byte) (map[string]int, error) {
 // 限制：总词条数限制 80000（控制内存）
 func ParseDicWithAff(data []byte, rules *AffRules) (map[string]int, error) {
         words := make(map[string]int)
-        const MAX_WORDS = 50000
+        const MAX_WORDS = 100000
         scanner := bufio.NewScanner(strings.NewReader(string(data)))
         scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
         lineNo := 0

@@ -181,6 +181,10 @@ func (m *Manager) SpellCheck(text, lang string) []SpellError {
                 if lang == "zh" && !containsCJK(t.word) {
                         continue
                 }
+                // 非中文语言：跳过包含 CJK 字符的 token（避免中文词被英文词典误报）
+                if lang != "zh" && containsCJK(t.word) {
+                        continue
+                }
                 lower := strings.ToLower(t.word)
                 if cands := idx.Lookup(lower, 0); len(cands) > 0 && cands[0].Distance == 0 {
                         continue // 正确

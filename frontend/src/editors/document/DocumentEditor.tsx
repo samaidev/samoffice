@@ -155,6 +155,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       const view = viewRef.current
       const tr = setSpellErrors(view.state.tr, spellErrors)
       view.dispatch(tr)
+      // 强制重新渲染（dispatch 不改 doc 时 ProseMirror 可能不重绘装饰）
+      view.updateState(view.state)
       setTick((t) => t + 1)
     }
   }, [spellErrors])
