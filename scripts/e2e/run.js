@@ -3,7 +3,7 @@ const { firefox, devices } = require('playwright')
 const fs = require('fs')
 const path = require('path')
 
-const BASE_URL = 'http://127.0.0.1:18400'
+const BASE_URL = 'http://127.0.0.1:18600'
 const SHOTS_DIR = path.join(__dirname, 'screenshots')
 fs.mkdirSync(SHOTS_DIR, { recursive: true })
 

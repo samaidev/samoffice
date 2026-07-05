@@ -6,6 +6,7 @@ import { SpreadsheetEditor } from './editors/spreadsheet/SpreadsheetEditor'
 import { SlideEditor } from './editors/slide/SlideEditor'
 
 type Tab = 'document' | 'spreadsheet' | 'slide'
+type Theme = 'light' | 'dark' | 'auto'
 
 const EMPTY_DOC: Document = {
   meta: { title: '未命名文档' },
@@ -27,6 +28,9 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [spellPanelOpen, setSpellPanelOpen] = useState(false)
+  const [theme, setTheme] = useState<Theme>('auto')
+  const [wordCount, setWordCount] = useState(0)
+  const [charCount, setCharCount] = useState(0)
   const spellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -36,6 +40,21 @@ function App() {
     toastTimer.current = setTimeout(() => setToast(''), 2500)
   }, [])
 
+  // 主题应用
+  useEffect(() => {
+    const applyTheme = () => {
+      const isDark = theme === 'dark' ||
+        (theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
+    }
+    applyTheme()
+    if (theme === 'auto') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      mq.addEventListener('change', applyTheme)
+      return () => mq.removeEventListener('change', applyTheme)
+    }
+  }, [theme])
+
   useEffect(() => {
     setBackend(createBackend())
     const checkMobile = () => setIsMobile(window.innerWidth <= 768)
@@ -43,6 +62,17 @@ function App() {
     window.addEventListener('resize', checkMobile)
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
+
+  // 字数统计
+  useEffect(() => {
+    const text = doc.blocks?.map(b => {
+      if ('inline' in b) return (b as any).inline?.map((i: any) => i.content || '').join('') || ''
+      if ('code' in b) return (b as any).code || ''
+      return ''
+    }).join(' ') || ''
+    setCharCount(text.length)
+    setWordCount(text.trim() ? text.trim().split(/\s+/).length : 0)
+  }, [doc])
 
   const triggerSpellCheck = useCallback((text: string) => {
     if (spellTimer.current) clearTimeout(spellTimer.current)
@@ -156,10 +186,17 @@ function App() {
     triggerSpellCheck(JSON.stringify(doc.blocks))
   }
 
+  const toggleTheme = () => {
+    setTheme(t => t === 'light' ? 'dark' : t === 'dark' ? 'auto' : 'light')
+  }
+
+  const themeIcon = theme === 'light' ? '☀️' : theme === 'dark' ? '🌙' : '🖥'
+  const themeLabel = theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'
+
   const menuItems = [
-    { icon: '📂', label: '打开文件', onClick: handleOpenFile },
-    { icon: '📄', label: '存为 docx', onClick: () => handleSave('docx') },
-    { icon: '📕', label: '导出 PDF', onClick: () => handleSave('pdf') },
+    { icon: '📂', label: '打开文件', onClick: handleOpenFile, shortcut: 'Ctrl+O' },
+    { icon: '📄', label: '存为 docx', onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' },
+    { icon: '📕', label: '导出 PDF', onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' },
     { icon: '🖼', label: '插入图片', onClick: handleInsertImage },
   ]
 
@@ -169,30 +206,35 @@ function App() {
       <header
         className="text-white px-3 sm:px-5 py-2.5 flex items-center gap-3 flex-shrink-0"
         style={{
-          background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
-          boxShadow: '0 2px 8px rgba(79, 70, 229, 0.2)'
+          background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
+          boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)'
         }}
       >
         <div className="font-bold text-base sm:text-lg flex items-center gap-2 flex-shrink-0">
           <div
-            className="w-7 h-7 rounded-md flex items-center justify-center text-sm font-bold"
-            style={{ background: 'rgba(255,255,255,0.2)', color: 'white' }}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold"
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              backdropFilter: 'blur(8px)',
+              border: '1px solid rgba(255,255,255,0.15)'
+            }}
           >Go</div>
           <span className="hidden sm:inline tracking-tight">Office</span>
         </div>
 
         {/* 桌面端菜单 */}
         {!isMobile && (
-          <div className="flex gap-1 items-center">
+          <div className="flex gap-0.5 items-center">
             {menuItems.map((it) => (
               <button
                 key={it.label}
                 onClick={it.onClick}
                 disabled={loading}
+                data-tooltip={it.shortcut ? `${it.label} (${it.shortcut})` : it.label}
                 className="px-3 py-1.5 text-sm rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1.5"
               >
-                <span className="text-xs opacity-80">{it.icon}</span>
-                {it.label}
+                <span className="text-xs opacity-90">{it.icon}</span>
+                <span className="hidden md:inline">{it.label}</span>
               </button>
             ))}
           </div>
@@ -202,28 +244,37 @@ function App() {
         {isMobile && (
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="p-2 rounded-md hover:bg-white/15"
+            className="p-2 rounded-md hover:bg-white/15 transition-colors"
             aria-label="菜单"
           >
-            <div className="w-5 h-0.5 bg-white mb-1.5 rounded"></div>
-            <div className="w-5 h-0.5 bg-white mb-1.5 rounded"></div>
-            <div className="w-5 h-0.5 bg-white rounded"></div>
+            <div className="w-5 h-0.5 bg-white mb-1.5 rounded transition-all" style={{ transform: menuOpen ? 'rotate(45deg) translate(4px, 4px)' : '' }}></div>
+            <div className="w-5 h-0.5 bg-white mb-1.5 rounded transition-all" style={{ opacity: menuOpen ? 0 : 1 }}></div>
+            <div className="w-5 h-0.5 bg-white rounded transition-all" style={{ transform: menuOpen ? 'rotate(-45deg) translate(4px, -4px)' : '' }}></div>
           </button>
         )}
 
         <div className="flex-1" />
 
+        {/* 主题切换 */}
+        <button
+          onClick={toggleTheme}
+          data-tooltip={`主题: ${themeLabel}`}
+          className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0"
+        >
+          <span className="text-sm">{themeIcon}</span>
+        </button>
+
         {/* 模式标识 */}
-        <div className="text-xs opacity-75 hidden sm:flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${backend?.mode === 'local' ? 'bg-green-300' : 'bg-blue-300'}`}></span>
-          {backend?.mode === 'local' ? '本地模式' : '远程模式'}
+        <div className="text-xs opacity-80 hidden md:flex items-center gap-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full ${backend?.mode === 'local' ? 'bg-green-300' : 'bg-blue-300'} animate-pulse`}></span>
+          {backend?.mode === 'local' ? '本地' : '远程'}
         </div>
 
         {/* 拼写错误徽章 */}
         {spellErrors.length > 0 && (
           <button
             onClick={() => setSpellPanelOpen(!spellPanelOpen)}
-            className="px-2.5 py-1 text-xs rounded-full font-semibold flex items-center gap-1"
+            className="px-2.5 py-1 text-xs rounded-full font-semibold flex items-center gap-1 animate-scale-in"
             style={{ background: 'rgba(225, 29, 72, 0.9)' }}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
@@ -234,23 +285,33 @@ function App() {
 
       {/* 移动端下拉菜单 */}
       {isMobile && menuOpen && (
-        <div className="bg-white shadow-lg flex-shrink-0 border-b border-slate-200 animate-fade-in">
+        <div
+          className="shadow-lg flex-shrink-0 border-b animate-fade-in"
+          style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+        >
           {menuItems.map((it) => (
             <button
               key={it.label}
               onClick={it.onClick}
               disabled={loading}
-              className="block w-full text-left px-4 py-3 text-sm hover:bg-slate-50 border-b border-slate-100 disabled:opacity-50 flex items-center gap-3"
+              className="block w-full text-left px-4 py-3 text-sm border-b disabled:opacity-50 flex items-center gap-3 transition-colors"
+              style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
             >
               <span className="text-base">{it.icon}</span>
-              {it.label}
+              <span>{it.label}</span>
+              {it.shortcut && <span className="ml-auto text-xs opacity-50">{it.shortcut}</span>}
             </button>
           ))}
         </div>
       )}
 
       {/* Tab 切换栏 */}
-      <div className="bg-white border-b border-slate-200 px-2 sm:px-5 flex items-center gap-1 flex-shrink-0 overflow-x-auto">
+      <div
+        className="border-b px-2 sm:px-5 flex items-center gap-1 flex-shrink-0 overflow-x-auto"
+        style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+      >
         {([
           { id: 'document', icon: '📄', label: '文档' },
           { id: 'spreadsheet', icon: '📊', label: '表格' },
@@ -259,11 +320,15 @@ function App() {
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors flex items-center gap-2 ${
+            className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${
               tab === t.id
                 ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
+            style={{
+              borderColor: tab === t.id ? 'var(--color-primary)' : 'transparent',
+              color: tab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)'
+            }}
           >
             <span>{t.icon}</span>
             {t.label}
@@ -274,8 +339,8 @@ function App() {
           <select
             value={lang}
             onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-            className="text-xs border border-slate-200 rounded-md px-2 py-1 bg-white"
-            style={{ minWidth: '70px' }}
+            className="text-xs rounded-md px-2 py-1"
+            style={{ minWidth: '70px', background: 'var(--color-surface)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}
           >
             <option value="zh">中文</option>
             <option value="en">English</option>
@@ -285,13 +350,18 @@ function App() {
 
       {/* 主编辑区 */}
       <main className="flex-1 overflow-hidden min-h-0 flex">
-        {/* 文档/表格/演示主区 */}
         <div className="flex-1 overflow-hidden min-w-0">
           {tab === 'document' && (
-            <div className="h-full overflow-auto bg-slate-100">
+            <div className="h-full overflow-auto" style={{ background: 'var(--color-bg-alt)' }}>
               <div
-                className="max-w-4xl mx-auto bg-white min-h-full"
-                style={{ boxShadow: '0 0 20px rgba(15, 23, 42, 0.04)', marginTop: '16px', marginBottom: '16px', borderRadius: '4px' }}
+                className="max-w-4xl mx-auto bg-white min-h-full animate-fade-in"
+                style={{
+                  boxShadow: '0 0 24px rgba(15, 23, 42, 0.05)',
+                  marginTop: '20px',
+                  marginBottom: '20px',
+                  borderRadius: '6px',
+                  background: 'var(--color-surface)'
+                }}
               >
                 <DocumentEditor
                   document={doc}
@@ -306,45 +376,54 @@ function App() {
           {tab === 'slide' && <SlideEditor />}
         </div>
 
-        {/* 拼写检查侧边面板（桌面端固定，移动端浮层） */}
-        {spellErrors.length > 0 && (spellPanelOpen || isMobile) && !isMobile && (
+        {/* 拼写检查侧边面板 */}
+        {spellErrors.length > 0 && spellPanelOpen && !isMobile && (
           <aside
-            className="w-80 bg-white border-l border-slate-200 flex flex-col flex-shrink-0 animate-slide-in"
-            style={{ boxShadow: '-4px 0 12px rgba(15, 23, 42, 0.04)' }}
+            className="w-80 flex flex-col flex-shrink-0 animate-slide-in"
+            style={{
+              background: 'var(--color-surface)',
+              borderLeft: '1px solid var(--color-border)',
+              boxShadow: '-4px 0 12px rgba(15, 23, 42, 0.04)'
+            }}
           >
-            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--color-border)' }}>
               <div className="flex items-center gap-2">
                 <span className="badge badge-danger">{spellErrors.length}</span>
-                <span className="text-sm font-semibold text-slate-700">拼写检查</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>拼写检查</span>
               </div>
               <button
                 onClick={() => setSpellPanelOpen(false)}
-                className="text-slate-400 hover:text-slate-600 px-1.5"
+                className="px-1.5 hover:opacity-70 transition-opacity"
+                style={{ color: 'var(--color-text-muted)' }}
               >✕</button>
             </div>
             <div className="flex-1 overflow-auto">
               {spellErrors.map((e, i) => (
-                <div key={i} className="px-4 py-3 border-b border-slate-50 hover:bg-slate-50">
+                <div
+                  key={i}
+                  className="px-4 py-3 transition-colors hover:bg-slate-50"
+                  style={{ borderBottom: '1px solid var(--color-border)' }}
+                >
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-rose-600 font-mono text-sm font-medium">{e.word}</span>
+                    <span className="font-mono text-sm font-medium" style={{ color: 'var(--color-danger)' }}>{e.word}</span>
                     <button
                       onClick={() => handleLearnWord(e.word)}
-                      className="text-xs text-indigo-600 hover:text-indigo-700 hover:underline"
+                      className="text-xs hover:underline flex-shrink-0 ml-2"
+                      style={{ color: 'var(--color-primary)' }}
                     >+ 词典</button>
                   </div>
-                  {e.suggest.length > 0 && (
+                  {e.suggest.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
                       {e.suggest.slice(0, 5).map((s, j) => (
                         <span
                           key={j}
-                          className="text-xs px-2 py-0.5 rounded-md"
-                          style={{ background: '#f1f5f9', color: '#475569' }}
+                          className="text-xs px-2 py-0.5 rounded"
+                          style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text-secondary)' }}
                         >{s}</span>
                       ))}
                     </div>
-                  )}
-                  {e.suggest.length === 0 && (
-                    <div className="text-xs text-slate-400 italic">无建议</div>
+                  ) : (
+                    <div className="text-xs italic" style={{ color: 'var(--color-text-muted)' }}>无建议</div>
                   )}
                 </div>
               ))}
@@ -356,38 +435,41 @@ function App() {
       {/* 移动端拼写检查浮层 */}
       {spellErrors.length > 0 && spellPanelOpen && isMobile && (
         <div
-          className="fixed inset-0 z-50 flex items-end"
+          className="fixed inset-0 z-50 flex items-end animate-fade-in-fast"
           style={{ background: 'rgba(15, 23, 42, 0.4)' }}
           onClick={() => setSpellPanelOpen(false)}
         >
           <div
-            className="bg-white w-full max-h-[70vh] flex flex-col rounded-t-xl animate-fade-in"
+            className="bg-white w-full max-h-[70vh] flex flex-col rounded-t-xl animate-slide-in-up"
+            style={{ background: 'var(--color-surface)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--color-border)' }}>
               <div className="flex items-center gap-2">
                 <span className="badge badge-danger">{spellErrors.length}</span>
-                <span className="text-sm font-semibold text-slate-700">拼写检查</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>拼写检查</span>
               </div>
               <button
                 onClick={() => setSpellPanelOpen(false)}
-                className="text-slate-400 hover:text-slate-600 px-1.5"
+                className="px-1.5"
+                style={{ color: 'var(--color-text-muted)' }}
               >✕</button>
             </div>
             <div className="flex-1 overflow-auto">
               {spellErrors.map((e, i) => (
-                <div key={i} className="px-4 py-3 border-b border-slate-50">
+                <div key={i} className="px-4 py-3" style={{ borderBottom: '1px solid var(--color-border)' }}>
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-rose-600 font-mono text-sm font-medium">{e.word}</span>
+                    <span className="font-mono text-sm font-medium" style={{ color: 'var(--color-danger)' }}>{e.word}</span>
                     <button
                       onClick={() => handleLearnWord(e.word)}
-                      className="text-xs text-indigo-600 hover:underline"
+                      className="text-xs hover:underline"
+                      style={{ color: 'var(--color-primary)' }}
                     >+ 词典</button>
                   </div>
                   {e.suggest.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {e.suggest.slice(0, 5).map((s, j) => (
-                        <span key={j} className="text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">{s}</span>
+                        <span key={j} className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text-secondary)' }}>{s}</span>
                       ))}
                     </div>
                   )}
@@ -399,25 +481,36 @@ function App() {
       )}
 
       {/* 底部状态栏 */}
-      <footer className="bg-slate-800 text-white text-xs px-3 sm:px-5 py-1.5 flex items-center gap-3 flex-shrink-0">
+      <footer
+        className="text-xs px-3 sm:px-5 py-1.5 flex items-center gap-3 flex-shrink-0 overflow-hidden"
+        style={{ background: 'var(--color-text)', color: 'var(--color-surface)' }}
+      >
         <div className="flex items-center gap-2">
           {loading && (
             <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
           )}
-          <span className="truncate max-w-[200px] sm:max-w-md">
+          <span className="truncate max-w-[150px] sm:max-w-md">
             {filePath || '就绪'}
           </span>
         </div>
         <div className="flex-1" />
-        <span className="text-slate-400 hidden sm:inline">
-          {spellErrors.length > 0 ? `${spellErrors.length} 个拼写错误` : '无拼写错误'}
-        </span>
-        <span className="text-slate-500">v0.2.0</span>
+        {tab === 'document' && (
+          <span className="hidden sm:inline opacity-70">
+            {wordCount} 字 · {charCount} 字符
+          </span>
+        )}
+        {spellErrors.length > 0 && (
+          <span className="opacity-70 hidden sm:inline">{spellErrors.length} 拼写错误</span>
+        )}
+        <span className="opacity-50">v0.3.0</span>
       </footer>
 
-      {/* Toast 提示 */}
+      {/* Toast */}
       {toast && (
-        <div className="toast">{toast}</div>
+        <div className="toast">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+          {toast}
+        </div>
       )}
     </div>
   )
