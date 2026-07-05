@@ -63,6 +63,7 @@ func main() {
         frontendDir := "./frontend/dist"
         if _, err := os.Stat(frontendDir); err == nil {
                 r.Static("/assets", filepath.Join(frontendDir, "assets"))
+                r.Static("/vendor", filepath.Join(frontendDir, "vendor"))
                 r.StaticFile("/", filepath.Join(frontendDir, "index.html"))
                 // SPA fallback：仅对非 API 路径返回 index.html
                 r.NoRoute(func(c *gin.Context) {

@@ -523,3 +523,97 @@ table td, table th {
   margin-bottom: 16px;
   opacity: 0.4;
 }
+
+/* === Markdown/HTML 预览 === */
+.markdown-preview {
+  font-size: 15px;
+  line-height: 1.7;
+}
+.markdown-preview h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 24px 0 12px;
+  letter-spacing: -0.02em;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+.markdown-preview h2 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+  letter-spacing: -0.01em;
+}
+.markdown-preview h3 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+}
+.markdown-preview h4, .markdown-preview h5, .markdown-preview h6 {
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+.markdown-preview p { margin: 10px 0; }
+.markdown-preview ul, .markdown-preview ol {
+  padding-left: 24px;
+  margin: 10px 0;
+}
+.markdown-preview li { margin: 4px 0; }
+.markdown-preview blockquote {
+  border-left: 3px solid var(--color-primary);
+  padding: 8px 16px;
+  margin: 12px 0;
+  background: var(--color-primary-50);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  color: var(--color-text-secondary);
+}
+.markdown-preview code {
+  background: var(--color-bg-alt);
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+  font-size: 13px;
+  color: var(--color-danger);
+}
+.markdown-preview pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 16px 20px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid var(--color-border);
+}
+.markdown-preview pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 13px;
+}
+.markdown-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+.markdown-preview th, .markdown-preview td {
+  border: 1px solid var(--color-border);
+  padding: 8px 12px;
+  text-align: left;
+}
+.markdown-preview th {
+  background: var(--color-bg-alt);
+  font-weight: 600;
+}
+.markdown-preview a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-preview img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
+.markdown-preview hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 20px 0;
+}

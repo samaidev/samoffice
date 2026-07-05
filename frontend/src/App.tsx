@@ -4,8 +4,10 @@ import type { Backend, Document, SpellError } from './types/udm'
 import { DocumentEditor } from './editors/document/DocumentEditor'
 import { SpreadsheetEditor } from './editors/spreadsheet/SpreadsheetEditor'
 import { SlideEditor } from './editors/slide/SlideEditor'
+import { MarkdownHtmlEditor } from './editors/markdown/MarkdownHtmlEditor'
+import { AboutPage } from './components/AboutPage'
 
-type Tab = 'document' | 'spreadsheet' | 'slide'
+type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
 
 const EMPTY_DOC: Document = {
@@ -15,6 +17,75 @@ const EMPTY_DOC: Document = {
     { inline: [{ content: '一款用 Go + Web 构建的跨平台办公套件' }], style: '', align: '' }
   ]
 }
+
+const SAMPLE_MD = `# GoOffice Markdown 示例
+
+欢迎使用 **GoOffice** 的 Markdown 编辑器，支持 *实时预览* 和 \`代码高亮\`。
+
+## 功能特性
+
+- 分屏编辑 + 预览
+- 自动生成目录
+- 代码语法高亮
+- 表格、列表、引用
+
+## 代码示例
+
+\`\`\`go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, GoOffice!")
+}
+\`\`\`
+
+\`\`\`python
+def greet(name):
+    return f"Hello, {name}!"
+
+print(greet("SamAI"))
+\`\`\`
+
+## 表格
+
+| 功能 | 状态 |
+|------|------|
+| 文档 | ✅ |
+| 表格 | ✅ |
+| 演示 | ✅ |
+| Markdown | ✅ |
+
+> 这是一个引用块，来自 SamAI 集团公益开源项目。
+
+### 三级标题
+
+更多内容...
+`
+
+const SAMPLE_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; }
+    h1 { color: #4f46e5; }
+    .card { background: #f8fafc; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Hello from GoOffice</h1>
+  <p>这是一个 HTML 编辑器示例。</p>
+  <div class="card">
+    <strong>SamAI Group</strong> · 公益开源
+  </div>
+  <ul>
+    <li>实时预览</li>
+    <li>源码编辑</li>
+    <li>安全沙箱（script 标签自动移除）</li>
+  </ul>
+</body>
+</html>`
 
 function App() {
   const [backend, setBackend] = useState<Backend | null>(null)
@@ -31,6 +102,8 @@ function App() {
   const [theme, setTheme] = useState<Theme>('auto')
   const [wordCount, setWordCount] = useState(0)
   const [charCount, setCharCount] = useState(0)
+  const [mdContent, setMdContent] = useState(SAMPLE_MD)
+  const [htmlContent, setHtmlContent] = useState(SAMPLE_HTML)
   const spellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -46,6 +119,13 @@ function App() {
       const isDark = theme === 'dark' ||
         (theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
       document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
+      // 切换 hljs 主题
+      const lightLink = document.getElementById('hljs-light') as HTMLLinkElement
+      const darkLink = document.getElementById('hljs-dark') as HTMLLinkElement
+      if (lightLink && darkLink) {
+        lightLink.disabled = isDark
+        darkLink.disabled = !isDark
+      }
     }
     applyTheme()
     if (theme === 'auto') {
@@ -315,7 +395,10 @@ function App() {
         {([
           { id: 'document', icon: '📄', label: '文档' },
           { id: 'spreadsheet', icon: '📊', label: '表格' },
-          { id: 'slide', icon: '🎞', label: '演示' }
+          { id: 'slide', icon: '🎞', label: '演示' },
+          { id: 'markdown', icon: '📝', label: 'MD' },
+          { id: 'html', icon: '🌐', label: 'HTML' },
+          { id: 'about', icon: 'ℹ️', label: '关于' },
         ] as const).map((t) => (
           <button
             key={t.id}
@@ -374,6 +457,21 @@ function App() {
           )}
           {tab === 'spreadsheet' && <SpreadsheetEditor title="工作表 1" />}
           {tab === 'slide' && <SlideEditor />}
+          {tab === 'markdown' && (
+            <MarkdownHtmlEditor
+              initialContent={mdContent}
+              mode="markdown"
+              onChange={setMdContent}
+            />
+          )}
+          {tab === 'html' && (
+            <MarkdownHtmlEditor
+              initialContent={htmlContent}
+              mode="html"
+              onChange={setHtmlContent}
+            />
+          )}
+          {tab === 'about' && <AboutPage />}
         </div>
 
         {/* 拼写检查侧边面板 */}
