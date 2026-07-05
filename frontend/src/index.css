@@ -2,10 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
+/* === 设计体系 ===
+ * 主色：靛蓝 (#4f46e5) - 专业可信
+ * 强调：天青 (#0ea5e9) - 活力点睛
+ * 危险：玫红 (#e11d48) - 错误提示
+ * 中性：石板灰阶
+ * 圆角：8px 主，4px 控件
+ * 阴影：低饱和柔和
+ */
+
 :root {
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-primary-light: #eef2ff;
+  --color-accent: #0ea5e9;
+  --color-danger: #e11d48;
+  --color-danger-light: #fef2f2;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-text-secondary: #64748b;
+  --color-text-muted: #94a3b8;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.06), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.05);
+
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", sans-serif;
+    "Microsoft YaHei", "Helvetica Neue", sans-serif;
   font-size: 14px;
+  color: var(--color-text);
   color-scheme: light;
 }
 
@@ -20,47 +55,179 @@ html, body, #root {
 }
 
 body {
-  background: #f5f5f5;
+  background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* === 桌面端 ProseMirror === */
+/* === 通用按钮 === */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+}
+.btn-primary:hover { background: var(--color-primary-hover); }
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.btn-ghost:hover {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.btn-outline {
+  background: white;
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+.btn-outline:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.btn-danger {
+  background: var(--color-danger);
+  color: white;
+}
+.btn-sm { padding: 4px 8px; font-size: 12px; }
+.btn-icon {
+  padding: 6px;
+  width: 32px;
+  height: 32px;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* === 工具栏按钮（小图标式）=== */
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.12s;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+}
+.toolbar-btn:hover {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.toolbar-btn.active {
+  background: var(--color-primary);
+  color: white;
+}
+
+/* === 卡片 === */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* === 滚动条 === */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.5); }
+@media (max-width: 768px) {
+  ::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+/* === ProseMirror 文档编辑器 === */
 .ProseMirror {
   outline: none;
-  min-height: 400px;
-  padding: 24px 48px;
-  font-size: 14px;
-  line-height: 1.7;
+  min-height: 500px;
+  padding: 48px 64px;
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--color-text);
 }
-.ProseMirror h1 { font-size: 28px; margin: 16px 0 12px; font-weight: 700; }
-.ProseMirror h2 { font-size: 22px; margin: 14px 0 10px; font-weight: 700; }
-.ProseMirror h3 { font-size: 18px; margin: 12px 0 8px; font-weight: 700; }
+.ProseMirror h1 {
+  font-size: 28px;
+  margin: 24px 0 12px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.ProseMirror h2 {
+  font-size: 22px;
+  margin: 20px 0 10px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.ProseMirror h3 {
+  font-size: 18px;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
 .ProseMirror p { margin: 8px 0; }
-.ProseMirror ul { list-style: disc; padding-left: 24px; }
-.ProseMirror ol { list-style: decimal; padding-left: 24px; }
+.ProseMirror ul, .ProseMirror ol {
+  padding-left: 24px;
+  margin: 8px 0;
+}
+.ProseMirror ul { list-style: disc; }
+.ProseMirror ol { list-style: decimal; }
+.ProseMirror li { margin: 4px 0; }
+.ProseMirror blockquote {
+  border-left: 3px solid var(--color-primary);
+  padding-left: 16px;
+  margin: 12px 0;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
 .ProseMirror code {
-  background: #f0f0f0;
+  background: #f1f5f9;
   padding: 2px 6px;
-  border-radius: 3px;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  border-radius: 4px;
+  font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
   font-size: 13px;
+  color: var(--color-danger);
 }
 .ProseMirror pre {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 16px;
-  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 16px 20px;
+  border-radius: var(--radius-md);
   overflow-x: auto;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+  font-size: 13px;
+  margin: 12px 0;
 }
-.ProseMirror pre code { background: transparent; padding: 0; }
+.ProseMirror pre code { background: transparent; color: inherit; padding: 0; }
+.ProseMirror a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ProseMirror:focus { outline: none; }
 
-/* === 移动端 ProseMirror === */
+/* 移动端 ProseMirror */
 @media (max-width: 768px) {
   .ProseMirror {
-    padding: 16px 20px;
-    font-size: 16px; /* iOS 防缩放要求 ≥16px */
+    padding: 20px 16px;
+    font-size: 16px;
     min-height: 300px;
   }
   .ProseMirror h1 { font-size: 22px; }
@@ -69,64 +236,113 @@ body {
   .ProseMirror pre { padding: 12px; font-size: 12px; }
 }
 
-/* === 拼写错误样式 === */
+/* === 拼写错误标记 === */
 .spell-error {
-  text-decoration: underline wavy #ef4444;
-  text-underline-offset: 2px;
+  text-decoration: underline wavy var(--color-danger);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
   cursor: pointer;
-  background: rgba(239, 68, 68, 0.08);
+  background: rgba(225, 29, 72, 0.06);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 .spell-error:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(225, 29, 72, 0.15);
 }
 
-/* === 滚动条优化 === */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
-}
-
-/* === 移动端：隐藏滚动条但保留滚动 === */
-@media (max-width: 768px) {
-  ::-webkit-scrollbar {
-    width: 0;
-    height: 0;
-  }
-}
-
-/* === 触摸友好按钮 === */
-@media (max-width: 768px) {
-  button {
-    min-height: 36px;
-    min-width: 36px;
-  }
-}
-
-/* === 表格单元格 === */
-table {
-  border-collapse: collapse;
-}
-table td, table th {
-  border: 1px solid #d1d5db;
-  padding: 4px;
-}
-
-/* 防止移动端 input 缩放 */
+/* === 输入控件 === */
 input, textarea, select {
-  font-size: 16px;
+  font-family: inherit;
+  font-size: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  background: white;
+  color: var(--color-text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  outline: none;
 }
-@media (min-width: 769px) {
-  input, textarea, select {
-    font-size: 14px;
-  }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+@media (max-width: 768px) {
+  input, textarea, select { font-size: 16px; }
+}
+
+/* === 动画 === */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+.animate-slide-in { animation: slide-in-right 0.2s ease-out; }
+.animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
+
+/* === 加载点 === */
+.loading-dots::after {
+  content: '';
+  display: inline-block;
+  width: 1em;
+  text-align: left;
+  animation: dots 1.4s steps(4, end) infinite;
+}
+@keyframes dots {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+  100% { content: ''; }
+}
+
+/* === Toast === */
+.toast {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-text);
+  color: white;
+  padding: 10px 20px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  animation: fade-in 0.2s ease-out;
+}
+
+/* === 表格 === */
+table { border-collapse: collapse; }
+table td, table th {
+  border: 1px solid var(--color-border);
+  padding: 4px 8px;
+}
+
+/* === Tag/Badge === */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.badge-danger { background: var(--color-danger-light); color: var(--color-danger); }
+.badge-success { background: #d1fae5; color: var(--color-success); }
+.badge-warning { background: #fef3c7; color: #92400e; }
+
+/* === 触摸友好 === */
+@media (max-width: 768px) {
+  button { min-height: 36px; min-width: 36px; }
+  .toolbar-btn { width: 36px; height: 36px; }
 }
