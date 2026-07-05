@@ -1,0 +1,444 @@
+{
+  "base": "http://127.0.0.1:18400",
+  "time": "2026-07-05T14:27:46.968Z",
+  "total": 72,
+  "passed": 72,
+  "failed": 0,
+  "rate": 100,
+  "cases": [
+    {
+      "id": "S1",
+      "name": "首页加载",
+      "status": "PASS",
+      "details": "title=\"GoOffice - 跨平台办公套件\""
+    },
+    {
+      "id": "S2",
+      "name": "顶栏菜单按钮数",
+      "status": "PASS",
+      "details": "5 个"
+    },
+    {
+      "id": "S3",
+      "name": "Tab 切换栏存在",
+      "status": "PASS",
+      "details": "6/6 可见"
+    },
+    {
+      "id": "S4",
+      "name": "模式标识显示",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "S5",
+      "name": "主题切换",
+      "status": "PASS",
+      "details": "light → dark"
+    },
+    {
+      "id": "S6",
+      "name": "语言下拉",
+      "status": "PASS",
+      "details": "en=en,zh=zh"
+    },
+    {
+      "id": "S7",
+      "name": "底部状态栏",
+      "status": "PASS",
+      "details": "就绪7 字 · 37 字符v0.3.0"
+    },
+    {
+      "id": "S8",
+      "name": "Toast 提示",
+      "status": "PASS",
+      "details": "1 个 toast"
+    },
+    {
+      "id": "D1",
+      "name": "切换到文档 Tab",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "D2",
+      "name": "输入文本",
+      "status": "PASS",
+      "details": "len=27"
+    },
+    {
+      "id": "D3",
+      "name": "工具栏按钮数",
+      "status": "PASS",
+      "details": "18 个"
+    },
+    {
+      "id": "D4",
+      "name": "加粗",
+      "status": "PASS",
+      "details": "active=true,strong=1"
+    },
+    {
+      "id": "D5",
+      "name": "斜体",
+      "status": "PASS",
+      "details": "1 个 em"
+    },
+    {
+      "id": "D6",
+      "name": "下划线",
+      "status": "PASS",
+      "details": "1 个 u"
+    },
+    {
+      "id": "D7.1",
+      "name": "标题1",
+      "status": "PASS",
+      "details": "1 个 h1"
+    },
+    {
+      "id": "D7.2",
+      "name": "标题2",
+      "status": "PASS",
+      "details": "1 个 h2"
+    },
+    {
+      "id": "D7.3",
+      "name": "标题3",
+      "status": "PASS",
+      "details": "1 个 h3"
+    },
+    {
+      "id": "D8",
+      "name": "无序列表",
+      "status": "PASS",
+      "details": "1 个 ul"
+    },
+    {
+      "id": "D9",
+      "name": "有序列表",
+      "status": "PASS",
+      "details": "1 个 ol"
+    },
+    {
+      "id": "D10",
+      "name": "引用块",
+      "status": "PASS",
+      "details": "1 个"
+    },
+    {
+      "id": "D11",
+      "name": "代码块",
+      "status": "PASS",
+      "details": "1 个 pre"
+    },
+    {
+      "id": "D12",
+      "name": "对齐方式",
+      "status": "PASS",
+      "details": "居中激活=true"
+    },
+    {
+      "id": "D13",
+      "name": "查找替换",
+      "status": "PASS",
+      "details": "找到匹配(替换按钮可用, 1/2)"
+    },
+    {
+      "id": "D14",
+      "name": "全部替换",
+      "status": "PASS",
+      "details": "已替换"
+    },
+    {
+      "id": "D15",
+      "name": "拼写检查(英文)",
+      "status": "PASS",
+      "details": "4 处错误标记"
+    },
+    {
+      "id": "D16",
+      "name": "拼写检查(中文)",
+      "status": "PASS",
+      "details": "0 处误报"
+    },
+    {
+      "id": "D17",
+      "name": "撤销/重做",
+      "status": "PASS",
+      "details": "before=17,undo=9,redo=17"
+    },
+    {
+      "id": "D18",
+      "name": "Ribbon Tab 切换",
+      "status": "PASS",
+      "details": "5/5"
+    },
+    {
+      "id": "D19",
+      "name": "右键菜单",
+      "status": "PASS",
+      "details": "菜单项 1"
+    },
+    {
+      "id": "D20",
+      "name": "缩放",
+      "status": "PASS",
+      "details": "before=100%"
+    },
+    {
+      "id": "P1",
+      "name": "切换到表格 Tab",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "P2",
+      "name": "默认行列",
+      "status": "PASS",
+      "details": "30 行 × 13 列"
+    },
+    {
+      "id": "P3",
+      "name": "单元格输入",
+      "status": "PASS",
+      "details": "val=\"TestData\""
+    },
+    {
+      "id": "P4",
+      "name": "公式栏同步",
+      "status": "PASS",
+      "details": "公式栏可见"
+    },
+    {
+      "id": "P5",
+      "name": "切换 Sheet",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "P6",
+      "name": "新建工作表",
+      "status": "PASS",
+      "details": "1 → 2"
+    },
+    {
+      "id": "P7",
+      "name": "求和函数",
+      "status": "PASS",
+      "details": "数值单元格=3, 合计=60"
+    },
+    {
+      "id": "P8",
+      "name": "平均值函数",
+      "status": "PASS",
+      "details": "已触发平均值"
+    },
+    {
+      "id": "P9",
+      "name": "升序排序",
+      "status": "PASS",
+      "details": "已触发排序"
+    },
+    {
+      "id": "P10",
+      "name": "添加行",
+      "status": "PASS",
+      "details": "30 → 31"
+    },
+    {
+      "id": "P11",
+      "name": "缩放",
+      "status": "PASS",
+      "details": "已触发缩放"
+    },
+    {
+      "id": "P12",
+      "name": "冻结窗格",
+      "status": "PASS",
+      "details": "冻结窗格 → 取消冻结"
+    },
+    {
+      "id": "L1",
+      "name": "切换到演示 Tab",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "L2",
+      "name": "默认幻灯片",
+      "status": "PASS",
+      "details": "2 张缩略图"
+    },
+    {
+      "id": "L3",
+      "name": "新增幻灯片",
+      "status": "PASS",
+      "details": "2 → 3"
+    },
+    {
+      "id": "L4",
+      "name": "标题编辑",
+      "status": "PASS",
+      "details": "val=\"测试标题XYZ\""
+    },
+    {
+      "id": "L5",
+      "name": "属性/缩略图面板",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "M1",
+      "name": "切换到 MD Tab",
+      "status": "PASS",
+      "details": "textarea=true,preview=true"
+    },
+    {
+      "id": "M2",
+      "name": "分栏预览",
+      "status": "PASS",
+      "details": "编辑=true,预览=true"
+    },
+    {
+      "id": "M3",
+      "name": "代码高亮",
+      "status": "PASS",
+      "details": "pre=2,hljs=2"
+    },
+    {
+      "id": "M4",
+      "name": "表格渲染",
+      "status": "PASS",
+      "details": "1 个 table"
+    },
+    {
+      "id": "M5",
+      "name": "实时预览",
+      "status": "PASS",
+      "details": "h1=1"
+    },
+    {
+      "id": "M6",
+      "name": "HTML Tab",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "M7",
+      "name": "HTML 预览渲染",
+      "status": "PASS",
+      "details": "1 个 h1"
+    },
+    {
+      "id": "A1",
+      "name": "健康检查",
+      "status": "PASS",
+      "details": "{\"status\":\"ok\"}"
+    },
+    {
+      "id": "A2",
+      "name": "英文拼写检查",
+      "status": "PASS",
+      "details": "2 错误"
+    },
+    {
+      "id": "A3",
+      "name": "aff 派生纠错",
+      "status": "PASS",
+      "details": "definitely,relieve,receive"
+    },
+    {
+      "id": "A4",
+      "name": "中文拼写检查",
+      "status": "PASS",
+      "details": "0 误报"
+    },
+    {
+      "id": "A5",
+      "name": "纠错建议",
+      "status": "PASS",
+      "details": "5 条"
+    },
+    {
+      "id": "A6",
+      "name": "用户词库学习",
+      "status": "PASS",
+      "details": "0 错误"
+    },
+    {
+      "id": "A7",
+      "name": "docx 导出",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "id": "A8",
+      "name": "PDF 导出",
+      "status": "PASS",
+      "details": "status=200,type=application/pdf"
+    },
+    {
+      "id": "A9",
+      "name": "文件上传解析",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "id": "A10",
+      "name": "不存在路由",
+      "status": "PASS",
+      "details": "status=404"
+    },
+    {
+      "id": "A11",
+      "name": "健康检查性能",
+      "status": "PASS",
+      "details": "5ms"
+    },
+    {
+      "id": "Q1",
+      "name": "无 Console 错误",
+      "status": "PASS",
+      "details": "0 条(已过滤资源噪声)"
+    },
+    {
+      "id": "Q2",
+      "name": "无未捕获 Promise",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "R1",
+      "name": "移动端首页",
+      "status": "PASS",
+      "details": "GoOffice - 跨平台办公套件"
+    },
+    {
+      "id": "R2",
+      "name": "汉堡菜单",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "R3",
+      "name": "移动端表格",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "R4",
+      "name": "移动端演示",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "id": "R5",
+      "name": "移动端输入文档",
+      "status": "PASS",
+      "details": ""
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": []
+}

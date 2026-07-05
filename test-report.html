@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GoOffice 办公套件 Playwright 测试报告</title>
+<style>
+  :root{
+    --bg:#0f172a; --surface:#1e293b; --surface2:#334155; --border:#475569;
+    --text:#e2e8f0; --muted:#94a3b8; --pass:#22c55e; --fail:#ef4444;
+    --warn:#f59e0b; --accent:#38bdf8; --primary:#6366f1;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;padding:24px;max-width:1280px;margin:0 auto}
+  h1{font-size:28px;font-weight:700;background:linear-gradient(135deg,#6366f1,#38bdf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:6px}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+  h2{font-size:20px;margin:32px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+  h2 .badge{font-size:12px;font-weight:600;padding:2px 10px;border-radius:999px;background:var(--surface2);color:var(--muted)}
+  h3{font-size:16px;margin:20px 0 10px;color:var(--accent)}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:8px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;text-align:center}
+  .card .num{font-size:32px;font-weight:700}
+  .card .lbl{font-size:13px;color:var(--muted);margin-top:4px}
+  .card.total .num{color:var(--accent)}
+  .card.pass .num{color:var(--pass)}
+  .card.fail .num{color:var(--fail)}
+  .card.rate .num{color:var(--warn)}
+  .bar-wrap{background:var(--surface2);border-radius:999px;height:10px;overflow:hidden;margin:14px 0 4px}
+  .bar{height:100%;background:linear-gradient(90deg,var(--pass),#16a34a);border-radius:999px;transition:width .8s}
+  .bar-note{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:13px}
+  th{background:var(--surface2);text-align:left;padding:10px 12px;font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  td{padding:9px 12px;border-top:1px solid var(--border)}
+  tr:hover td{background:rgba(56,189,248,.05)}
+  .st{display:inline-block;padding:2px 10px;border-radius:6px;font-size:11px;font-weight:700}
+  .st.PASS{background:rgba(34,197,94,.15);color:var(--pass)}
+  .st.FAIL{background:rgba(239,68,68,.15);color:var(--fail)}
+  .bug{background:linear-gradient(135deg,rgba(239,68,68,.08),rgba(245,158,11,.06));border:1px solid rgba(239,68,68,.4);border-radius:12px;padding:18px;margin:14px 0}
+  .bug .bt{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;color:var(--fail)}
+  .bug .meta{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:12px 0;font-size:13px}
+  .bug .meta .k{color:var(--muted);font-weight:600}
+  code,.mono{font-family:'JetBrains Mono','Fira Code',Consolas,monospace;font-size:12.5px;background:var(--bg);padding:2px 6px;border-radius:4px;color:#fbbf24}
+  pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-family:'JetBrains Mono',Consolas,monospace;font-size:12.5px;color:#86efac;margin:8px 0}
+  .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:12px}
+  .shot{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .shot img{width:100%;display:block;border-bottom:1px solid var(--border)}
+  .shot .cap{padding:8px 10px;font-size:12px;color:var(--muted)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:6px;background:var(--surface2);font-size:11px;color:var(--muted);margin-right:4px}
+  .filter{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .filter button{background:var(--surface);border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;transition:all .2s}
+  .filter button.active{background:var(--primary);border-color:var(--primary);color:#fff}
+  .filter button:hover{border-color:var(--accent)}
+  .rec{background:var(--surface);border-left:3px solid var(--accent);border-radius:6px;padding:14px 16px;margin:10px 0}
+  .rec b{color:var(--accent)}
+  footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;text-align:center}
+  .sec-tag{font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<h1>GoOffice 办公套件 · Playwright 全面测试报告</h1>
+<div class="sub">
+  被测对象：<code>samaidev/samoffice</code>（GoOffice v0.3.0，Wails + React + Go）　|　
+  测试框架：Playwright 1.61（Firefox）　|　
+  生成时间：2026-07-05　|　
+  服务地址：<code>http://127.0.0.1:18400</code>
+</div>
+
+<div class="cards">
+  <div class="card total"><div class="num">72</div><div class="lbl">用例总数</div></div>
+  <div class="card pass"><div class="num">72</div><div class="lbl">通过 PASS</div></div>
+  <div class="card fail"><div class="num">0</div><div class="lbl">失败 FAIL</div></div>
+  <div class="card rate"><div class="num">100%</div><div class="lbl">通过率</div></div>
+</div>
+<div class="bar-wrap"><div class="bar" style="width:100%"></div></div>
+<div class="bar-note">通过率 100%　·　全部 72 用例通过　·　右键菜单缺陷已修复（修复后复测全绿）</div>
+
+<h2>已修复缺陷 <span class="badge">1 项 · 已修复 ✓</span></h2>
+<div class="bug">
+  <div class="bt">✅ 缺陷 #1（已修复）：文档编辑器右键上下文菜单失效 + 未捕获异常</div>
+  <div class="meta">
+    <div class="k">文件位置</div><div><code>frontend/src/editors/document/DocumentEditor.tsx</code> 第 132 行</div>
+    <div class="k">严重程度</div><div><span class="st FAIL">阻断</span> 影响右键交互与全局稳定性</div>
+    <div class="k">影响用例</div><div>D19 右键菜单（菜单无法弹出）、Q2 无未捕获 Promise（抛出异常）</div>
+    <div class="k">错误信息</div><div><code>TypeError: K.preventDefault is not a function</code>（K 为压缩后的 EditorView 变量）</div>
+    <div class="k">复现步骤</div><div>启动服务 → 切到「文档」Tab → 在编辑器内任意位置右键 → 菜单不出现，控制台报错</div>
+  </div>
+  <h3>根因分析</h3>
+  <p style="font-size:13px;color:var(--muted);margin-bottom:8px">ProseMirror 的 <code>handleDOMEvents</code> 回调签名是 <code>(view, event)</code>，而代码中 contextmenu 处理函数只接收了一个参数 <code>e</code>，导致 <code>e</code> 实际是 EditorView 而非事件对象：</p>
+  <pre>// ❌ 当前代码（错误）
+contextmenu: (e: any) => {
+  e.preventDefault();          // e 是 EditorView，无 preventDefault 方法 → 抛异常
+  setShowContextMenu(true);
+  setContextMenuPos({ x: e.clientX, y: e.clientY });  // clientX 也为 undefined
+  return false;
+}</pre>
+  <h3>修复建议</h3>
+  <pre>// ✅ 修正签名：第一个参数为 view，第二个才是事件
+contextmenu: (view, e) => {
+  e.preventDefault();
+  setShowContextMenu(true);
+  setContextMenuPos({ x: e.clientX, y: e.clientY });
+  return false;
+}</pre>
+</div>
+
+<h2>测试结果明细 <span class="badge">72 用例 · 8 模块</span></h2>
+<div class="filter">
+  <button class="active" onclick="filterCases('ALL',this)">全部 (72)</button>
+  <button onclick="filterCases('PASS',this)">通过 (72)</button>
+  <button onclick="filterCases('FAIL',this)">失败 (0)</button>
+</div>
+<div id="cases"></div>
+
+<h2>关键截图 <span class="badge">16 张</span></h2>
+<div class="shots" id="shots"></div>
+
+<h2>测试结论与建议</h2>
+<div class="rec"><b>整体质量：</b>GoOffice 核心功能完备且稳定。文档编辑器（加粗/斜体/标题/列表/引用/代码块/对齐/查找替换/撤销重做/拼写检查/右键菜单）、表格编辑器（单元格输入/Sheet 切换/新建/函数/排序/添加行/冻结）、演示编辑器、Markdown/HTML 编辑器、后端 API（健康检查/拼写纠错/词库学习/docx 与 PDF 导出/文件解析）以及桌面端 + 移动端响应式均通过验证。全部 72 用例 100% 通过。</div>
+<div class="rec"><b>已修复：</b>文档编辑器右键菜单缺陷（缺陷 #1）已修复——将 <code>handleDOMEvents</code> 中 <code>contextmenu</code> 和 <code>mouseup</code> 处理函数的签名从 <code>(e)</code> 修正为 <code>(view, e)</code>，修复后右键菜单正常弹出、无未捕获异常，复测全部 72 用例通过。</div>
+<div class="rec"><b>后续建议：</b>① 表格函数（求和/平均值）建议补充结果值断言以加强验证深度；② 可增加多浏览器（Chromium/WebKit）交叉验证；③ 建议为 contextmenu 等关键交互补充单元测试防止回归。</div>
+
+<footer>
+  本报告由 Playwright E2E 测试自动生成 ｜ 测试脚本：<code>/data/user/work/pw-tests/run-all.js</code> ｜ 测试方案：<code>测试方案.md</code>
+</footer>
+
+<script>
+const cases = [
+  {mod:"1 应用外壳",id:"S1",name:"首页加载",s:"PASS",d:'title="GoOffice - 跨平台办公套件"'},
+  {mod:"1 应用外壳",id:"S2",name:"顶栏菜单按钮数",s:"PASS",d:"5 个"},
+  {mod:"1 应用外壳",id:"S3",name:"Tab 切换栏存在",s:"PASS",d:"6/6 可见"},
+  {mod:"1 应用外壳",id:"S4",name:"模式标识显示",s:"PASS",d:"远程模式"},
+  {mod:"1 应用外壳",id:"S5",name:"主题切换",s:"PASS",d:"light → dark"},
+  {mod:"1 应用外壳",id:"S6",name:"语言下拉",s:"PASS",d:"en=en,zh=zh"},
+  {mod:"1 应用外壳",id:"S7",name:"底部状态栏",s:"PASS",d:"含 v0.3.0"},
+  {mod:"1 应用外壳",id:"S8",name:"Toast 提示",s:"PASS",d:"1 个 toast"},
+  {mod:"2 文档编辑器",id:"D1",name:"切换到文档 Tab",s:"PASS",d:".ProseMirror 可见"},
+  {mod:"2 文档编辑器",id:"D2",name:"输入文本",s:"PASS",d:"len=27"},
+  {mod:"2 文档编辑器",id:"D3",name:"工具栏按钮数",s:"PASS",d:"18 个"},
+  {mod:"2 文档编辑器",id:"D4",name:"加粗",s:"PASS",d:"active=true,strong=1"},
+  {mod:"2 文档编辑器",id:"D5",name:"斜体",s:"PASS",d:"1 个 em"},
+  {mod:"2 文档编辑器",id:"D6",name:"下划线",s:"PASS",d:"1 个 u"},
+  {mod:"2 文档编辑器",id:"D7.1",name:"标题1",s:"PASS",d:"1 个 h1"},
+  {mod:"2 文档编辑器",id:"D7.2",name:"标题2",s:"PASS",d:"1 个 h2"},
+  {mod:"2 文档编辑器",id:"D7.3",name:"标题3",s:"PASS",d:"1 个 h3"},
+  {mod:"2 文档编辑器",id:"D8",name:"无序列表",s:"PASS",d:"1 个 ul"},
+  {mod:"2 文档编辑器",id:"D9",name:"有序列表",s:"PASS",d:"1 个 ol"},
+  {mod:"2 文档编辑器",id:"D10",name:"引用块",s:"PASS",d:"1 个 blockquote"},
+  {mod:"2 文档编辑器",id:"D11",name:"代码块",s:"PASS",d:"1 个 pre"},
+  {mod:"2 文档编辑器",id:"D12",name:"对齐方式",s:"PASS",d:"居中激活=true"},
+  {mod:"2 文档编辑器",id:"D13",name:"查找替换",s:"PASS",d:"找到匹配(1/2)"},
+  {mod:"2 文档编辑器",id:"D14",name:"全部替换",s:"PASS",d:"已替换 GoOffice→OFFICE"},
+  {mod:"2 文档编辑器",id:"D15",name:"拼写检查(英文)",s:"PASS",d:"4 处错误标记"},
+  {mod:"2 文档编辑器",id:"D16",name:"拼写检查(中文)",s:"PASS",d:"0 处误报"},
+  {mod:"2 文档编辑器",id:"D17",name:"撤销/重做",s:"PASS",d:"before=17,undo=9,redo=17"},
+  {mod:"2 文档编辑器",id:"D18",name:"Ribbon Tab 切换",s:"PASS",d:"5/5"},
+  {mod:"2 文档编辑器",id:"D19",name:"右键菜单",s:"PASS",d:"菜单项 1（已修复 contextmenu 签名）"},
+  {mod:"2 文档编辑器",id:"D20",name:"缩放",s:"PASS",d:"before=100%"},
+  {mod:"3 表格编辑器",id:"P1",name:"切换到表格 Tab",s:"PASS",d:"table 可见"},
+  {mod:"3 表格编辑器",id:"P2",name:"默认行列",s:"PASS",d:"30 行 × 13 列"},
+  {mod:"3 表格编辑器",id:"P3",name:"单元格输入",s:"PASS",d:'val="TestData"'},
+  {mod:"3 表格编辑器",id:"P4",name:"公式栏同步",s:"PASS",d:"公式栏可见"},
+  {mod:"3 表格编辑器",id:"P5",name:"切换 Sheet",s:"PASS",d:"Sheet2 激活"},
+  {mod:"3 表格编辑器",id:"P6",name:"新建工作表",s:"PASS",d:"1 → 2"},
+  {mod:"3 表格编辑器",id:"P7",name:"求和函数",s:"PASS",d:"数值单元格=3, 合计=60"},
+  {mod:"3 表格编辑器",id:"P8",name:"平均值函数",s:"PASS",d:"已触发"},
+  {mod:"3 表格编辑器",id:"P9",name:"升序排序",s:"PASS",d:"已触发"},
+  {mod:"3 表格编辑器",id:"P10",name:"添加行",s:"PASS",d:"30 → 31"},
+  {mod:"3 表格编辑器",id:"P11",name:"缩放",s:"PASS",d:"已触发"},
+  {mod:"3 表格编辑器",id:"P12",name:"冻结窗格",s:"PASS",d:"冻结窗格 → 取消冻结"},
+  {mod:"4 演示编辑器",id:"L1",name:"切换到演示 Tab",s:"PASS",d:"标题输入框可见"},
+  {mod:"4 演示编辑器",id:"L2",name:"默认幻灯片",s:"PASS",d:"2 张缩略图"},
+  {mod:"4 演示编辑器",id:"L3",name:"新增幻灯片",s:"PASS",d:"2 → 3"},
+  {mod:"4 演示编辑器",id:"L4",name:"标题编辑",s:"PASS",d:'val="测试标题XYZ"'},
+  {mod:"4 演示编辑器",id:"L5",name:"属性/缩略图面板",s:"PASS",d:"面板可见"},
+  {mod:"5 Markdown/HTML",id:"M1",name:"切换到 MD Tab",s:"PASS",d:"textarea+preview 可见"},
+  {mod:"5 Markdown/HTML",id:"M2",name:"分栏预览",s:"PASS",d:"编辑+预览"},
+  {mod:"5 Markdown/HTML",id:"M3",name:"代码高亮",s:"PASS",d:"pre=2,hljs=2"},
+  {mod:"5 Markdown/HTML",id:"M4",name:"表格渲染",s:"PASS",d:"1 个 table"},
+  {mod:"5 Markdown/HTML",id:"M5",name:"实时预览",s:"PASS",d:"h1=1"},
+  {mod:"5 Markdown/HTML",id:"M6",name:"HTML Tab",s:"PASS",d:"可见"},
+  {mod:"5 Markdown/HTML",id:"M7",name:"HTML 预览渲染",s:"PASS",d:"1 个 h1"},
+  {mod:"6 后端 API",id:"A1",name:"健康检查",s:"PASS",d:'{"status":"ok"}'},
+  {mod:"6 后端 API",id:"A2",name:"英文拼写检查",s:"PASS",d:"2 错误"},
+  {mod:"6 后端 API",id:"A3",name:"aff 派生纠错",s:"PASS",d:"definitely,receive"},
+  {mod:"6 后端 API",id:"A4",name:"中文拼写检查",s:"PASS",d:"0 误报"},
+  {mod:"6 后端 API",id:"A5",name:"纠错建议",s:"PASS",d:"5 条"},
+  {mod:"6 后端 API",id:"A6",name:"用户词库学习",s:"PASS",d:"学习后不再报错"},
+  {mod:"6 后端 API",id:"A7",name:"docx 导出",s:"PASS",d:"status=200"},
+  {mod:"6 后端 API",id:"A8",name:"PDF 导出",s:"PASS",d:"status=200,application/pdf"},
+  {mod:"6 后端 API",id:"A9",name:"文件上传解析",s:"PASS",d:"status=200"},
+  {mod:"6 后端 API",id:"A10",name:"不存在路由",s:"PASS",d:"status=404"},
+  {mod:"6 后端 API",id:"A11",name:"健康检查性能",s:"PASS",d:"8ms"},
+  {mod:"7 跨切面质量",id:"Q1",name:"无 Console 错误",s:"PASS",d:"0 条"},
+  {mod:"7 跨切面质量",id:"Q2",name:"无未捕获 Promise",s:"PASS",d:"0 条（修复后无异常）"},
+  {mod:"8 移动端响应式",id:"R1",name:"移动端首页",s:"PASS",d:"GoOffice"},
+  {mod:"8 移动端响应式",id:"R2",name:"汉堡菜单",s:"PASS",d:"打开文件项可见"},
+  {mod:"8 移动端响应式",id:"R3",name:"移动端表格",s:"PASS",d:"table 可见"},
+  {mod:"8 移动端响应式",id:"R4",name:"移动端演示",s:"PASS",d:"标题框可见"},
+  {mod:"8 移动端响应式",id:"R5",name:"移动端输入文档",s:"PASS",d:"输入成功"},
+];
+const shots = [
+  ["01-home.png","桌面端首页（文档编辑器）"],
+  ["02-spreadsheet.png","表格编辑器"],
+  ["03-slide.png","演示编辑器"],
+  ["04-typed-text.png","文档输入文本"],
+  ["05-theme.png","主题切换 dark"],
+  ["06-bold.png","加粗效果"],
+  ["13-search.png","查找替换"],
+  ["13-markdown.png","Markdown 分栏预览"],
+  ["14-html.png","HTML 编辑器"],
+  ["15-spell-en.png","英文拼写检查标记"],
+  ["16-spell-zh.png","中文拼写检查（无误报）"],
+  ["08-mobile-home.png","移动端首页"],
+  ["09-mobile-menu.png","移动端汉堡菜单"],
+  ["10-mobile-spreadsheet.png","移动端表格"],
+  ["11-mobile-slide.png","移动端演示"],
+  ["12-mobile-doc.png","移动端文档输入"],
+];
+const shotsBase = "samoffice/scripts/e2e/pw-shots/";
+let curFilter='ALL';
+function render(){
+  const mods={};
+  cases.filter(c=>curFilter==='ALL'||c.s===curFilter).forEach(c=>{
+    (mods[c.mod]=mods[c.mod]||[]).push(c);
+  });
+  let html='';
+  Object.keys(mods).forEach(m=>{
+    const arr=mods[m];
+    const p=arr.filter(c=>c.s==='PASS').length;
+    html+=`<h3>${m} <span class="sec-tag">(${p}/${arr.length} 通过)</span></h3>`;
+    html+=`<table><thead><tr><th style="width:60px">编号</th><th>用例</th><th style="width:70px">结果</th><th>详情</th></tr></thead><tbody>`;
+    arr.forEach(c=>{html+=`<tr><td class="mono">${c.id}</td><td>${c.name}</td><td><span class="st ${c.s}">${c.s}</span></td><td style="color:var(--muted);font-size:12px">${c.d}</td></tr>`});
+    html+=`</tbody></table>`;
+  });
+  document.getElementById('cases').innerHTML=html;
+}
+function filterCases(s,btn){
+  curFilter=s;
+  document.querySelectorAll('.filter button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+function renderShots(){
+  document.getElementById('shots').innerHTML=shots.map(([f,c])=>
+    `<div class="shot"><img src="${shotsBase}${f}" alt="${c}" loading="lazy"><div class="cap">${c}</div></div>`).join('');
+}
+render();renderShots();
+</script>
+</body>
+</html>

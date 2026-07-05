@@ -123,13 +123,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       handleDOMEvents: {
         focus: () => { setFocused(true); return false },
         blur: () => { setFocused(false); return false },
-        mouseup: (e: any) => {
+        mouseup: (view: any, e: any) => {
           const v = viewRef.current
           if (v && !v.state.selection.empty) { setShowMiniToolbar(true); setMiniToolbarPos({ x: e.clientX, y: e.clientY - 50 }) }
           else { setShowMiniToolbar(false) }
           return false
         },
-        contextmenu: (e: any) => { e.preventDefault(); setShowContextMenu(true); setContextMenuPos({ x: e.clientX, y: e.clientY }); return false },
+        contextmenu: (view: any, e: any) => { e.preventDefault(); setShowContextMenu(true); setContextMenuPos({ x: e.clientX, y: e.clientY }); return false },
       }
     })
     viewRef.current = view; ;(window as any).__pmView = view
