@@ -85,6 +85,14 @@ export interface Text {
   under?: boolean
   strike?: boolean
   style?: string
+  // P0: 上标/下标
+  superscript?: boolean
+  subscript?: boolean
+  // 字体排版
+  font?: string
+  size?: string
+  color?: string
+  highlight?: string
 }
 
 export interface Hyperlink {

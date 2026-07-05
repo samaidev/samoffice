@@ -65,7 +65,14 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
       if (t.bold) marks.push(schema.marks.bold.create())
       if (t.italic) marks.push(schema.marks.italic.create())
       if (t.under) marks.push(schema.marks.underline.create())
+      if (t.strike) marks.push(schema.marks.strikethrough.create())
       if (t.style === 'code') marks.push(schema.marks.code.create())
+      if (t.superscript) marks.push(schema.marks.superscript.create())
+      if (t.subscript) marks.push(schema.marks.subscript.create())
+      if (t.font) marks.push(schema.marks.fontFamily.create({ font: t.font }))
+      if (t.size) marks.push(schema.marks.fontSize.create({ size: t.size }))
+      if (t.color) marks.push(schema.marks.textColor.create({ color: t.color }))
+      if (t.highlight) marks.push(schema.marks.highlight.create({ color: t.highlight }))
       if (t.content) result.push(schema.text(t.content, marks))
     }
   }
@@ -124,18 +131,31 @@ function pmToInline(node: Node): Inline[] {
     const bold = marks.some((m) => m.type.name === 'bold')
     const italic = marks.some((m) => m.type.name === 'italic')
     const under = marks.some((m) => m.type.name === 'underline')
+    const strike = marks.some((m) => m.type.name === 'strikethrough')
     const code = marks.some((m) => m.type.name === 'code')
+    const sup = marks.some((m) => m.type.name === 'superscript')
+    const sub = marks.some((m) => m.type.name === 'subscript')
+    const fontMark = marks.find((m) => m.type.name === 'fontFamily')
+    const sizeMark = marks.find((m) => m.type.name === 'fontSize')
+    const colorMark = marks.find((m) => m.type.name === 'textColor')
+    const hlMark = marks.find((m) => m.type.name === 'highlight')
     const link = marks.find((m) => m.type.name === 'link')
     if (link) {
       result.push({
         url: link.attrs.href,
-        text: [{ content: text, bold, italic, under, style: code ? 'code' : '' }]
+        text: [{ content: text, bold, italic, under, strike, style: code ? 'code' : '' }]
       })
     } else {
       result.push({
-        content: text, bold, italic, under,
-        style: code ? 'code' : ''
-      })
+        content: text, bold, italic, under, strike,
+        style: code ? 'code' : '',
+        superscript: sup || undefined,
+        subscript: sub || undefined,
+        font: fontMark?.attrs.font,
+        size: sizeMark?.attrs.size,
+        color: colorMark?.attrs.color,
+        highlight: hlMark?.attrs.color,
+      } as any)
     }
   })
   return result

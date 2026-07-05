@@ -83,15 +83,17 @@ func (p *Paragraph) elementType() string { return "paragraph" }
 
 // Run 文本片段
 type Run struct {
-        text      string
-        bold      bool
-        italic    bool
-        underline bool
-        strike    bool
-        color     string
-        size      int
-        font      string
-        highlight string // 高亮色：yellow/green/cyan/magenta
+        text        string
+        bold        bool
+        italic      bool
+        underline   bool
+        strike      bool
+        color       string
+        size        int
+        font        string
+        highlight   string
+        superscript bool
+        subscript   bool
 }
 
 // Text 返回段落纯文本
@@ -274,6 +276,12 @@ func (r *Run) Font(name string) *Run { r.font = name; return r }
 
 // Highlight 高亮（yellow/green/cyan/magenta）
 func (r *Run) Highlight(color string) *Run { r.highlight = color; return r }
+
+// Superscript 上标
+func (r *Run) Superscript(b bool) *Run { r.superscript = b; return r }
+
+// Subscript 下标
+func (r *Run) Subscript(b bool) *Run { r.subscript = b; return r }
 
 // AddList 无序列表
 func (d *Document) AddList(items []string) *List {
@@ -500,12 +508,14 @@ func renderParagraphXML(sb *strings.Builder, p *Paragraph) {
         }
         for _, r := range p.runs {
                 sb.WriteString("<w:r>")
-                if r.bold || r.italic || r.underline || r.strike || r.color != "" || r.size > 0 || r.font != "" || r.highlight != "" {
+                if r.bold || r.italic || r.underline || r.strike || r.color != "" || r.size > 0 || r.font != "" || r.highlight != "" || r.superscript || r.subscript {
                         sb.WriteString("<w:rPr>")
                         if r.bold { sb.WriteString("<w:b/>") }
                         if r.italic { sb.WriteString("<w:i/>") }
                         if r.underline { sb.WriteString(`<w:u w:val="single"/>`) }
                         if r.strike { sb.WriteString("<w:strike/>") }
+                        if r.superscript { sb.WriteString("<w:vertAlign w:val=\"superscript\"/>") }
+                        if r.subscript { sb.WriteString("<w:vertAlign w:val=\"subscript\"/>") }
                         if r.color != "" { sb.WriteString(fmt.Sprintf(`<w:color w:val="%s"/>`, r.color)) }
                         if r.size > 0 { sb.WriteString(fmt.Sprintf(`<w:sz w:val="%d"/>`, r.size*2)) }
                         if r.font != "" { sb.WriteString(fmt.Sprintf(`<w:rFonts w:ascii="%s" w:hAnsi="%s" w:eastAsia="%s"/>`, r.font, r.font, r.font)) }

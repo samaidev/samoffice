@@ -524,6 +524,79 @@ table td, table th {
   opacity: 0.4;
 }
 
+/* === ProseMirror 表格 === */
+.ProseMirror table.pm-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+.ProseMirror table.pm-table td,
+.ProseMirror table.pm-table th {
+  border: 1px solid #cbd5e1;
+  padding: 6px 10px;
+  vertical-align: top;
+  position: relative;
+}
+.ProseMirror table.pm-table th {
+  background: #f1f5f9;
+  font-weight: 600;
+}
+.ProseMirror table.pm-table .selectedCell {
+  background: rgba(79, 70, 229, 0.1);
+}
+
+/* === 搜索高亮 === */
+.ProseMirror .search-match {
+  background: #fef08a;
+  border-radius: 2px;
+}
+.ProseMirror .search-match-active {
+  background: #f59e0b !important;
+  color: white;
+}
+
+/* === 文本框 === */
+.ProseMirror .text-box {
+  background: #fef3c7;
+  border: 2px solid #f59e0b;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0;
+}
+
+/* === 首字下沉 === */
+.ProseMirror p[data-drop-cap="true"]::first-letter {
+  font-size: 3em;
+  float: left;
+  line-height: 0.8;
+  padding-right: 8px;
+  font-weight: 700;
+}
+
+/* === 修订追踪 === */
+.ProseMirror .track-insert {
+  color: #10b981;
+  text-decoration: underline;
+}
+.ProseMirror .track-delete {
+  color: #ef4444;
+  text-decoration: line-through;
+}
+
+/* === 批注标记 === */
+.ProseMirror .comment-mark {
+  background: #fef3c7;
+  border-bottom: 1px dashed #f59e0b;
+  cursor: pointer;
+}
+
+/* === 打印样式 === */
+@media print {
+  header, footer, .toolbar-btn, .no-print { display: none !important; }
+  .ProseMirror { padding: 0 !important; }
+  body { background: white !important; }
+}
+
 /* === Markdown/HTML 预览 === */
 .markdown-preview {
   font-size: 15px;
