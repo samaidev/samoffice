@@ -279,6 +279,8 @@ func (p *Presentation) presentationXML() string {
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<p:sldSz cx="12192000" cy="6858000" type="screen16x9"/>
+<p:notesSz cx="6858000" cy="9144000"/>
 <p:sldIdLst>
 `)
         for i := range p.slides {
@@ -315,27 +317,58 @@ func (p *Presentation) corePropsXML() string {
 
 func (s *Slide) slideXML(num int) string {
         var sb strings.Builder
-        // 过渡效果通过 <p:transition> 元素
         transitionXML := ""
         if s.transition != "" {
                 switch s.transition {
-                case "fade":
-                        transitionXML = `<p:transition><p:fade/></p:transition>`
-                case "push":
-                        transitionXML = `<p:transition><p:push/></p:transition>`
-                case "wipe":
-                        transitionXML = `<p:transition><p:wipe/></p:transition>`
-                case "cover":
-                        transitionXML = `<p:transition><p:cover/></p:transition>`
-                case "cut":
-                        transitionXML = `<p:transition><p:cut/></p:transition>`
+                case "fade": transitionXML = `<p:transition><p:fade/></p:transition>`
+                case "push": transitionXML = `<p:transition><p:push/></p:transition>`
+                case "wipe": transitionXML = `<p:transition><p:wipe/></p:transition>`
+                case "cover": transitionXML = `<p:transition><p:cover/></p:transition>`
+                case "cut": transitionXML = `<p:transition><p:cut/></p:transition>`
                 }
         }
+
+        // 幻灯片尺寸 16:9 (EMU: 1 inch = 914400)
+        // 宽: 12192000 (33.87cm), 高: 6858000 (19.05cm)
+        slideW := 12192000
+        slideH := 6858000
 
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <p:cSld><p:spTree>
 `)
+
+        // 形状位置和尺寸定义（EMU）
+        // 标题形状：居中偏上
+        var titleX, titleY, titleCx, titleCy int
+        var subX, subY, subCx, subCy int
+        bulletX := 914400
+                bulletY := 2057400
+                bulletCx := 10363200
+                bulletCy := 4114800
+
+        if s.layout == LayoutTitle {
+                // 标题页：居中大标题
+                titleX = 1838400   // 2cm from left
+                titleY = 2286000   // ~6cm from top
+                titleCx = 8515200  // ~24cm wide
+                titleCy = 1828800  // ~5cm tall
+                subX = 1838400
+                subY = 4114800     // below title
+                subCx = 8515200
+                subCy = 1143000
+        } else {
+                // 内容页：标题在顶部
+                titleX = 914400    // 1cm from left
+                titleY = 457200    // ~1.3cm from top
+                titleCx = 10363200 // ~28cm wide
+                titleCy = 1143000  // ~3cm tall
+                subX = 914400
+                subY = 1828800
+                subCx = 10363200
+                subCy = 1143000
+        }
+        _ = slideW; _ = slideH
 
         // 标题
         if s.title != "" {
@@ -343,23 +376,36 @@ func (s *Slide) slideXML(num int) string {
                 if s.layout == LayoutTitle {
                         fontSize = 4000
                 }
-                sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="1" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>
-<a:p><a:r><a:rPr lang="zh-CN" sz="%d" b="1"/><a:t>%s</a:t></a:r></a:p>
-</p:txBody></p:sp>`, fontSize, escapeXML(s.title)))
+                sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="1" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>
+<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+<p:txBody><a:bodyPr wrap="square" anchor="%s"/><a:lstStyle/>
+<a:p><a:pPr algn="%s"/><a:r><a:rPr lang="zh-CN" sz="%d" b="1"/><a:t>%s</a:t></a:r></a:p>
+</p:txBody></p:sp>`,
+                        titleX, titleY, titleCx, titleCy,
+                        func() string { if s.layout == LayoutTitle { return "ctr" }; return "t" }(),
+                        func() string { if s.layout == LayoutTitle { return "ctr" }; return "l" }(),
+                        fontSize, escapeXML(s.title)))
         }
 
         // 副标题
         if s.subtitle != "" {
-                sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="2" name="Subtitle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>
-<a:p><a:r><a:rPr lang="zh-CN" sz="1800"/><a:t>%s</a:t></a:r></a:p>
-</p:txBody></p:sp>`, escapeXML(s.subtitle)))
+                sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="2" name="Subtitle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>
+<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+<p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/>
+<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1800"/><a:t>%s</a:t></a:r></a:p>
+</p:txBody></p:sp>`, subX, subY, subCx, subCy, escapeXML(s.subtitle)))
         }
 
         // 要点列表
         if len(s.bullets) > 0 {
-                sb.WriteString(`<p:sp><p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>`)
+                sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>
+<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+<p:txBody><a:bodyPr wrap="square" anchor="t"/><a:lstStyle/>`, bulletX, bulletY, bulletCx, bulletCy))
                 for _, bullet := range s.bullets {
-                        sb.WriteString(fmt.Sprintf(`<a:p><a:pPr><a:buFont typeface="Arial"/><a:buChar char="•"/></a:pPr><a:r><a:rPr lang="zh-CN" sz="1600"/><a:t>%s</a:t></a:r></a:p>`, escapeXML(bullet)))
+                        sb.WriteString(fmt.Sprintf(`<a:p><a:pPr><a:buFont typeface="Arial"/><a:buChar char="•"/><a:spcBef><a:spcPts val="600"/></a:spcBef></a:pPr><a:r><a:rPr lang="zh-CN" sz="1600"/><a:t>%s</a:t></a:r></a:p>`, escapeXML(bullet)))
                 }
                 sb.WriteString(`</p:txBody></p:sp>`)
         }
@@ -380,24 +426,17 @@ func (s *Slide) slideXML(num int) string {
         }
 
         sb.WriteString(`</p:spTree></p:cSld>`)
-
-        // 过渡效果
         sb.WriteString(transitionXML)
 
-        // 动画时间线（简化版：每个动画作为 seq 节点）
         if len(s.animations) > 0 {
                 sb.WriteString(`<p:timing>`)
                 for _, anim := range s.animations {
                         effectXML := ""
                         switch anim.effect {
-                        case "fade":
-                                effectXML = `<p:fade/>`
-                        case "fly":
-                                effectXML = `<p:fly dir="l"/>`
-                        case "zoom":
-                                effectXML = `<p:zoom/>`
-                        case "wipe":
-                                effectXML = `<p:wipe dir="l"/>`
+                        case "fade": effectXML = `<p:fade/>`
+                        case "fly": effectXML = `<p:fly dir="l"/>`
+                        case "zoom": effectXML = `<p:zoom/>`
+                        case "wipe": effectXML = `<p:wipe dir="l"/>`
                         }
                         sb.WriteString(fmt.Sprintf(`<p:seq>%s</p:seq>`, effectXML))
                 }
