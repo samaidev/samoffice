@@ -328,11 +328,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if (wm !== null) setWatermark(wm)
   }
 
-  const Btn = ({ cmd, icon, title, active, group }: any) => (
-    <>
-      <button onClick={() => exec(cmd)} className={`toolbar-btn ${active ? 'active' : ''}`} title={title} type="button">{icon}</button>
-      {group && <div className="toolbar-divider" />}
-    </>
+  const Btn = ({ cmd, icon, title, active }: any) => (
+    <button onClick={() => exec(cmd)} className={`toolbar-btn ${active ? 'active' : ''}`} title={title} type="button">{icon}</button>
   )
 
   useEffect(() => {
@@ -364,122 +361,151 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       )}
 
       {/* 工具栏第一行：字体/字号/颜色/排版 */}
-      <div className="px-2 py-1 flex items-center gap-1 flex-wrap flex-shrink-0" style={{ background: focused ? 'var(--color-surface)' : 'var(--color-surface-alt)', borderBottom: '1px solid var(--color-border)' }}>
-        <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded px-1 py-0.5" style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="字体">
-          {FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}
-        </select>
-        <select value={activeFontSize} onChange={e => setFontSize(e.target.value)} className="text-xs rounded px-1 py-0.5" style={{ width: 60, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="字号">
-          <option value="">默认</option>
-          {FONT_SIZES.map(s => <option key={s.value} value={s.value}>{s.name}</option>)}
-        </select>
-        {/* 文字颜色 */}
-        <div className="relative group">
-          <button className="toolbar-btn" title="文字颜色" type="button" style={{ borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
-          <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-            <div className="grid grid-cols-6 gap-1">{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="w-5 h-5 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div>
-          </div>
+      <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap flex-shrink-0" style={{ background: focused ? 'var(--color-surface)' : 'var(--color-surface-alt)', borderBottom: '1px solid var(--color-border)' }}>
+        {/* 字体组 */}
+        <div className="toolbar-group">
+          <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 95, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="字体">
+            {FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}
+          </select>
+          <select value={activeFontSize} onChange={e => setFontSize(e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 65, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="字号">
+            <option value="">默认</option>
+            {FONT_SIZES.map(s => <option key={s.value} value={s.value}>{s.name}</option>)}
+          </select>
         </div>
-        {/* 高亮 */}
-        <div className="relative group">
-          <button className="toolbar-btn" title="高亮" type="button" style={{ background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }}>H</button>
-          <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-            <div className="grid grid-cols-6 gap-1">{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="w-5 h-5 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div>
+
+        {/* 颜色组 */}
+        <div className="toolbar-group">
+          <div className="relative group">
+            <button className="toolbar-btn" title="文字颜色" type="button" style={{ borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
+            <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2.5 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <div className="grid grid-cols-6 gap-1.5">{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div>
+            </div>
           </div>
-        </div>
-        <div className="toolbar-divider" />
-        {/* 对齐 */}
-        <button onClick={() => setParaAttr('align', 'left')} className={`toolbar-btn ${activeAttrs.align === 'left' ? 'active' : ''}`} title="左对齐" type="button">⬅</button>
-        <button onClick={() => setParaAttr('align', 'center')} className={`toolbar-btn ${activeAttrs.align === 'center' ? 'active' : ''}`} title="居中" type="button">⬌</button>
-        <button onClick={() => setParaAttr('align', 'right')} className={`toolbar-btn ${activeAttrs.align === 'right' ? 'active' : ''}`} title="右对齐" type="button">➡</button>
-        <button onClick={() => setParaAttr('align', 'justify')} className={`toolbar-btn ${activeAttrs.align === 'justify' ? 'active' : ''}`} title="两端对齐" type="button">☰</button>
-        <div className="toolbar-divider" />
-        {/* 行距 */}
-        <select value={activeAttrs.lineHeight || ''} onChange={e => setParaAttr('lineHeight', e.target.value)} className="text-xs rounded px-1 py-0.5" style={{ width: 55, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="行距">
-          <option value="">行距</option>
-          {LINE_HEIGHTS.map(l => <option key={l.value} value={l.value}>{l.name}</option>)}
-        </select>
-        {/* 缩进 */}
-        <button onClick={() => setParaAttr('indent', Math.min(8, (activeAttrs.indent || 0) + 1))} className="toolbar-btn" title="增加缩进" type="button">→|</button>
-        <button onClick={() => setParaAttr('indent', Math.max(0, (activeAttrs.indent || 0) - 1))} className="toolbar-btn" title="减少缩进" type="button">|←</button>
-        <div className="toolbar-divider" />
-        {/* 段落边框/底纹 */}
-        <button onClick={() => setParaAttr('border', activeAttrs.border === 'all' ? '' : 'all')} className={`toolbar-btn ${activeAttrs.border === 'all' ? 'active' : ''}`} title="段落边框" type="button">▢</button>
-        <button onClick={() => setParaAttr('border', activeAttrs.border === 'left' ? '' : 'left')} className={`toolbar-btn ${activeAttrs.border === 'left' ? 'active' : ''}`} title="左边框" type="button">▏</button>
-        <div className="relative group">
-          <button className="toolbar-btn" title="段落底纹" type="button" style={{ background: activeAttrs.shading || 'transparent' }}>▦</button>
-          <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-            <div className="grid grid-cols-6 gap-1">
-              {['','#f1f5f9','#fef3c7','#dbeafe','#dcfce7','#fce7f3'].map(c => <button key={c} onClick={() => setParaAttr('shading', c)} className="w-5 h-5 rounded border" style={{ background: c || 'white', border: '1px solid var(--color-border)' }} type="button" />)}
+          <div className="relative group">
+            <button className="toolbar-btn" title="高亮" type="button" style={{ background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }}>H</button>
+            <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2.5 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <div className="grid grid-cols-6 gap-1.5">{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div>
             </div>
           </div>
         </div>
-        {/* 字间距 */}
-        <select value={activeAttrs.letterSpacing || ''} onChange={e => setParaAttr('letterSpacing', e.target.value)} className="text-xs rounded px-1 py-0.5" style={{ width: 50, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="字间距">
-          <option value="">间距</option>
-          <option value="0.5px">松</option>
-          <option value="1px">更松</option>
-          <option value="-0.5px">紧</option>
-        </select>
-        {/* RTL */}
-        <button onClick={() => exec('toggleRTL')} className={`toolbar-btn ${activeAttrs.rtl ? 'active' : ''}`} title="RTL 文字方向" type="button">⇄</button>
+
+        {/* 对齐组 */}
+        <div className="toolbar-group">
+          <button onClick={() => setParaAttr('align', 'left')} className={`toolbar-btn ${activeAttrs.align === 'left' ? 'active' : ''}`} title="左对齐" type="button">⬅</button>
+          <button onClick={() => setParaAttr('align', 'center')} className={`toolbar-btn ${activeAttrs.align === 'center' ? 'active' : ''}`} title="居中" type="button">⬌</button>
+          <button onClick={() => setParaAttr('align', 'right')} className={`toolbar-btn ${activeAttrs.align === 'right' ? 'active' : ''}`} title="右对齐" type="button">➡</button>
+          <button onClick={() => setParaAttr('align', 'justify')} className={`toolbar-btn ${activeAttrs.align === 'justify' ? 'active' : ''}`} title="两端对齐" type="button">☰</button>
+        </div>
+
+        {/* 段落间距组 */}
+        <div className="toolbar-group">
+          <select value={activeAttrs.lineHeight || ''} onChange={e => setParaAttr('lineHeight', e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 60, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="行距">
+            <option value="">行距</option>
+            {LINE_HEIGHTS.map(l => <option key={l.value} value={l.value}>{l.name}</option>)}
+          </select>
+          <button onClick={() => setParaAttr('indent', Math.min(8, (activeAttrs.indent || 0) + 1))} className="toolbar-btn" title="增加缩进" type="button">→|</button>
+          <button onClick={() => setParaAttr('indent', Math.max(0, (activeAttrs.indent || 0) - 1))} className="toolbar-btn" title="减少缩进" type="button">|←</button>
+        </div>
+
+        {/* 段落装饰组 */}
+        <div className="toolbar-group">
+          <button onClick={() => setParaAttr('border', activeAttrs.border === 'all' ? '' : 'all')} className={`toolbar-btn ${activeAttrs.border === 'all' ? 'active' : ''}`} title="段落边框" type="button">▢</button>
+          <button onClick={() => setParaAttr('border', activeAttrs.border === 'left' ? '' : 'left')} className={`toolbar-btn ${activeAttrs.border === 'left' ? 'active' : ''}`} title="左边框" type="button">▏</button>
+          <div className="relative group">
+            <button className="toolbar-btn" title="段落底纹" type="button" style={{ background: activeAttrs.shading || 'transparent' }}>▦</button>
+            <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2.5 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <div className="grid grid-cols-6 gap-1.5">
+                {['','#f1f5f9','#fef3c7','#dbeafe','#dcfce7','#fce7f3'].map(c => <button key={c} onClick={() => setParaAttr('shading', c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c || 'white', border: '1px solid var(--color-border)' }} type="button" />)}
+              </div>
+            </div>
+          </div>
+          <select value={activeAttrs.letterSpacing || ''} onChange={e => setParaAttr('letterSpacing', e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 55, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="字间距">
+            <option value="">间距</option>
+            <option value="0.5px">松</option>
+            <option value="1px">更松</option>
+            <option value="-0.5px">紧</option>
+          </select>
+          <button onClick={() => exec('toggleRTL')} className={`toolbar-btn ${activeAttrs.rtl ? 'active' : ''}`} title="RTL 文字方向" type="button">⇄</button>
+        </div>
       </div>
 
       {/* 工具栏第二行：段落/样式/列表/插入 */}
-      <div className="px-2 py-1 flex items-center gap-0.5 flex-wrap flex-shrink-0" style={{ background: focused ? 'var(--color-surface)' : 'var(--color-surface-alt)', borderBottom: '1px solid var(--color-border)', boxShadow: focused ? 'var(--shadow-sm)' : 'none' }}>
-        <Btn cmd="undo" icon="↶" title="撤销 (Ctrl+Z)" group />
-        <Btn cmd="redo" icon="↷" title="重做 (Ctrl+Y)" group />
-        <Btn cmd="paragraph" icon="¶" title="正文段落" active={activeMarks.size === 0 || (activeMarks.size === 1 && !Array.from(activeMarks).some(m => m.startsWith('heading')))} />
-        <Btn cmd="h1" icon={<b style={{fontSize:12}}>H1</b>} title="一级标题" active={activeMarks.has('heading-1')} />
-        <Btn cmd="h2" icon={<b style={{fontSize:11}}>H2</b>} title="二级标题" active={activeMarks.has('heading-2')} />
-        <Btn cmd="h3" icon={<b style={{fontSize:10}}>H3</b>} title="三级标题" active={activeMarks.has('heading-3')} group />
-        <Btn cmd="bold" icon={<b style={{fontSize:13}}>B</b>} title="加粗" active={activeMarks.has('bold')} />
-        <Btn cmd="italic" icon={<i style={{fontSize:13}}>I</i>} title="斜体" active={activeMarks.has('italic')} />
-        <Btn cmd="underline" icon={<u style={{fontSize:13}}>U</u>} title="下划线" active={activeMarks.has('underline')} />
-        <Btn cmd="strikethrough" icon={<s style={{fontSize:13}}>S</s>} title="删除线" active={activeMarks.has('strikethrough')} />
-        <Btn cmd="superscript" icon={<span style={{fontSize:10,verticalAlign:'super'}}>X²</span>} title="上标" active={activeMarks.has('superscript')} />
-        <Btn cmd="subscript" icon={<span style={{fontSize:10,verticalAlign:'sub'}}>X₂</span>} title="下标" active={activeMarks.has('subscript')} />
-        <Btn cmd="code" icon={<span style={{fontSize:10,fontFamily:'monospace'}}>{'</>'}</span>} title="行内代码" active={activeMarks.has('code')} group />
-        <Btn cmd="bulletList" icon="•" title="无序列表" />
-        <Btn cmd="orderedList" icon={<b style={{fontSize:11}}>1.</b>} title="有序列表" />
-        <Btn cmd="quote" icon="❝" title="引用" />
-        <Btn cmd="codeBlock" icon={<span style={{fontSize:10,fontFamily:'monospace'}}>{'{}'}</span>} title="代码块" />
-        <Btn cmd="horizontalRule" icon="—" title="水平线" />
-        <Btn cmd="pageBreak" icon="⏎" title="分页符" group />
+      <div className="px-3 py-1.5 flex items-center gap-2 flex-wrap flex-shrink-0" style={{ background: focused ? 'var(--color-surface)' : 'var(--color-surface-alt)', borderBottom: '1px solid var(--color-border)', boxShadow: focused ? 'var(--shadow-sm)' : 'none' }}>
+        {/* 撤销重做 */}
+        <div className="toolbar-group">
+          <Btn cmd="undo" icon="↶" title="撤销 (Ctrl+Z)" />
+          <Btn cmd="redo" icon="↷" title="重做 (Ctrl+Y)" />
+        </div>
+
+        {/* 段落类型 */}
+        <div className="toolbar-group">
+          <Btn cmd="paragraph" icon="¶" title="正文段落" active={activeMarks.size === 0 || (activeMarks.size === 1 && !Array.from(activeMarks).some(m => m.startsWith('heading')))} />
+          <Btn cmd="h1" icon={<b style={{fontSize:12}}>H1</b>} title="一级标题" active={activeMarks.has('heading-1')} />
+          <Btn cmd="h2" icon={<b style={{fontSize:11}}>H2</b>} title="二级标题" active={activeMarks.has('heading-2')} />
+          <Btn cmd="h3" icon={<b style={{fontSize:10}}>H3</b>} title="三级标题" active={activeMarks.has('heading-3')} />
+        </div>
+
+        {/* 文本样式 */}
+        <div className="toolbar-group">
+          <Btn cmd="bold" icon={<b style={{fontSize:13}}>B</b>} title="加粗" active={activeMarks.has('bold')} />
+          <Btn cmd="italic" icon={<i style={{fontSize:13}}>I</i>} title="斜体" active={activeMarks.has('italic')} />
+          <Btn cmd="underline" icon={<u style={{fontSize:13}}>U</u>} title="下划线" active={activeMarks.has('underline')} />
+          <Btn cmd="strikethrough" icon={<s style={{fontSize:13}}>S</s>} title="删除线" active={activeMarks.has('strikethrough')} />
+          <Btn cmd="superscript" icon={<span style={{fontSize:10,verticalAlign:'super'}}>X²</span>} title="上标" active={activeMarks.has('superscript')} />
+          <Btn cmd="subscript" icon={<span style={{fontSize:10,verticalAlign:'sub'}}>X₂</span>} title="下标" active={activeMarks.has('subscript')} />
+          <Btn cmd="code" icon={<span style={{fontSize:10,fontFamily:'monospace'}}>{'</>'}</span>} title="行内代码" active={activeMarks.has('code')} />
+        </div>
+
+        {/* 列表与块级 */}
+        <div className="toolbar-group">
+          <Btn cmd="bulletList" icon="•" title="无序列表" />
+          <Btn cmd="orderedList" icon={<b style={{fontSize:11}}>1.</b>} title="有序列表" />
+          <Btn cmd="quote" icon="❝" title="引用" />
+          <Btn cmd="codeBlock" icon={<span style={{fontSize:10,fontFamily:'monospace'}}>{'{}'}</span>} title="代码块" />
+          <Btn cmd="horizontalRule" icon="—" title="水平线" />
+          <Btn cmd="pageBreak" icon="⏎" title="分页符" />
+        </div>
 
         {/* 插入菜单 */}
-        <div className="relative">
-          <button onClick={() => setShowInsertMenu(!showInsertMenu)} className="toolbar-btn" title="插入" type="button">+</button>
-          {showInsertMenu && (
-            <div className="absolute top-full left-0 z-30 py-1 rounded-lg shadow-lg animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}>
-              <button onClick={() => { exec('insertTable'); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>📊 表格</button>
-              <button onClick={() => { exec('textBox'); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>📦 文本框</button>
-              <button onClick={() => { insertWordArt(); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>🎨 艺术字</button>
-              <button onClick={() => { insertFormula(); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>Σ 公式</button>
-              <button onClick={() => { exec('footnote'); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>📝 脚注</button>
-              <button onClick={() => { exec('bookmark'); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>⚓ 书签</button>
-              <button onClick={() => { exec('comment'); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>💬 批注</button>
-              <button onClick={() => { exec('dropCap'); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>🅰 首字下沉</button>
-              <button onClick={() => { applyWatermark(); setShowInsertMenu(false) }} className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>💧 水印</button>
-            </div>
-          )}
+        <div className="toolbar-group">
+          <div className="relative">
+            <button onClick={() => setShowInsertMenu(!showInsertMenu)} className="toolbar-btn" title="插入" type="button" style={{ padding: '0 10px', fontSize: '14px' }}>+ 插入</button>
+            {showInsertMenu && (
+              <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}>
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>常用</div>
+                <button onClick={() => { exec('insertTable'); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📊 表格</button>
+                <button onClick={() => { exec('textBox'); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📦 文本框</button>
+                <button onClick={() => { insertWordArt(); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🎨 艺术字</button>
+                <button onClick={() => { insertFormula(); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>Σ 公式</button>
+                <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>学术</div>
+                <button onClick={() => { exec('footnote'); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📝 脚注</button>
+                <button onClick={() => { exec('bookmark'); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>⚓ 书签</button>
+                <button onClick={() => { exec('comment'); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>💬 批注</button>
+                <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+                <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--color-text-muted)' }}>版式</div>
+                <button onClick={() => { exec('dropCap'); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🅰 首字下沉</button>
+                <button onClick={() => { applyWatermark(); setShowInsertMenu(false) }} className="flex w-full text-left px-3 py-2 text-xs items-center gap-2 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>💧 水印</button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex-1" />
 
-        {/* 查找 */}
-        <button onClick={() => setSearchOpen(!searchOpen)} className="toolbar-btn" title="查找替换 (Ctrl+F)" type="button">🔍</button>
-        {/* 修订追踪 */}
-        <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn ${trackChanges ? 'active' : ''}`} title="修订追踪" type="button">✏️</button>
-        {/* 缩放 */}
-        <select value={zoom} onChange={e => setZoom(parseInt(e.target.value))} className="text-xs rounded px-1 py-0.5" style={{ width: 60, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="缩放">
-          <option value={50}>50%</option>
-          <option value={75}>75%</option>
-          <option value={100}>100%</option>
-          <option value={125}>125%</option>
-          <option value={150}>150%</option>
-        </select>
-        {/* 打印 */}
-        <button onClick={() => setPrintPreview(!printPreview)} className="toolbar-btn" title="打印预览" type="button">🖨</button>
+        {/* 工具组 */}
+        <div className="toolbar-group">
+          <button onClick={() => setSearchOpen(!searchOpen)} className="toolbar-btn" title="查找替换 (Ctrl+F)" type="button">🔍</button>
+          <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn ${trackChanges ? 'active' : ''}`} title="修订追踪" type="button">✏️</button>
+          <select value={zoom} onChange={e => setZoom(parseInt(e.target.value))} className="text-xs rounded-md px-2 py-1" style={{ width: 65, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} title="缩放">
+            <option value={50}>50%</option>
+            <option value={75}>75%</option>
+            <option value={100}>100%</option>
+            <option value={125}>125%</option>
+            <option value={150}>150%</option>
+          </select>
+          <button onClick={() => setPrintPreview(!printPreview)} className="toolbar-btn" title="打印预览" type="button">🖨</button>
+        </div>
       </div>
 
       {/* 水印层 */}

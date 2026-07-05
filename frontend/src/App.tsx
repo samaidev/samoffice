@@ -439,11 +439,12 @@ function App() {
               <div
                 className="max-w-4xl mx-auto bg-white min-h-full animate-fade-in"
                 style={{
-                  boxShadow: '0 0 24px rgba(15, 23, 42, 0.05)',
-                  marginTop: '20px',
-                  marginBottom: '20px',
-                  borderRadius: '6px',
-                  background: 'var(--color-surface)'
+                  boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)',
+                  marginTop: '24px',
+                  marginBottom: '24px',
+                  borderRadius: '8px',
+                  background: 'var(--color-surface)',
+                  minHeight: 'calc(100% - 48px)'
                 }}
               >
                 <DocumentEditor
