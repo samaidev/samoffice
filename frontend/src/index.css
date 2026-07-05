@@ -9,11 +9,23 @@
   color-scheme: light;
 }
 
-body {
+* { box-sizing: border-box; }
+
+html, body, #root {
   margin: 0;
-  background: #f5f5f5;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
 }
 
+body {
+  background: #f5f5f5;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* === 桌面端 ProseMirror === */
 .ProseMirror {
   outline: none;
   min-height: 400px;
@@ -21,7 +33,6 @@ body {
   font-size: 14px;
   line-height: 1.7;
 }
-
 .ProseMirror h1 { font-size: 28px; margin: 16px 0 12px; font-weight: 700; }
 .ProseMirror h2 { font-size: 22px; margin: 14px 0 10px; font-weight: 700; }
 .ProseMirror h3 { font-size: 18px; margin: 12px 0 8px; font-weight: 700; }
@@ -45,6 +56,20 @@ body {
 }
 .ProseMirror pre code { background: transparent; padding: 0; }
 
+/* === 移动端 ProseMirror === */
+@media (max-width: 768px) {
+  .ProseMirror {
+    padding: 16px 20px;
+    font-size: 16px; /* iOS 防缩放要求 ≥16px */
+    min-height: 300px;
+  }
+  .ProseMirror h1 { font-size: 22px; }
+  .ProseMirror h2 { font-size: 18px; }
+  .ProseMirror h3 { font-size: 16px; }
+  .ProseMirror pre { padding: 12px; font-size: 12px; }
+}
+
+/* === 拼写错误样式 === */
 .spell-error {
   text-decoration: underline wavy #ef4444;
   text-underline-offset: 2px;
@@ -53,4 +78,55 @@ body {
 }
 .spell-error:hover {
   background: rgba(239, 68, 68, 0.15);
+}
+
+/* === 滚动条优化 === */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* === 移动端：隐藏滚动条但保留滚动 === */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+}
+
+/* === 触摸友好按钮 === */
+@media (max-width: 768px) {
+  button {
+    min-height: 36px;
+    min-width: 36px;
+  }
+}
+
+/* === 表格单元格 === */
+table {
+  border-collapse: collapse;
+}
+table td, table th {
+  border: 1px solid #d1d5db;
+  padding: 4px;
+}
+
+/* 防止移动端 input 缩放 */
+input, textarea, select {
+  font-size: 16px;
+}
+@media (min-width: 769px) {
+  input, textarea, select {
+    font-size: 14px;
+  }
 }

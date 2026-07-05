@@ -1,25 +1,20 @@
 package symspell
 
 import (
+        "bufio"
+        "encoding/gob"
+        "os"
+        "path/filepath"
         "sort"
         "strings"
         "sync"
 )
 
 // SymSpell 是 SymSpell 模糊匹配算法的纯 Go 实现。
-// 比传统 BK-Tree 快 1000 倍，是拼写纠错的核心。
-//
-// 算法原理：
-//   预处理：对每个词生成所有"删除变体"（编辑距离 ≤ maxDist），
-//           建立 deletes → 原词列表 的哈希表
-//   查询：对查询词生成所有删除变体，查哈希表，取交集后用编辑距离过滤
-//
-// 空间换时间：词典 10 万词、maxDist=2 时，索引约 5MB 内存
-
 type SymSpell struct {
         maxDist      int
-        deletes      map[string][]string // 删除变体 → 原词列表
-        words        map[string]int      // 原词 → 频率
+        deletes      map[string][]string
+        words        map[string]int
         mu           sync.RWMutex
         built        bool
 }
@@ -73,6 +68,67 @@ func (s *SymSpell) Build() {
                 }
         }
         s.built = true
+}
+
+// === 索引序列化（启动加速）===
+// 启动时如果存在缓存文件，直接 load 而非 rebuild
+// SymSpell 索引 5 万词 build 约耗时 1-2 秒，序列化后 load 仅 100ms
+
+type serializedIndex struct {
+        MaxDist int
+        Deletes map[string][]string
+        Words   map[string]int
+}
+
+// SaveIndex 将构建好的索引序列化到文件
+func (s *SymSpell) SaveIndex(path string) error {
+        s.mu.RLock()
+        defer s.mu.RUnlock()
+
+        if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+                return err
+        }
+        f, err := os.Create(path)
+        if err != nil {
+                return err
+        }
+        defer f.Close()
+
+        bw := bufio.NewWriter(f)
+        defer bw.Flush()
+
+        enc := gob.NewEncoder(bw)
+        return enc.Encode(serializedIndex{
+                MaxDist: s.maxDist,
+                Deletes: s.deletes,
+                Words:   s.words,
+        })
+}
+
+// LoadIndex 从文件加载索引（替代 Build）
+// 失败时返回错误，调用方应回退到 AddWord + Build
+func (s *SymSpell) LoadIndex(path string) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        f, err := os.Open(path)
+        if err != nil {
+                return err
+        }
+        defer f.Close()
+
+        bw := bufio.NewReader(f)
+        dec := gob.NewDecoder(bw)
+        var idx serializedIndex
+        if err := dec.Decode(&idx); err != nil {
+                return err
+        }
+
+        s.maxDist = idx.MaxDist
+        s.deletes = idx.Deletes
+        s.words = idx.Words
+        s.built = true
+        return nil
 }
 
 // Lookup 查询 word 的建议词，返回按 (距离, 频率) 排序的前 N 个

@@ -52,6 +52,7 @@ func NewApp() *App {
         }
 
         dictMgr := dict.NewManager(userStore)
+        dictMgr.SetCacheDir(dataDir) // 启用索引缓存
         loadBuiltinDicts(dictMgr)
 
         return &App{

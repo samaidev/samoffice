@@ -1,6 +1,7 @@
 package dict
 
 import (
+        "path/filepath"
         "strings"
         "sync"
 
@@ -14,10 +15,12 @@ import (
 //  2. 用户词库与内置词库的合并
 //  3. 拼写检查 + 纠错建议
 //  4. 用户词库自学习
+//  5. SymSpell 索引缓存（启动加速）
 type Manager struct {
-        dicts    map[string]*symspell.SymSpell // lang → index
-        zhSeg    *chinese.Segmenter            // 中文分词器
+        dicts    map[string]*symspell.SymSpell
+        zhSeg    *chinese.Segmenter
         user     *userdict.Store
+        cacheDir string
         mu       sync.RWMutex
         loaded   map[string]bool
 }
@@ -43,17 +46,45 @@ func NewManager(userStore *userdict.Store) *Manager {
                 user:   userStore,
                 loaded: make(map[string]bool),
         }
-        // 自动加载 jieba 词典到分词器
-        if err := m.zhSeg.LoadBuiltin(); err != nil {
-                // 加载失败不致命，回退到无词典模式
-                _ = err
-        }
+        // 异步加载 jieba 词典（不阻塞主线程）
+        go func() {
+                if err := m.zhSeg.LoadBuiltin(); err != nil {
+                        // 加载失败不致命
+                        _ = err
+                }
+        }()
         return m
+}
+
+// SetCacheDir 设置索引缓存目录
+// 设置后 RegisterLang 会优先加载缓存，构建后自动保存
+func (m *Manager) SetCacheDir(dir string) {
+        m.mu.Lock()
+        defer m.mu.Unlock()
+        m.cacheDir = dir
 }
 
 // RegisterLang 注册一个语言词典，词表通过回调注入
 // 用于让上层决定从嵌入资源、文件或网络加载
 func (m *Manager) RegisterLang(lang string, words map[string]int) error {
+        m.mu.Lock()
+        cacheDir := m.cacheDir
+        m.mu.Unlock()
+
+        // 尝试从缓存加载
+        cachePath := ""
+        if cacheDir != "" {
+                cachePath = filepath.Join(cacheDir, "symspell-"+lang+".gob")
+                idx := symspell.New(2)
+                if err := idx.LoadIndex(cachePath); err == nil {
+                        m.mu.Lock()
+                        m.dicts[lang] = idx
+                        m.loaded[lang] = true
+                        m.mu.Unlock()
+                        return nil
+                }
+        }
+
         m.mu.Lock()
         defer m.mu.Unlock()
 
@@ -62,19 +93,10 @@ func (m *Manager) RegisterLang(lang string, words map[string]int) error {
                 idx.AddWord(w, f)
         }
 
-        // 中文：合并 jieba 词典到 SymSpell 索引（提供纠错能力）
-        // 同时填充分词器词典
+        // 中文：合并 jieba 词典到 SymSpell 索引
         if lang == "zh" {
                 for w, f := range words {
                         m.zhSeg.AddWord(w, f)
-                }
-                // 把 jieba 词典的词也加入 SymSpell（用于拼写检查时的"正确词"匹配）
-                // 注意：jieba 词典约 35 万词，SymSpell 索引会占用较多内存
-                // 这里限制只加载频率前 5 万词以平衡内存和效果
-                if m.zhSeg.DictSize() > 0 {
-                        // jieba 词已在 LoadBuiltin 加载到 zhSeg.dict
-                        // 通过反射访问私有字段不行，改用 ParseDict 重新解析
-                        // 简化：直接复用 zhSeg 的词典能力
                 }
         }
 
@@ -91,9 +113,28 @@ func (m *Manager) RegisterLang(lang string, words map[string]int) error {
                 }
         }
 
+        // 大词库（>10万）使用 maxDist=1 减少内存；小词库用 maxDist=2
+        if len(words) > 100000 {
+                idx = symspell.New(1)
+                for w, f := range words {
+                        idx.AddWord(w, f)
+                }
+                if m.user != nil {
+                        entries, _ := m.user.All(lang)
+                        for _, e := range entries {
+                                idx.AddWord(e.Word, e.Frequency+1)
+                        }
+                }
+        }
+
         idx.Build()
         m.dicts[lang] = idx
         m.loaded[lang] = true
+
+        // 异步保存缓存
+        if cachePath != "" {
+                go idx.SaveIndex(cachePath)
+        }
         return nil
 }
 

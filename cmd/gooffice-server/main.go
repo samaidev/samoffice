@@ -43,7 +43,7 @@ func main() {
 
         // 词库管理器
         dictMgr := dict.NewManager(userStore)
-        // 内置英文词库（示例词，实际场景从 assets/dicts 加载完整词库）
+        dictMgr.SetCacheDir(*dataDir) // 启用 SymSpell 索引缓存
         loadBuiltinDicts(dictMgr)
 
         // 解析器注册中心

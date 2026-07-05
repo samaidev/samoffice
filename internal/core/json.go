@@ -97,13 +97,70 @@ func (b *BulletList) UnmarshalJSON(data []byte) error {
 }
 
 func (b *Table) UnmarshalJSON(data []byte) error {
-        type alias Table
+        type alias struct {
+                Rows  []json.RawMessage `json:"rows"`
+                Width []float64         `json:"width,omitempty"`
+                Style string            `json:"style,omitempty"`
+        }
         var a alias
         if err := json.Unmarshal(data, &a); err != nil {
                 return err
         }
-        *b = Table(a)
+        b.Width = a.Width
+        b.Style = a.Style
+        b.Rows = make([][]TableCell, 0, len(a.Rows))
+        for _, rowRaw := range a.Rows {
+                var cells []json.RawMessage
+                if err := json.Unmarshal(rowRaw, &cells); err != nil {
+                        continue
+                }
+                row := make([]TableCell, 0, len(cells))
+                for _, cellRaw := range cells {
+                        cell, err := unmarshalCell(cellRaw)
+                        if err != nil {
+                                continue
+                        }
+                        row = append(row, cell)
+                }
+                b.Rows = append(b.Rows, row)
+        }
         return nil
+}
+
+// unmarshalCell 反序列化 TableCell，处理 Inline 接口字段
+func unmarshalCell(data []byte) (TableCell, error) {
+        var probe struct {
+                Inline   []json.RawMessage `json:"inline"`
+                Blocks   []json.RawMessage `json:"blocks"`
+                RowSpan  int               `json:"rowSpan"`
+                ColSpan  int               `json:"colSpan"`
+                IsHeader bool              `json:"isHeader"`
+        }
+        if err := json.Unmarshal(data, &probe); err != nil {
+                return TableCell{}, err
+        }
+        c := TableCell{
+                RowSpan:  probe.RowSpan,
+                ColSpan:  probe.ColSpan,
+                IsHeader: probe.IsHeader,
+        }
+        c.Inline = make([]Inline, 0, len(probe.Inline))
+        for _, raw := range probe.Inline {
+                in, err := unmarshalInline(raw)
+                if err != nil {
+                        continue
+                }
+                c.Inline = append(c.Inline, in)
+        }
+        c.Blocks = make([]Block, 0, len(probe.Blocks))
+        for _, raw := range probe.Blocks {
+                b, err := unmarshalBlock(raw)
+                if err != nil {
+                        continue
+                }
+                c.Blocks = append(c.Blocks, b)
+        }
+        return c, nil
 }
 
 func (b *Image) UnmarshalJSON(data []byte) error {
