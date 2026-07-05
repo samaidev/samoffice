@@ -120,6 +120,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       handleDOMEvents: { focus: () => { setFocused(true); return false }, blur: () => { setFocused(false); return false } }
     })
     viewRef.current = view
+    // 暴露 view 到全局，方便 E2E 测试和外部调用
+    ;(window as any).__pmView = view
     return () => { view.destroy(); viewRef.current = null }
   }, [])
 

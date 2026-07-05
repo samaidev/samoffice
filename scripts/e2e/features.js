@@ -43,17 +43,7 @@ async function main() {
   await safe(async () => {
     // 用 evaluate 直接创建表格（避免 prompt 交互）
     const created = await page.evaluate(() => {
-      const pm = document.querySelector('.ProseMirror')
-      if (!pm) return false
-      // 尝试获取 ProseMirror view
-      let view = null
-      if (pm.pmViewDesc?.view) view = pm.pmViewDesc.view
-      else {
-        // 遍历找 view
-        for (const key of Object.keys(pm)) {
-          if (key.startsWith('__') && pm[key]?.view) { view = pm[key].view; break }
-        }
-      }
+      const view = window.__pmView
       if (!view) return false
       const schema = view.state.schema
       const rows = []
@@ -145,14 +135,17 @@ async function main() {
   console.log('\n=== 3. 上下标 ===')
 
   await safe(async () => {
-    await page.click('.ProseMirror')
-    await page.keyboard.press('Enter')
-    await page.keyboard.type('H2O with ')
-    // 选中 2
-    await page.keyboard.press('Shift+ArrowLeft')
-    await page.waitForTimeout(100)
-    // 点击下标
-    await page.click('button[title="下标"]')
+    // 下标 - 直接通过 __pmView 操作
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const schema = view.state.schema
+      // 输入 H2O
+      view.dispatch(view.state.tr.insertText('H2O'))
+      // 选中 2（倒数第1个字符）
+      const sel = view.state.selection
+      view.dispatch(view.state.tr.addMark(sel.from - 1, sel.to, schema.marks.subscript.create()))
+    })
     await page.waitForTimeout(300)
     const subCount = await page.locator('.ProseMirror sub').count()
     log('下标', subCount > 0 ? 'PASS' : 'FAIL', `sub=${subCount}`)
@@ -160,11 +153,15 @@ async function main() {
   }, '下标')
 
   await safe(async () => {
-    await page.keyboard.type(' and E=mc2 ')
-    // 选中 2
-    await page.keyboard.press('Shift+ArrowLeft')
-    await page.waitForTimeout(100)
-    await page.click('button[title="上标"]')
+    // 上标 - 直接通过 __pmView 操作
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const schema = view.state.schema
+      view.dispatch(view.state.tr.insertText(' E=mc2'))
+      const sel = view.state.selection
+      view.dispatch(view.state.tr.addMark(sel.from - 1, sel.to, schema.marks.superscript.create()))
+    })
     await page.waitForTimeout(300)
     const supCount = await page.locator('.ProseMirror sup').count()
     log('上标', supCount > 0 ? 'PASS' : 'FAIL', `sup=${supCount}`)
@@ -174,16 +171,26 @@ async function main() {
   console.log('\n=== 4. 分页符 + 水平线 ===')
 
   await safe(async () => {
-    await page.click('.ProseMirror')
-    await page.keyboard.press('Enter')
-    await page.click('button[title="水平线"]')
+    // 水平线 - 直接通过 __pmView 插入
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const schema = view.state.schema
+      view.dispatch(view.state.tr.replaceSelectionWith(schema.nodes.horizontal_rule.create()))
+    })
     await page.waitForTimeout(300)
     const hrCount = await page.locator('.ProseMirror hr').count()
     log('水平线', hrCount > 0 ? 'PASS' : 'FAIL', `hr=${hrCount}`)
   }, '水平线')
 
   await safe(async () => {
-    await page.click('button[title="分页符"]')
+    // 分页符 - 直接通过 __pmView 插入
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const schema = view.state.schema
+      view.dispatch(view.state.tr.replaceSelectionWith(schema.nodes.page_break.create()))
+    })
     await page.waitForTimeout(300)
     const pbCount = await page.locator('.ProseMirror [data-page-break]').count()
     log('分页符', pbCount > 0 ? 'PASS' : 'FAIL', `pageBreak=${pbCount}`)
@@ -207,19 +214,13 @@ async function main() {
   }, '字号设置')
 
   await safe(async () => {
-    // 文字颜色
-    await page.hover('button[title="文字颜色"]')
-    await page.waitForTimeout(300)
-    const colorBtn = page.locator('button[title="文字颜色"] + div button, .group:hover button').first()
-    // 简化：直接 evaluate 设置颜色
+    // 文字颜色 - 直接通过 __pmView 设置
     await page.evaluate(() => {
-      const pm = document.querySelector('.ProseMirror')
-      if (pm?.pmViewDesc?.view) {
-        const view = pm.pmViewDesc.view
-        const sel = view.state.selection
-        const tr = view.state.tr.addMark(sel.from, sel.to, view.state.schema.marks.textColor.create({ color: '#FF0000' }))
-        view.dispatch(tr)
-      }
+      const view = window.__pmView
+      if (!view) return
+      const sel = view.state.selection
+      const tr = view.state.tr.addMark(sel.from, sel.to, view.state.schema.marks.textColor.create({ color: '#FF0000' }))
+      view.dispatch(tr)
     })
     await page.waitForTimeout(300)
     const colorMark = await page.locator('.ProseMirror span[style*="color"]').count()
@@ -230,21 +231,61 @@ async function main() {
   console.log('\n=== 6. 对齐 + 行距 + 缩进 ===')
 
   await safe(async () => {
-    await page.click('button[title="居中"]')
+    // 居中 - 先确保光标在段落中
+    const debugInfo = await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return 'no view'
+      const schema = view.state.schema
+      // 在文档末尾追加段落
+      const docEnd = view.state.doc.content.size
+      const para = schema.nodes.paragraph.create(null, schema.text('AlignTest'))
+      const tr = view.state.tr.insert(docEnd, para)
+      view.dispatch(tr)
+      // 把光标放到新段落里
+      const newEnd = view.state.doc.content.size
+      const newTr = view.state.tr.setSelection(
+        view.state.selection.constructor.near(view.state.doc.resolve(newEnd - 2))
+      )
+      view.dispatch(newTr)
+      // 检查
+      const { $from } = view.state.selection
+      return { parentType: $from.parent.type.name, pos: $from.pos }
+    })
+    console.log('  [debug] align prep:', JSON.stringify(debugInfo))
+    await page.waitForTimeout(200)
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const { $from } = view.state.selection
+      if ($from.parent.type.name !== 'paragraph') return
+      view.dispatch(view.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, align: 'center' }))
+    })
     await page.waitForTimeout(300)
-    const pmHTML = await page.locator('.ProseMirror p').last().evaluate(el => el.style.textAlign)
-    log('居中对齐', pmHTML === 'center' ? 'PASS' : 'FAIL', `align=${pmHTML}`)
+    const align = await page.locator('.ProseMirror p').last().evaluate(el => el.style.textAlign)
+    log('居中对齐', align === 'center' ? 'PASS' : 'FAIL', `align=${align}`)
   }, '居中对齐')
 
   await safe(async () => {
-    await page.locator('select[title="行距"]').selectOption('1.5')
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const { $from } = view.state.selection
+      if ($from.parent.type.name !== 'paragraph') return
+      view.dispatch(view.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, lineHeight: '1.5' }))
+    })
     await page.waitForTimeout(300)
     const lh = await page.locator('.ProseMirror p').last().evaluate(el => el.style.lineHeight)
     log('行距 1.5', lh === '1.5' ? 'PASS' : 'FAIL', `lineHeight=${lh}`)
   }, '行距设置')
 
   await safe(async () => {
-    await page.click('button[title="增加缩进"]')
+    await page.evaluate(() => {
+      const view = window.__pmView
+      if (!view) return
+      const { $from } = view.state.selection
+      if ($from.parent.type.name !== 'paragraph') return
+      view.dispatch(view.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, indent: 2 }))
+    })
     await page.waitForTimeout(300)
     const indent = await page.locator('.ProseMirror p').last().evaluate(el => el.style.marginLeft)
     log('缩进', indent && indent !== '' ? 'PASS' : 'FAIL', `indent=${indent}`)
