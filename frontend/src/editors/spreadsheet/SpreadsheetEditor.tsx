@@ -177,7 +177,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => sortByCol(true)} />
             <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => sortByCol(false)} />
             <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => {}} />
+            {/* MS Office 风格排序对话框 */}
+            <RibbonButton icon="⇅" label={t('sheet.customSort')} onClick={() => {
+              const col = prompt(t('sheet.customSortPrompt'), colName(active.c))
+              if (col) sortByCol(true)
+            }} title={t('sheet.customSortTitle')} />
+            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => {}} title={t('sheet.clearFilterTitle')} />
+            <RibbonButton icon="🔂" label={t('sheet.reapply')} onClick={() => {}} title={t('sheet.reapplyTitle')} />
           </RibbonGroup>
+          {/* MS Office 风格数据工具 */}
           <RibbonGroup label={t('sheet.dataTools')}>
             <div className="relative">
               <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => setShowValidPanel(!showValidPanel)} />
@@ -189,7 +197,34 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
                 </div>
               )}
             </div>
-            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => {}} />
+            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => {}} title={t('sheet.textToColumnsTitle')} />
+            <RibbonButton icon="🔗" label={t('sheet.removeDup')} onClick={() => {}} title={t('sheet.removeDupTitle')} />
+            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={() => {}} title={t('sheet.whatIfTitle')} />
+            <RibbonButton icon="🔮" label={t('sheet.forecast')} onClick={() => {}} title={t('sheet.forecastTitle')} />
+            <RibbonButton icon="📊" label={t('sheet.group')} onClick={() => {}} title={t('sheet.groupTitle')} />
+            <RibbonButton icon="⊟" label={t("sheet.ungroup")} onClick={() => {}} title={t('sheet.ungroupTitle')} />
+          </RibbonGroup>
+          {/* MS Office 风格获取和转换数据 */}
+          <RibbonGroup label={t('sheet.getTransform')}>
+            <RibbonButton icon="📥" label={t('sheet.fromWeb')} onClick={() => {}} title={t('sheet.fromWebTitle')} />
+            <RibbonButton icon="📄" label={t('sheet.fromText')} onClick={() => {}} title={t('sheet.fromTextTitle')} />
+            <RibbonButton icon="🗂" label={t('sheet.fromCsv')} onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = '.csv'
+              input.onchange = async () => {
+                const file = input.files?.[0]
+                if (!file) return
+                const text = await file.text()
+                const lines = text.split('\n').filter(Boolean)
+                lines.forEach((line, r) => {
+                  const cells = line.split(',')
+                  cells.forEach((val, c) => setCell(r, c, val.trim()))
+                })
+              }
+              input.click()
+            }} title={t('sheet.fromCsvTitle')} />
+            <RibbonButton icon="🔄" label={t('sheet.refresh')} onClick={() => {}} title={t('sheet.refreshTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.conditionalFormat')}>
             <div className="relative">
@@ -213,8 +248,25 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="+" label={t('sheet.zoomIn')} onClick={() => setZoom(Math.min(150, zoom + 25))} />
             <RibbonButton icon="▮" label="100%" onClick={() => setZoom(100)} />
           </RibbonGroup>
+          {/* MS Office 风格窗口 */}
           <RibbonGroup label={t('sheet.window')}>
-            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} />
+            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} title={t('sheet.freezeTitle')} />
+            <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => {}} title={t('sheet.splitTitle')} />
+            <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('sheet.newWindowTitle')} />
+            <RibbonButton icon="▦" label={t("sheet.arrange")} onClick={() => {}} title={t('sheet.arrangeTitle')} />
+          </RibbonGroup>
+          {/* MS Office 风格显示 */}
+          <RibbonGroup label={t('sheet.show')}>
+            <RibbonButton icon="📐" label={t('sheet.gridlines')} onClick={() => {}} active={true} title={t('sheet.gridlinesTitle')} />
+            <RibbonButton icon="🔤" label={t('sheet.headings')} onClick={() => {}} active={true} title={t('sheet.headingsTitle')} />
+            <RibbonButton icon="📊" label={t('sheet.formulaBar')} onClick={() => {}} active={true} title={t('sheet.formulaBarTitle')} />
+          </RibbonGroup>
+          {/* MS Office 风格工作簿视图 */}
+          <RibbonGroup label={t('sheet.workbookViews')}>
+            <RibbonButton icon="📄" label={t('sheet.normal')} onClick={() => {}} active={true} title={t('sheet.normalTitle')} />
+            <RibbonButton icon="🖨" label={t('sheet.pageBreakPreview')} onClick={() => {}} title={t('sheet.pageBreakTitle')} />
+            <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => {}} title={t('sheet.pageLayoutTitle')} />
+            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => {}} title={t('sheet.customViewsTitle')} />
           </RibbonGroup>
         </>)}
       </div>

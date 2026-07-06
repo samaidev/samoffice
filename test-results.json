@@ -4,25 +4,25 @@
   "fail": 0,
   "rate": "100.0%",
   "keyFailCount": 0,
-  "timestamp": "2026-07-06T03:58:03.386Z",
+  "timestamp": "2026-07-06T04:44:48.838Z",
   "results": [
     {
       "id": "S1",
       "name": "首页加载",
       "status": "PASS",
-      "ms": 1679
+      "ms": 2140
     },
     {
       "id": "S2",
       "name": "顶栏菜单按钮数 ≥ 4",
       "status": "PASS",
-      "ms": 13
+      "ms": 15
     },
     {
       "id": "S3",
       "name": "Tab 切换栏 ≥ 4",
       "status": "PASS",
-      "ms": 4
+      "ms": 5
     },
     {
       "id": "S4",
@@ -34,7 +34,7 @@
       "id": "S5",
       "name": "主题切换",
       "status": "PASS",
-      "ms": 722
+      "ms": 729
     },
     {
       "id": "S6",
@@ -46,13 +46,13 @@
       "id": "S7",
       "name": "底部状态栏含版本号",
       "status": "PASS",
-      "ms": 7
+      "ms": 4
     },
     {
       "id": "S8",
       "name": "Toast 提示",
       "status": "PASS",
-      "ms": 1585
+      "ms": 1614
     },
     {
       "id": "D1",
@@ -64,253 +64,253 @@
       "id": "D2",
       "name": "输入文本",
       "status": "PASS",
-      "ms": 621
+      "ms": 550
     },
     {
       "id": "D3",
       "name": "工具栏按钮数 ≥ 10",
       "status": "PASS",
-      "ms": 8
+      "ms": 3
     },
     {
       "id": "D4",
       "name": "加粗 (B)",
       "status": "PASS",
-      "ms": 477
+      "ms": 449
     },
     {
       "id": "D5",
       "name": "斜体 (I)",
       "status": "PASS",
-      "ms": 461
+      "ms": 458
     },
     {
       "id": "D6",
       "name": "下划线 (U)",
       "status": "PASS",
-      "ms": 506
+      "ms": 441
     },
     {
       "id": "D7",
       "name": "标题1 (H1)",
       "status": "PASS",
-      "ms": 533
+      "ms": 594
     },
     {
       "id": "D8",
       "name": "无序列表",
       "status": "PASS",
-      "ms": 483
+      "ms": 525
     },
     {
       "id": "D9",
       "name": "有序列表",
       "status": "PASS",
-      "ms": 506
+      "ms": 499
     },
     {
       "id": "D10",
       "name": "引用块",
       "status": "PASS",
-      "ms": 559
+      "ms": 577
     },
     {
       "id": "D11",
       "name": "代码块",
       "status": "PASS",
-      "ms": 522
+      "ms": 503
     },
     {
       "id": "D12",
       "name": "对齐方式",
       "status": "PASS",
-      "ms": 698
+      "ms": 729
     },
     {
       "id": "D13",
       "name": "查找替换 (Ctrl+F)",
       "status": "PASS",
-      "ms": 642
+      "ms": 631
     },
     {
       "id": "D14",
       "name": "撤销 (Ctrl+Z)",
       "status": "PASS",
-      "ms": 636
+      "ms": 700
     },
     {
       "id": "D15",
       "name": "拼写检查 (英文)",
       "status": "PASS",
-      "ms": 2189
+      "ms": 2175
     },
     {
       "id": "D16",
       "name": "拼写检查 (中文无误报)",
       "status": "PASS",
-      "ms": 2154
+      "ms": 2172
     },
     {
       "id": "D18",
       "name": "Ribbon Tab 切换",
       "status": "PASS",
-      "ms": 1117
+      "ms": 1098
     },
     {
       "id": "D19",
       "name": "缩放",
       "status": "PASS",
-      "ms": 832
+      "ms": 848
     },
     {
       "id": "P1",
       "name": "切换到表格 Tab",
       "status": "PASS",
-      "ms": 873
+      "ms": 928
     },
     {
       "id": "P2",
       "name": "默认行列 (≥10行 ≥5列)",
       "status": "PASS",
-      "ms": 54
+      "ms": 49
     },
     {
       "id": "P3",
       "name": "单元格输入",
       "status": "PASS",
-      "ms": 508
+      "ms": 522
     },
     {
       "id": "P5",
       "name": "切换 Sheet",
       "status": "PASS",
-      "ms": 410
+      "ms": 387
     },
     {
       "id": "P6",
       "name": "新建工作表",
       "status": "PASS",
-      "ms": 421
+      "ms": 391
     },
     {
       "id": "P7",
       "name": "求和函数",
       "status": "PASS",
-      "ms": 1933
+      "ms": 2071
     },
     {
       "id": "P10",
       "name": "添加行",
       "status": "PASS",
-      "ms": 789
+      "ms": 793
     },
     {
       "id": "L1",
       "name": "切换到演示 Tab",
       "status": "PASS",
-      "ms": 250
+      "ms": 479
     },
     {
       "id": "L2",
       "name": "默认幻灯片 (≥1)",
       "status": "PASS",
-      "ms": 16
+      "ms": 17
     },
     {
       "id": "L3",
       "name": "新增幻灯片",
       "status": "PASS",
-      "ms": 937
+      "ms": 900
     },
     {
       "id": "L4",
       "name": "标题编辑",
       "status": "PASS",
-      "ms": 389
+      "ms": 419
     },
     {
       "id": "M1",
       "name": "切换到 MD Tab",
       "status": "PASS",
-      "ms": 1030
+      "ms": 1059
     },
     {
       "id": "M2",
       "name": "分栏预览",
       "status": "PASS",
-      "ms": 4
+      "ms": 10
     },
     {
       "id": "M3",
       "name": "代码高亮",
       "status": "PASS",
-      "ms": 633
+      "ms": 756
     },
     {
       "id": "M4",
       "name": "表格渲染",
       "status": "PASS",
-      "ms": 590
+      "ms": 588
     },
     {
       "id": "M5",
       "name": "实时预览",
       "status": "PASS",
-      "ms": 589
+      "ms": 581
     },
     {
       "id": "M6",
       "name": "HTML Tab",
       "status": "PASS",
-      "ms": 878
+      "ms": 902
     },
     {
       "id": "M7",
       "name": "HTML 预览渲染",
       "status": "PASS",
-      "ms": 591
+      "ms": 587
     },
     {
       "id": "PDF1",
       "name": "切换到 PDF Tab",
       "status": "PASS",
-      "ms": 713
+      "ms": 698
     },
     {
       "id": "PDF2",
       "name": "PDF 打开按钮可见",
       "status": "PASS",
-      "ms": 7
+      "ms": 9
     },
     {
       "id": "PDF3",
       "name": "PDF 空状态文案",
       "status": "PASS",
-      "ms": 4
+      "ms": 6
     },
     {
       "id": "PDF4",
       "name": "PDF 加载本地 PDF 文件",
       "status": "PASS",
-      "ms": 2210
+      "ms": 2226
     },
     {
       "id": "PDF5",
       "name": "PDF 翻页",
       "status": "PASS",
-      "ms": 1949
+      "ms": 1894
     },
     {
       "id": "PDF6",
       "name": "PDF 缩放",
       "status": "PASS",
-      "ms": 1157
+      "ms": 1176
     },
     {
       "id": "A1",
       "name": "健康检查",
       "status": "PASS",
-      "ms": 3
+      "ms": 2
     },
     {
       "id": "A2",
@@ -328,19 +328,19 @@
       "id": "A4",
       "name": "中文拼写检查 (无误报)",
       "status": "PASS",
-      "ms": 2
+      "ms": 1
     },
     {
       "id": "A5",
       "name": "纠错建议 (helo)",
       "status": "PASS",
-      "ms": 3
+      "ms": 1
     },
     {
       "id": "A6",
       "name": "用户词库学习",
       "status": "PASS",
-      "ms": 796
+      "ms": 983
     },
     {
       "id": "A7",
@@ -352,7 +352,7 @@
       "id": "A8",
       "name": "PDF 导出",
       "status": "PASS",
-      "ms": 84
+      "ms": 26
     },
     {
       "id": "A9",
@@ -364,7 +364,7 @@
       "id": "A10",
       "name": "不存在路由 → 404",
       "status": "PASS",
-      "ms": 8
+      "ms": 1
     },
     {
       "id": "A11",
@@ -376,13 +376,13 @@
       "id": "R1",
       "name": "移动端首页",
       "status": "PASS",
-      "ms": 1440
+      "ms": 1560
     },
     {
       "id": "R2",
       "name": "汉堡菜单",
       "status": "PASS",
-      "ms": 598
+      "ms": 593
     },
     {
       "id": "R3",
@@ -394,13 +394,13 @@
       "id": "R4",
       "name": "移动端演示",
       "status": "PASS",
-      "ms": 1644
+      "ms": 1639
     },
     {
       "id": "R5",
       "name": "移动端输入文档",
       "status": "PASS",
-      "ms": 919
+      "ms": 946
     },
     {
       "id": "Q1",
@@ -418,55 +418,55 @@
       "id": "E1.1",
       "name": "超长文本 (5000 字符)",
       "status": "PASS",
-      "ms": 13443
+      "ms": 12653
     },
     {
       "id": "E1.2",
       "name": "清空编辑器",
       "status": "PASS",
-      "ms": 289
+      "ms": 293
     },
     {
       "id": "E1.3",
       "name": "Emoji 输入",
       "status": "PASS",
-      "ms": 309
+      "ms": 325
     },
     {
       "id": "E1.4",
       "name": "CJK + 英文 + 阿拉伯文混排",
       "status": "PASS",
-      "ms": 334
+      "ms": 354
     },
     {
       "id": "E2.1",
       "name": "连续快速点击加粗 5 次",
       "status": "PASS",
-      "ms": 474
+      "ms": 593
     },
     {
       "id": "E2.2",
       "name": "无选区时点击斜体",
       "status": "PASS",
-      "ms": 76
+      "ms": 74
     },
     {
       "id": "E2.3",
       "name": "全选后依次应用 粗/斜/下",
       "status": "PASS",
-      "ms": 1197
+      "ms": 1224
     },
     {
       "id": "E3.2",
       "name": "搜索特殊字符 .*+?",
       "status": "PASS",
-      "ms": 1074
+      "ms": 1321
     },
     {
       "id": "E4.1",
       "name": "纯数字文本",
       "status": "PASS",
-      "ms": 13
+      "ms": 2
     },
     {
       "id": "E4.3",
@@ -478,19 +478,19 @@
       "id": "E4.5",
       "name": "空文本",
       "status": "PASS",
-      "ms": 1
+      "ms": 0
     },
     {
       "id": "E5.1",
       "name": "缺 text 参数",
       "status": "PASS",
-      "ms": 0
+      "ms": 1
     },
     {
       "id": "E5.2",
       "name": "缺 lang 参数",
       "status": "PASS",
-      "ms": 1
+      "ms": 0
     },
     {
       "id": "E5.3",
@@ -508,13 +508,13 @@
       "id": "E5.6",
       "name": "超长 word (200字符) suggest",
       "status": "PASS",
-      "ms": 1
+      "ms": 3
     },
     {
       "id": "E5.7",
       "name": "重复学习同一词 10 次",
       "status": "PASS",
-      "ms": 10462
+      "ms": 9848
     },
     {
       "id": "E5.8",
@@ -526,91 +526,91 @@
       "id": "E5.10",
       "name": "不存在的本地路径",
       "status": "PASS",
-      "ms": 1
+      "ms": 0
     },
     {
       "id": "E6.1",
       "name": "单元格超长内容 (200 字符)",
       "status": "PASS",
-      "ms": 504
+      "ms": 500
     },
     {
       "id": "E6.2",
       "name": "单元格输入 =1+2 公式",
       "status": "PASS",
-      "ms": 470
+      "ms": 497
     },
     {
       "id": "E7.1",
       "name": "标题输入 200 字符",
       "status": "PASS",
-      "ms": 414
+      "ms": 423
     },
     {
       "id": "E7.2",
       "name": "连续新增 5 张幻灯片",
       "status": "PASS",
-      "ms": 1693
+      "ms": 1718
     },
     {
       "id": "E8.1",
       "name": "Markdown 含 <script>",
       "status": "PASS",
-      "ms": 879
+      "ms": 890
     },
     {
       "id": "E8.3",
       "name": "超长 Markdown (1000 行)",
       "status": "PASS",
-      "ms": 608
+      "ms": 602
     },
     {
       "id": "E8.4",
       "name": "嵌套代码块",
       "status": "PASS",
-      "ms": 697
+      "ms": 723
     },
     {
       "id": "E8.5",
       "name": "表格语法错误",
       "status": "PASS",
-      "ms": 568
+      "ms": 583
     },
     {
       "id": "E8.2",
       "name": "HTML 含 <script>alert(1)</script>",
       "status": "PASS",
-      "ms": 1451
+      "ms": 1471
     },
     {
       "id": "E9.1",
       "name": "极小视口 320×400 首页",
       "status": "PASS",
-      "ms": 1123
+      "ms": 1181
     },
     {
       "id": "E9.2",
       "name": "极小视口汉堡菜单可见",
       "status": "PASS",
-      "ms": 3
+      "ms": 4
     },
     {
       "id": "E10.1",
       "name": "快速切换 6 个 Tab",
       "status": "PASS",
-      "ms": 1630
+      "ms": 1732
     },
     {
       "id": "E10.2",
       "name": "主题连续切换 10 次",
       "status": "PASS",
-      "ms": 1469
+      "ms": 1522
     },
     {
       "id": "E10.3",
       "name": "语言连续切换 10 次",
       "status": "PASS",
-      "ms": 998
+      "ms": 1112
     }
   ],
   "consoleErrors": []

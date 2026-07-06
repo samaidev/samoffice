@@ -406,6 +406,59 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="⇄" label="RTL" onClick={() => exec('toggleRTL')} active={activeAttrs.rtl} />
             <RibbonButton icon="💧" label={t('doc.watermark')} onClick={applyWatermark} />
           </RibbonGroup>
+          {/* MS Office 风格页面设置 */}
+          <RibbonGroup label={t('doc.pageSetup')}>
+            <div className="flex flex-col gap-1">
+              <select
+                data-testid="page-size-select"
+                value={activeAttrs.pageSize || 'A4'}
+                onChange={e => setParaAttr('pageSize', e.target.value)}
+                className="text-xs rounded-md px-2 py-1"
+                style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                title={t('doc.pageSize')}
+              >
+                <option value="A4">A4</option>
+                <option value="A3">A3</option>
+                <option value="A5">A5</option>
+                <option value="B5">B5</option>
+                <option value="Letter">Letter</option>
+                <option value="Legal">Legal</option>
+              </select>
+              <select
+                data-testid="orientation-select"
+                value={activeAttrs.orientation || 'portrait'}
+                onChange={e => setParaAttr('orientation', e.target.value)}
+                className="text-xs rounded-md px-2 py-1"
+                style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                title={t('doc.orientation')}
+              >
+                <option value="portrait">{t('doc.portrait')}</option>
+                <option value="landscape">{t('doc.landscape')}</option>
+              </select>
+            </div>
+            <RibbonButton icon="📄" label={t('doc.margins')} onClick={() => {
+              const preset = prompt(t('doc.marginsPrompt') + ' (top,bottom,left,right cm)', '2.54,2.54,2.54,2.54')
+              if (preset) setParaAttr('margins', preset)
+            }} title={t('doc.marginsTitle')} />
+            <RibbonButton icon="ǁ" label={t('doc.columns')} onClick={() => {
+              const n = prompt(t('doc.columnsPrompt'), '2')
+              if (n) setParaAttr('columns', parseInt(n) || 1)
+            }} title={t('doc.columnsTitle')} />
+            <RibbonButton icon="🔢" label={t('doc.lineNumber')} onClick={() => setParaAttr('lineNumber', !activeAttrs.lineNumber)} active={activeAttrs.lineNumber} title={t('doc.lineNumberTitle')} />
+            <RibbonButton icon="📑" label={t('doc.pageBreakInsert')} onClick={() => exec('pageBreak')} title={t('doc.pageBreakInsertTitle')} />
+          </RibbonGroup>
+          {/* 页眉页脚 */}
+          <RibbonGroup label={t('doc.headerFooter')}>
+            <RibbonButton icon="📄" label={t('doc.header')} onClick={() => {
+              const h = prompt(t('doc.headerPrompt'), '')
+              if (h !== null) setParaAttr('header', h)
+            }} title={t('doc.headerTitle')} />
+            <RibbonButton icon="📃" label={t('doc.footer')} onClick={() => {
+              const f = prompt(t('doc.footerPrompt'), '')
+              if (f !== null) setParaAttr('footer', f)
+            }} title={t('doc.footerTitle')} />
+            <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => setParaAttr('pageNum', !activeAttrs.pageNum)} active={activeAttrs.pageNum} title={t('doc.pageNumTitle')} />
+          </RibbonGroup>
           <RibbonGroup label="公文 GB/T 9704">
             <RibbonButton icon="📜" label="公文模板" onClick={() => {
               // 应用政府公文标准排版: 3号仿宋 + 固定28磅 + 首行缩进2字符
@@ -420,15 +473,52 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.proofing')}>
             <RibbonButton icon="🔍" label={t('doc.findReplace')} onClick={() => setSearchOpen(!searchOpen)} />
             <RibbonButton icon={spellErrors.length > 0 ? '❗' : '✓'} label={spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {}} />
+            <RibbonButton icon="🌐" label={t('doc.translate')} onClick={() => {
+              const text = viewRef.current?.state.doc.textContent || ''
+              if (text) window.open(`https://translate.google.com/?text=${encodeURIComponent(text.slice(0, 500))}`, '_blank')
+            }} title={t('doc.translateTitle')} />
+            <RibbonButton icon="🔊" label={t('doc.readAloud')} onClick={() => {
+              const text = viewRef.current?.state.doc.textContent || ''
+              if (text && 'speechSynthesis' in window) {
+                const u = new SpeechSynthesisUtterance(text.slice(0, 1000))
+                u.lang = 'zh-CN'
+                speechSynthesis.speak(u)
+              }
+            }} title={t('doc.readAloudTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.revision')}>
             <RibbonButton icon="✏️" label={t('doc.revisionMode')} onClick={() => setTrackChanges(!trackChanges)} active={trackChanges} />
             <RibbonButton icon="💬" label={t('doc.annotation')} onClick={() => exec('comment')} />
+            <RibbonButton icon="📥" label={t('doc.acceptAll')} onClick={() => setTrackChanges(false)} title={t('doc.acceptAllTitle')} />
+            <RibbonButton icon="📤" label={t('doc.rejectAll')} onClick={() => setTrackChanges(false)} title={t('doc.rejectAllTitle')} />
           </RibbonGroup>
+          {/* MS Office 风格字数统计 (详细) */}
           <RibbonGroup label={t('doc.wordCount')}>
-            <div className="flex flex-col items-center justify-center px-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              <span style={{ fontSize: '20px', fontWeight: 700, color: 'var(--color-text)' }}>{viewRef.current?.state.doc.textContent.length || 0}</span><span>{t('app.chars')}</span>
+            <div className="flex flex-col items-center justify-center px-3 py-1 text-xs rounded-md" style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-alt)' }}>
+              <div className="flex gap-3 items-baseline">
+                <div className="text-center">
+                  <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--color-primary)' }}>{viewRef.current?.state.doc.textContent.length || 0}</div>
+                  <div style={{ fontSize: '9px' }}>{t('doc.chars')}</div>
+                </div>
+                <div className="text-center">
+                  <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--color-text)' }}>{(viewRef.current?.state.doc.textContent || '').split(/\s+/).filter(Boolean).length}</div>
+                  <div style={{ fontSize: '9px' }}>{t('doc.words')}</div>
+                </div>
+                <div className="text-center">
+                  <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--color-text)' }}>{(viewRef.current?.state.doc.textContent || '').split(/[。！？.!?]+/).filter(Boolean).length}</div>
+                  <div style={{ fontSize: '9px' }}>{t('doc.sentences')}</div>
+                </div>
+                <div className="text-center">
+                  <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--color-text)' }}>{(viewRef.current?.state.doc.textContent || '').split(/\n+/).filter(Boolean).length}</div>
+                  <div style={{ fontSize: '9px' }}>{t('doc.paragraphs')}</div>
+                </div>
+              </div>
             </div>
+          </RibbonGroup>
+          {/* 比较与保护 */}
+          <RibbonGroup label={t('doc.compare')}>
+            <RibbonButton icon="⚖️" label={t('doc.compare')} onClick={() => alert(t('doc.comparePlaceholder'))} title={t('doc.compareTitle')} />
+            <RibbonButton icon="🔒" label={t('doc.protect')} onClick={() => setParaAttr('protected', !activeAttrs.protected)} active={activeAttrs.protected} title={t('doc.protectTitle')} />
           </RibbonGroup>
         </>)}
 
@@ -438,6 +528,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <div className="flex flex-col items-center px-2"><span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-text)' }}>{zoom}%</span></div>
             <RibbonButton icon="+" label={t('doc.zoomIn')} onClick={() => setZoom(Math.min(150, zoom + 25))} />
             <RibbonButton icon="▮" label="100%" onClick={() => setZoom(100)} />
+          </RibbonGroup>
+          {/* MS Office 风格视图模式 */}
+          <RibbonGroup label={t('doc.viewMode')}>
+            <RibbonButton icon="📄" label={t('doc.printLayout')} onClick={() => setParaAttr('viewMode', 'print')} active={activeAttrs.viewMode === 'print' || !activeAttrs.viewMode} title={t('doc.printLayoutTitle')} />
+            <RibbonButton icon="📖" label={t('doc.readMode')} onClick={() => setParaAttr('viewMode', 'read')} active={activeAttrs.viewMode === 'read'} title={t('doc.readModeTitle')} />
+            <RibbonButton icon="🕸" label={t('doc.webLayout')} onClick={() => setParaAttr('viewMode', 'web')} active={activeAttrs.viewMode === 'web'} title={t('doc.webLayoutTitle')} />
+            <RibbonButton icon="📝" label={t('doc.outline')} onClick={() => setParaAttr('viewMode', 'outline')} active={activeAttrs.viewMode === 'outline'} title={t('doc.outlineTitle')} />
+          </RibbonGroup>
+          {/* 显示标记 */}
+          <RibbonGroup label={t('doc.show')}>
+            <RibbonButton icon="📏" label={t('doc.ruler')} onClick={() => setParaAttr('ruler', !activeAttrs.ruler)} active={activeAttrs.ruler} title={t('doc.rulerTitle')} />
+            <RibbonButton icon="📐" label={t('doc.gridlines')} onClick={() => setParaAttr('gridlines', !activeAttrs.gridlines)} active={activeAttrs.gridlines} title={t('doc.gridlinesTitle')} />
+            <RibbonButton icon="🗂" label={t('doc.navPane')} onClick={() => setParaAttr('navPane', !activeAttrs.navPane)} active={activeAttrs.navPane} title={t('doc.navPaneTitle')} />
+          </RibbonGroup>
+          {/* 窗口 */}
+          <RibbonGroup label={t('doc.window')}>
+            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('doc.newWindowTitle')} />
+            <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setParaAttr('split', !activeAttrs.split)} active={activeAttrs.split} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintPreview(!printPreview)} /></RibbonGroup>
         </>)}

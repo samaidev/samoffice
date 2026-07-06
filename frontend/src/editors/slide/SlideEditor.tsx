@@ -264,6 +264,34 @@ export function SlideEditor() {
         </>)}
 
         {ribbonTab === 'design' && (<>
+          {/* MS Office 风格主题 */}
+          <RibbonGroup label={t('slide.theme')}>
+            <div className="flex items-center gap-1 px-1">
+              {[
+                { id: 'office', name: 'Office', bg: '#ffffff', c1: '#1F4E79', c2: '#2E75B6' },
+                { id: 'facets', name: 'Facets', bg: '#0F172A', c1: '#6366F1', c2: '#22D3EE' },
+                { id: 'gallery', name: 'Gallery', bg: '#431407', c1: '#F59E0B', c2: '#EC4899' },
+                { id: 'slice', name: 'Slice', bg: '#0C4A6E', c1: '#06B6D4', c2: '#FBBF24' },
+                { id: 'depth', name: 'Depth', bg: '#064E3B', c1: '#10B981', c2: '#84CC16' },
+              ].map(th => (
+                <button key={th.id} onClick={() => updateActive({ bg: th.bg })} className="w-12 h-12 rounded-lg border-2 flex flex-col items-center justify-center text-[8px]"
+                  style={{ background: th.bg, borderColor: current.bg === th.bg ? 'var(--color-primary)' : 'var(--color-border)', color: th.bg === '#ffffff' ? '#000' : '#fff' }}
+                  title={th.name}>
+                  <div style={{ background: th.c1, width: '80%', height: '4px', borderRadius: '2px', marginBottom: '2px' }} />
+                  <div style={{ background: th.c2, width: '80%', height: '4px', borderRadius: '2px' }} />
+                </button>
+              ))}
+            </div>
+          </RibbonGroup>
+          {/* MS Office 风格变体 */}
+          <RibbonGroup label={t('slide.variants')}>
+            <div className="flex items-center gap-1 px-1">
+              {['#1F4E79', '#2E75B6', '#5B9BD5', '#9DC3E6'].map(c => (
+                <button key={c} onClick={() => updateActive({ bg: c })} className="w-8 h-8 rounded-md border-2"
+                  style={{ background: c, borderColor: current.bg === c ? 'var(--color-primary)' : 'var(--color-border)' }} />
+              ))}
+            </div>
+          </RibbonGroup>
           <RibbonGroup label={t('slide.background')}>
             <div className="flex items-center gap-1 px-2">
               {PRESET_COLORS.map(c => (
@@ -271,6 +299,29 @@ export function SlideEditor() {
                   style={{ background: c.value, borderColor: current.bg === c.value ? 'var(--color-primary)' : 'var(--color-border)' }} title={c.name} />
               ))}
             </div>
+            <RibbonButton icon="🎨" label={t('slide.bgFormat')} onClick={() => {
+              const color = prompt(t('slide.bgFormatPrompt'), current.bg)
+              if (color) updateActive({ bg: color })
+            }} title={t('slide.bgFormatTitle')} />
+            <RibbonButton icon="🖼" label={t('slide.bgImage')} onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'image/*'
+              input.onchange = () => {
+                const file = input.files?.[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = () => updateActive({ bg: `url(${reader.result})` })
+                reader.readAsDataURL(file)
+              }
+              input.click()
+            }} title={t('slide.bgImageTitle')} />
+          </RibbonGroup>
+          {/* MS Office 风格幻灯片大小 */}
+          <RibbonGroup label={t('slide.slideSize')}>
+            <RibbonButton icon="📺" label={t('slide.widescreen')} onClick={() => {}} active={true} title={t('slide.widescreenTitle')} />
+            <RibbonButton icon="🖥" label={t('slide.standard')} onClick={() => {}} title={t('slide.standardTitle')} />
+            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={() => {}} title={t('slide.customSizeTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.shapeStyle')}>
             <RibbonButton icon="🌈" label={t('slide.gradient')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { gradient: '6366f1,818cf8' }) }} />
