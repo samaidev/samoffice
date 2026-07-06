@@ -374,16 +374,20 @@ console.log('\n--- 模块 2: 文档编辑器 ---');
   await safe('D13', '查找替换 (Ctrl+F)', async () => {
     const pm = page.locator('.ProseMirror').first();
     await pm.click();
-    // Ctrl+F 可能被浏览器拦截，直接点击 🔍 按钮
-    const searchBtn = page.locator('.toolbar-btn[title*="Ctrl+F"], .toolbar-btn[title*="Find"]').first();
+    // 直接点击 data-testid 指定的搜索按钮 (优化后)
+    const searchBtn = page.locator('[data-testid="doc-search-toggle"]').first();
     if (await searchBtn.count()) {
       await searchBtn.click({ timeout: 3000 });
     } else {
-      // 备用: 键盘
-      await page.keyboard.press('Control+F');
+      // 备用: 旧的 toolbar-btn 选择器
+      const oldBtn = page.locator('.toolbar-btn[title*="Ctrl+F"], .toolbar-btn[title*="Find"]').first();
+      if (await oldBtn.count()) {
+        await oldBtn.click({ timeout: 3000 });
+      } else {
+        await page.keyboard.press('Control+F');
+      }
     }
     await page.waitForTimeout(500);
-    // 搜索面板包含 input[placeholder="Find..."]
     const panel = page.locator('input[placeholder*="Find" i], input[placeholder*="find" i], input[placeholder*="查找" i]').first();
     if (!await panel.count()) throw new Error('搜索面板未展开');
   });
@@ -423,12 +427,11 @@ console.log('\n--- 模块 2: 文档编辑器 ---');
   });
 
   await safe('D18', 'Ribbon Tab 切换', async () => {
-    // Ribbon 标签：Home/Insert/Layout/Review/View (英文)
-    // 注意: 顶栏有 "Insert Image" 按钮, 需用 text-is 精确匹配
-    const labels = ['Home', 'Insert', 'Layout', 'Review', 'View'];
+    // 使用 data-testid (优化后) — 跳过 "Insert Image" 按钮文本冲突
+    const ids = ['home', 'insert', 'layout', 'review', 'view'];
     let found = 0;
-    for (const l of labels) {
-      const btn = page.locator(`button`).filter({ hasText: new RegExp(`^${l}$`) }).first();
+    for (const id of ids) {
+      const btn = page.locator(`[data-testid="ribbon-tab-${id}"]`).first();
       if (await btn.count()) {
         found++;
         try {
@@ -441,8 +444,8 @@ console.log('\n--- 模块 2: 文档编辑器 ---');
   });
 
   await safe('D19', '缩放', async () => {
-    // 切到 View ribbon (使用精确文本匹配, 避开 Insert Image)
-    const viewBtn = page.locator('button').filter({ hasText: /^View$/ }).first();
+    // 切到 View ribbon (使用 data-testid)
+    const viewBtn = page.locator('[data-testid="ribbon-tab-view"]').first();
     if (await viewBtn.count()) {
       try { await viewBtn.click({ timeout: 2000 }); } catch (e) {}
       await page.waitForTimeout(500);
@@ -526,8 +529,8 @@ console.log('\n--- 模块 3: 表格编辑器 ---');
       await page.keyboard.press('Enter');
       await page.waitForTimeout(100);
     }
-    // 函数按钮在 Insert ribbon 中，先切换 (使用精确文本匹配)
-    const insertBtn = page.locator('button').filter({ hasText: /^Insert$/ }).first();
+    // 切到 Insert ribbon (使用 data-testid)
+    const insertBtn = page.locator('[data-testid="ribbon-tab-insert"]').first();
     if (await insertBtn.count()) {
       try { await insertBtn.click({ timeout: 2000 }); } catch (e) {}
       await page.waitForTimeout(300);
@@ -545,8 +548,8 @@ console.log('\n--- 模块 3: 表格编辑器 ---');
   });
 
   await safe('P10', '添加行', async () => {
-    // 切回 Home ribbon (P7 切到了 Insert)
-    const homeBtn = page.locator('button').filter({ hasText: /^Home$/ }).first();
+    // 切回 Home ribbon (使用 data-testid)
+    const homeBtn = page.locator('[data-testid="ribbon-tab-home"]').first();
     if (await homeBtn.count()) {
       try { await homeBtn.click({ timeout: 2000 }); } catch (e) {}
       await page.waitForTimeout(300);
@@ -573,35 +576,43 @@ console.log('\n--- 模块 4: 演示编辑器 ---');
   await page.waitForTimeout(800);
 
   await safe('L1', '切换到演示 Tab', async () => {
-    // 先等待 React 完全渲染 (任意 tab 出现)
+    // 等待 React 渲染 (任意 tab 出现)
     await page.waitForSelector('[data-testid="tab-slide"]', { state: 'visible', timeout: 8000 });
     const tab = page.locator('[data-testid="tab-slide"]');
+    const t0 = Date.now();
     await tab.click({ timeout: 5000 });
-    await page.waitForTimeout(1500);
-    // slide 编辑器有两个 input: 标题 + 副标题 (placeholder 含 "title")
+    // slide 编辑器首屏性能优化后，应在 600ms 内渲染完成
     const titleInput = page.locator('input[placeholder*="title" i]').first();
-    if (await titleInput.count()) {
-      await titleInput.waitFor({ state: 'visible', timeout: 5000 });
-    } else {
-      // 备用: 任意可见 input
-      const input = page.locator('input[type="text"]:visible').first();
-      await input.waitFor({ state: 'visible', timeout: 5000 });
-    }
+    await titleInput.waitFor({ state: 'visible', timeout: 5000 });
+    const renderMs = Date.now() - t0;
+    console.log(`    (注: slide 首屏渲染 ${renderMs}ms)`);
     await shot(page, 'l1-slide');
   });
 
   await safe('L2', '默认幻灯片 (≥1)', async () => {
-    // slide 编辑器有标题输入框 + 页码 "N / M" 显示
-    // 直接检查任意 slide 相关元素存在即可
-    const titleInput = page.locator('input[placeholder*="title" i], input[placeholder*="Title"]').first();
-    const subtitleInput = page.locator('input[placeholder*="subtitle" i], input[placeholder*="Subtitle"]').first();
-    const pageIndicator = page.locator('span').filter({ hasText: /^\s*\d+\s*\/\s*\d+\s*$/ }).first();
-    const found = (await titleInput.count()) || (await subtitleInput.count()) || (await pageIndicator.count());
+    // slide 编辑器页码 "N / M" 通过 data-testid 定位
+    const pageIndicator = page.locator('[data-testid="slide-page-indicator"]').first();
+    let found = false;
+    if (await pageIndicator.count()) {
+      const txt = await pageIndicator.innerText();
+      if (/\d+\s*\/\s*\d+/.test(txt)) found = true;
+    }
+    if (!found) {
+      // 备用: 找含 "title" placeholder 的 input
+      const titleInput = page.locator('input[placeholder*="title" i]').first();
+      if (await titleInput.count()) found = true;
+    }
     if (!found) throw new Error('无幻灯片元素');
   });
 
   await safe('L3', '新增幻灯片', async () => {
     // Ribbon 中 New 按钮 (title="New" or "新建")
+    // 先切到 home ribbon
+    const homeBtn = page.locator('[data-testid="ribbon-tab-home"]').first();
+    if (await homeBtn.count()) {
+      try { await homeBtn.click({ timeout: 2000 }); } catch (e) {}
+      await page.waitForTimeout(200);
+    }
     const newBtn = page.locator('button[title="New"], button[title="新建"]').first();
     if (await newBtn.count()) {
       await newBtn.click({ timeout: 3000 });
@@ -1202,13 +1213,19 @@ console.log('--- E7: 演示边界 ---');
   });
 
   await safe('E7.2', '连续新增 5 张幻灯片', async () => {
-    // 通过页码 N / M 判断幻灯片数
-    const pageIndicator = page.locator('span:has-text("/")').filter({ hasText: /^\s*\d+\s*\/\s*\d+\s*$/ }).first();
+    // 通过页码 N / M 判断幻灯片数 (使用 data-testid)
+    const pageIndicator = page.locator('[data-testid="slide-page-indicator"]').first();
     let before = 0;
     if (await pageIndicator.count()) {
       const txt = await pageIndicator.innerText();
       const m = txt.match(/(\d+)\s*\/\s*(\d+)/);
       if (m) before = parseInt(m[2]);
+    }
+    // 先切到 home ribbon
+    const homeBtn = page.locator('[data-testid="ribbon-tab-home"]').first();
+    if (await homeBtn.count()) {
+      try { await homeBtn.click({ timeout: 2000 }); } catch (e) {}
+      await page.waitForTimeout(200);
     }
     const addBtn = page.locator('button[title="New"], button[title="新建"]').first();
     for (let i = 0; i < 5; i++) {

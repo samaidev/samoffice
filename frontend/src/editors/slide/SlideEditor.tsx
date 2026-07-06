@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo, memo } from 'react'
 import { useI18n } from '../../i18n'
 
 interface Slide {
@@ -8,6 +8,41 @@ interface Slide {
   shapes: ShapeItem[]; artTexts: ArtTextItem[]
   animations: AnimItem[]
 }
+
+// 静态常量在组件外定义，避免每次渲染重建 (perf: 首屏性能优化)
+const SHAPE_DEFS = [
+  { type: 'rect', icon: '▭' }, { type: 'roundRect', icon: '▢' },
+  { type: 'ellipse', icon: '⬭' }, { type: 'triangle', icon: '△' },
+  { type: 'diamond', icon: '◇' }, { type: 'rightArrow', icon: '→' },
+  { type: 'star5', icon: '★' }, { type: 'hexagon', icon: '⬡' },
+  { type: 'pentagon', icon: '⬠' }, { type: 'heart', icon: '♥' },
+  { type: 'cloud', icon: '☁' }, { type: 'callout', icon: '💬' },
+] as const
+
+const LAYOUT_DEFS = [
+  { id: 'title', icon: '🎯' }, { id: 'content', icon: '📝' }, { id: 'blank', icon: '⬜' },
+] as const
+
+const PRESET_COLOR_DEFS = [
+  '#ffffff', '#f8fafc', '#fef3c7', '#dbeafe', '#dcfce7', '#fce7f3', '#1e293b', '#312e81',
+] as const
+
+const TRANSITION_DEFS = [
+  '', 'fade', 'push', 'wipe', 'cover', 'cut', 'zoom', 'morph',
+] as const
+
+const ENTRANCE_ANIM_DEFS = ['fade', 'fly', 'zoom', 'wipe', 'bounce'] as const
+const EMPHASIS_ANIM_DEFS = ['pulse', 'spin'] as const
+const EXIT_ANIM_DEFS = ['fade', 'fly', 'zoom'] as const
+
+const ART_PRESET_DEFS = [
+  { color: '#4f46e5', gradient: '4f46e5,818cf8', shadow: true },
+  { color: '#3b82f6', outline: '1e40af', glow: true },
+  { color: '#10b981', glow: true, gradient: '10b981,34d399' },
+  { color: '#f59e0b', shadow: true, gradient: 'f59e0b,fbbf24' },
+  { color: '#ef4444', shadow: true, outline: '991b1b' },
+  { color: '#ffffff', shadow: true },
+] as const
 
 interface ShapeItem {
   type: string; x: number; y: number; w: number; h: number
@@ -51,50 +86,15 @@ function RibbonGroup({ label, children }: any) {
 export function SlideEditor() {
   const { t } = useI18n()
 
-  const LAYOUTS = [
-    { id: 'title', name: t('slide.layout.title'), icon: '🎯' }, { id: 'content', name: t('slide.layout.content'), icon: '📝' }, { id: 'blank', name: t('slide.layout.blank'), icon: '⬜' },
-  ] as const
-
-  const PRESET_COLORS = [
-    { name: t('color.white'), value: '#ffffff' }, { name: t('color.lightGray'), value: '#f8fafc' }, { name: t('color.beige'), value: '#fef3c7' },
-    { name: t('color.skyBlue'), value: '#dbeafe' }, { name: t('color.mint'), value: '#dcfce7' }, { name: t('color.pink'), value: '#fce7f3' },
-    { name: t('color.darkGray'), value: '#1e293b' }, { name: t('color.indigo'), value: '#312e81' },
-  ]
-
-  const TRANSITIONS = [
-    { id: '', name: t('transition.none') }, { id: 'fade', name: t('transition.fade') }, { id: 'push', name: t('transition.push') },
-    { id: 'wipe', name: t('transition.wipe') }, { id: 'cover', name: t('transition.cover') }, { id: 'cut', name: t('transition.switch') },
-    { id: 'zoom', name: t('transition.zoom') }, { id: 'morph', name: t('transition.morph') },
-  ]
-
-  const SHAPES = [
-    { type: 'rect', icon: '▭', name: t('slide.shape.rect') }, { type: 'roundRect', icon: '▢', name: t('slide.shape.rounded') },
-    { type: 'ellipse', icon: '⬭', name: t('slide.shape.ellipse') }, { type: 'triangle', icon: '△', name: t('slide.shape.triangle') },
-    { type: 'diamond', icon: '◇', name: t('slide.shape.diamond') }, { type: 'rightArrow', icon: '→', name: t('slide.shape.arrow') },
-    { type: 'star5', icon: '★', name: t('slide.shape.star') }, { type: 'hexagon', icon: '⬡', name: t('slide.shape.hexagon') },
-    { type: 'pentagon', icon: '⬠', name: t('slide.shape.pentagon') }, { type: 'heart', icon: '♥', name: t('slide.shape.heart') },
-    { type: 'cloud', icon: '☁', name: t('slide.shape.cloud') }, { type: 'callout', icon: '💬', name: t('slide.shape.callout') },
-  ]
-
-  const ENTRANCE_ANIMS = [
-    { effect: 'fade', name: t('anim.fadeIn') }, { effect: 'fly', name: t('anim.flyIn') },
-    { effect: 'zoom', name: t('anim.zoom') }, { effect: 'wipe', name: t('anim.wipe') }, { effect: 'bounce', name: t('anim.bounce') },
-  ]
-  const EMPHASIS_ANIMS = [
-    { effect: 'pulse', name: t('anim.pulse') }, { effect: 'spin', name: t('anim.spin') },
-  ]
-  const EXIT_ANIMS = [
-    { effect: 'fade', name: t('anim.fadeOut') }, { effect: 'fly', name: t('anim.flyOut') }, { effect: 'zoom', name: t('anim.shrink') },
-  ]
-
-  const ART_PRESETS = [
-    { name: t('art.purple'), color: '#4f46e5', gradient: '4f46e5,818cf8', shadow: true },
-    { name: t('art.blue'), color: '#3b82f6', outline: '1e40af', glow: true },
-    { name: t('art.green'), color: '#10b981', glow: true, gradient: '10b981,34d399' },
-    { name: t('art.orange'), color: '#f59e0b', shadow: true, gradient: 'f59e0b,fbbf24' },
-    { name: t('art.red'), color: '#ef4444', shadow: true, outline: '991b1b' },
-    { name: t('art.white'), color: '#ffffff', shadow: true },
-  ]
+  // 仅在 t 变化时重建 (perf: 避免每次渲染重建静态数组)
+  const LAYOUTS = useMemo(() => LAYOUT_DEFS.map(l => ({ ...l, name: t(`slide.layout.${l.id}`) })), [t])
+  const PRESET_COLORS = useMemo(() => PRESET_COLOR_DEFS.map((v, i) => ({ value: v, name: t(['color.white','color.lightGray','color.beige','color.skyBlue','color.mint','color.pink','color.darkGray','color.indigo'][i]) })), [t])
+  const TRANSITIONS = useMemo(() => TRANSITION_DEFS.map(id => ({ id, name: id === '' ? t('transition.none') : t(`transition.${id === 'cut' ? 'switch' : id}`) })), [t])
+  const SHAPES = useMemo(() => SHAPE_DEFS.map(s => ({ ...s, name: t(`slide.shape.${s.type === 'roundRect' ? 'rounded' : s.type === 'rightArrow' ? 'arrow' : s.type === 'star5' ? 'star' : s.type}`) })), [t])
+  const ENTRANCE_ANIMS = useMemo(() => ENTRANCE_ANIM_DEFS.map(e => ({ effect: e, name: e === 'fade' ? t('anim.fadeIn') : e === 'fly' ? t('anim.flyIn') : e === 'zoom' ? t('anim.zoom') : e === 'wipe' ? t('anim.wipe') : t('anim.bounce') })), [t])
+  const EMPHASIS_ANIMS = useMemo(() => EMPHASIS_ANIM_DEFS.map(e => ({ effect: e, name: e === 'pulse' ? t('anim.pulse') : t('anim.spin') })), [t])
+  const EXIT_ANIMS = useMemo(() => EXIT_ANIM_DEFS.map((e, i) => ({ effect: e, name: e === 'fade' ? t('anim.fadeOut') : e === 'fly' ? t('anim.flyOut') : t('anim.shrink') })), [t])
+  const ART_PRESETS = useMemo(() => ART_PRESET_DEFS.map((p, i) => ({ name: t(['art.purple','art.blue','art.green','art.orange','art.red','art.white'][i]), color: p.color, gradient: (p as any).gradient || '', shadow: !!(p as any).shadow, glow: !!(p as any).glow, outline: (p as any).outline || '' })), [t])
 
   const [slides, setSlides] = useState<Slide[]>([
     { id: 1, title: t('slide.titleDefault'), content: t('slide.subtitleDefault'), bg: '#ffffff', layout: 'title', transition: 'fade', notes: '', shapes: [], artTexts: [], animations: [] },
@@ -171,11 +171,11 @@ export function SlideEditor() {
       {/* Ribbon Tab 栏 */}
       <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
         {ribbonTabs.map(t => (
-          <button key={t.id} onClick={() => setRibbonTab(t.id)} className="px-4 py-2 text-sm font-medium transition-colors"
+          <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
             style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
         ))}
         <div className="flex-1" />
-        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{active + 1} / {slides.length}</span>
+        <span className="text-xs" data-testid="slide-page-indicator" style={{ color: 'var(--color-text-muted)' }}>{active + 1} / {slides.length}</span>
       </div>
 
       {/* Ribbon 内容区 */}
@@ -384,7 +384,7 @@ export function SlideEditor() {
 
         {/* 中间画布 */}
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
-          <div key={active} className="bg-white shadow-xl rounded-lg w-full animate-fade-in relative"
+          <div className="bg-white shadow-xl rounded-lg w-full animate-fade-in relative"
             style={{ aspectRatio: '16 / 9', background: current.bg, maxWidth: '900px', boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', zoom: `${zoom}%` }}>
             <div className="h-full flex flex-col p-6 sm:p-10 md:p-14 relative overflow-hidden">
               {/* 文字内容 */}

@@ -313,6 +313,7 @@ ${t('sample.md.more')}
                 onClick={it.onClick}
                 disabled={loading}
                 data-tooltip={it.shortcut ? `${it.label} (${it.shortcut})` : it.label}
+                data-testid={`menu-${it.label.replace(/\s+/g, '-').toLowerCase()}`}
                 className="px-3 py-1.5 text-sm rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1.5"
               >
                 <span className="text-xs opacity-90">{it.icon}</span>

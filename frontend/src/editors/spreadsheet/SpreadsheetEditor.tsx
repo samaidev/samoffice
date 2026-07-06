@@ -78,7 +78,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
       {/* Ribbon Tab 栏 */}
       <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
         {ribbonTabs.map(t => (
-          <button key={t.id} onClick={() => setRibbonTab(t.id)} className="px-4 py-2 text-sm font-medium transition-colors"
+          <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
             style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
         ))}
         <div className="flex-1" />
