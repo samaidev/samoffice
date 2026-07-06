@@ -28,6 +28,10 @@ func Register(r *gin.Engine) {
         r.POST("/api/lib/xls/create", handleXlsCreate)
         r.POST("/api/lib/ppt/create", handlePptCreate)
         r.POST("/api/lib/pdf/create", handlePdfCreate)
+        // 智能体打印 API — 返回打印就绪的 PDF
+        r.POST("/api/lib/doc/print", handleDocPrint)
+        r.POST("/api/lib/ppt/print", handlePptPrint)
+        r.POST("/api/lib/xls/print", handleXlsPrint)
         r.GET("/api/lib/examples", handleExamples)
 }
 
@@ -732,6 +736,319 @@ func handlePdfCreate(c *gin.Context) {
         c.Data(http.StatusOK, "application/pdf", data)
 }
 
+// === 智能体打印 API ===
+
+// PrintSpec 统一打印规格 (智能体调用)
+// 智能体发送此规格 + 文档内容, 服务器返回打印就绪的 PDF
+type PrintSpec struct {
+        // 打印设置
+        PageRange    string  `json:"pageRange"`    // 页范围, 如 "all" / "1-3,5" / "current"
+        Copies       int     `json:"copies"`       // 份数, 默认 1
+        Collate      bool    `json:"collate"`      // 逐份打印
+        Orientation  string  `json:"orientation"`  // portrait/landscape
+        PaperSize    string  `json:"paperSize"`    // A4/A3/A5/Letter/Legal
+        MarginTop    float64 `json:"marginTop"`    // mm
+        MarginBottom float64 `json:"marginBottom"` // mm
+        MarginLeft   float64 `json:"marginLeft"`   // mm
+        MarginRight  float64 `json:"marginRight"`  // mm
+        Scale        int     `json:"scale"`        // 缩放百分比 25-200
+        Duplex       string  `json:"duplex"`       // none/long/short
+        Color        string  `json:"color"`        // color/grayscale/blackwhite
+        Quality      string  `json:"quality"`      // draft/normal/high/photo
+        // PPT 专用
+        PptContent      string `json:"pptContent"`      // full/handout/notes/outline
+        SlidesPerPage   int    `json:"slidesPerPage"`   // 1/2/3/4/6/9
+        // Excel 专用
+        PrintGridlines  bool   `json:"printGridlines"`
+        PrintTitle      bool   `json:"printTitle"`
+        PageOrder       string `json:"pageOrder"` // downRight/rightDown
+}
+
+// defaultPrintSpec 返回默认打印设置
+func defaultPrintSpec(s PrintSpec) PrintSpec {
+        if s.Copies <= 0 { s.Copies = 1 }
+        if s.Orientation == "" { s.Orientation = "portrait" }
+        if s.PaperSize == "" { s.PaperSize = "A4" }
+        if s.MarginTop == 0 { s.MarginTop = 25 }
+        if s.MarginBottom == 0 { s.MarginBottom = 25 }
+        if s.MarginLeft == 0 { s.MarginLeft = 25 }
+        if s.MarginRight == 0 { s.MarginRight = 25 }
+        if s.Scale == 0 { s.Scale = 100 }
+        if s.Duplex == "" { s.Duplex = "none" }
+        if s.Color == "" { s.Color = "color" }
+        if s.Quality == "" { s.Quality = "normal" }
+        if s.PptContent == "" { s.PptContent = "full" }
+        if s.SlidesPerPage == 0 { s.SlidesPerPage = 1 }
+        if s.PageOrder == "" { s.PageOrder = "downRight" }
+        return s
+}
+
+// resolvePageSize 根据纸张名返回 pdfgo.PageSize
+func resolvePageSize(name string) pdfgo.PageSize {
+        switch name {
+        case "A3":
+                return pdfgo.PageSizeA3
+        case "A5":
+                return pdfgo.PageSize{Width: 420, Height: 595}
+        case "Letter":
+                return pdfgo.PageSizeLetter
+        case "Legal":
+                return pdfgo.PageSizeLegal
+        default:
+                return pdfgo.PageSizeA4
+        }
+}
+
+// resolveMargins 将 mm 转为 pt (1mm ≈ 2.835pt)
+func resolveMargins(top, bottom, left, right float64) pdfgo.Margins {
+        return pdfgo.Margins{
+                Top:    top * 2.835,
+                Bottom: bottom * 2.835,
+                Left:   left * 2.835,
+                Right:  right * 2.835,
+        }
+}
+
+// handleDocPrint 智能体 Word 打印 — 接收 DocSpec + PrintSpec, 返回打印就绪 PDF
+// 请求体: { "spec": DocSpec, "print": PrintSpec }
+func handleDocPrint(c *gin.Context) {
+        var req struct {
+                Spec  DocSpec   `json:"spec"`
+                Print PrintSpec `json:"print"`
+        }
+        if err := c.ShouldBindJSON(&req); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        printSettings := defaultPrintSpec(req.Print)
+
+        // 构建 docgo 文档
+        doc := docgo.New()
+        if req.Spec.Title != "" { doc.SetTitle(req.Spec.Title) }
+        if req.Spec.Author != "" { doc.SetAuthor(req.Spec.Author) }
+        // 政府公文
+        if req.Spec.GovDoc {
+                doc.SetGovMargins()
+                doc.SetDocGrid(28, 22)
+        }
+        // 自定义页边距
+        if req.Print.MarginTop > 0 {
+                doc.SetMargins(docgo.PageMargins{
+                        Top: int(req.Print.MarginTop * 56.7), Bottom: int(req.Print.MarginBottom * 56.7),
+                        Left: int(req.Print.MarginLeft * 56.7), Right: int(req.Print.MarginRight * 56.7),
+                        Header: 720, Footer: 720,
+                })
+        }
+
+        for _, e := range req.Spec.Elements {
+                switch e.Type {
+                case "heading":
+                        doc.AddHeading(e.Text, e.Level)
+                case "paragraph":
+                        p := doc.AddParagraph("")
+                        if e.Align != "" { p.SetAlign(e.Align) }
+                        if e.LineSpacingExact > 0 { p.SetLineSpacingExact(e.LineSpacingExact) }
+                        if e.FirstLineIndent > 0 { p.SetFirstLineIndent(e.FirstLineIndent) }
+                        if len(e.Runs) > 0 {
+                                for _, r := range e.Runs {
+                                        run := p.AddRun(r.Text)
+                                        if r.Bold { run.Bold(true) }
+                                        if r.Color != "" { run.Color(r.Color) }
+                                        if r.Size > 0 { run.Size(r.Size) }
+                                        if r.Font != "" { run.Font(r.Font) }
+                                }
+                        } else if e.Text != "" {
+                                p.AddRun(e.Text)
+                        }
+                case "list":
+                        if e.Ordered {
+                                doc.AddOrderedList(e.Items)
+                        } else {
+                                doc.AddList(e.Items)
+                        }
+                case "table":
+                        doc.AddTable(e.Rows)
+                }
+        }
+
+        // 生成 docx 字节
+        docxData, err := doc.Bytes()
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        // 构建打印就绪 PDF (用 pdfgo 重新排版)
+        pdfDoc := pdfgo.New()
+        pdfDoc.SetTitle(req.Spec.Title + " (打印)")
+        pdfDoc.SetPageSize(resolvePageSize(printSettings.PaperSize))
+        pdfDoc.SetMargins(resolveMargins(printSettings.MarginTop, printSettings.MarginBottom, printSettings.MarginLeft, printSettings.MarginRight))
+        pdfDoc.SetPageNumber(true)
+        pdfDoc.SetFontSize(12)
+
+        // 将 docgo 元素转 pdfgo 元素 (简化: 重新遍历)
+        for _, e := range req.Spec.Elements {
+                switch e.Type {
+                case "heading":
+                        pdfDoc.AddHeading(e.Text, e.Level)
+                case "paragraph":
+                        p := pdfDoc.AddParagraph("")
+                        if e.Align != "" { p.SetAlign(e.Align) }
+                        if e.FirstLineIndent > 0 { p.SetIndent(float64(e.FirstLineIndent) * 12) }
+                        if len(e.Runs) > 0 {
+                                for _, r := range e.Runs {
+                                        run := p.AddRun(r.Text)
+                                        if r.Bold { run.Bold(true) }
+                                        if r.Color != "" { run.Color(r.Color) }
+                                        if r.Size > 0 { run.Size(r.Size) }
+                                }
+                        } else if e.Text != "" {
+                                p.AddRun(e.Text)
+                        }
+                case "list":
+                        if e.Ordered {
+                                pdfDoc.AddOrderedList(e.Items)
+                        } else {
+                                pdfDoc.AddList(e.Items)
+                        }
+                case "table":
+                        pdfDoc.AddTable(e.Rows)
+                case "code":
+                        pdfDoc.AddCodeBlock(e.Language, e.Code)
+                case "divider":
+                        pdfDoc.AddDivider()
+                case "pagebreak":
+                        pdfDoc.AddPageBreak()
+                }
+        }
+
+        pdfData, err := pdfDoc.Bytes()
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        _ = docxData // docxData 可选返回
+        filename := req.Spec.Title
+        if filename == "" { filename = "untitled" }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s_print.pdf"`, filename))
+        c.Data(http.StatusOK, "application/pdf", pdfData)
+}
+
+// handlePptPrint 智能体 PPT 打印 — 接收 PptSpec + PrintSpec, 返回打印就绪 PDF
+func handlePptPrint(c *gin.Context) {
+        var req struct {
+                Spec  PptSpec   `json:"spec"`
+                Print PrintSpec `json:"print"`
+        }
+        if err := c.ShouldBindJSON(&req); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        printSettings := defaultPrintSpec(req.Print)
+
+        // 构建打印 PDF
+        pdfDoc := pdfgo.New()
+        pdfDoc.SetTitle(req.Spec.Title + " (打印)")
+        pdfDoc.SetPageSize(resolvePageSize(printSettings.PaperSize))
+        pdfDoc.SetMargins(resolveMargins(printSettings.MarginTop, printSettings.MarginBottom, printSettings.MarginLeft, printSettings.MarginRight))
+        pdfDoc.SetPageNumber(true)
+
+        // PPT 打印模式: full=整页, handout=讲义, notes=备注, outline=大纲
+        for i, s := range req.Spec.Slides {
+                switch printSettings.PptContent {
+                case "outline":
+                        // 大纲: 仅标题
+                        pdfDoc.AddParagraph(fmt.Sprintf("%d. %s", i+1, s.Title))
+                case "notes":
+                        // 备注页: 标题 + 备注
+                        pdfDoc.AddHeading(s.Title, 2)
+                        if s.Notes != "" {
+                                pdfDoc.AddParagraph(s.Notes)
+                        } else {
+                                pdfDoc.AddParagraph("(无备注)")
+                        }
+                        pdfDoc.AddPageBreak()
+                case "handout":
+                        // 讲义: 每页多张幻灯片 (简化: 每页 N 张标题)
+                        if i%printSettings.SlidesPerPage == 0 && i > 0 {
+                                pdfDoc.AddPageBreak()
+                        }
+                        pdfDoc.AddParagraph(fmt.Sprintf("Slide %d: %s", i+1, s.Title))
+                        if len(s.Bullets) > 0 {
+                                pdfDoc.AddList(s.Bullets)
+                        }
+                default:
+                        // full: 整页 (每张幻灯片一页)
+                        pdfDoc.AddHeading(s.Title, 1).SetAlign("center")
+                        if s.Subtitle != "" {
+                                p := pdfDoc.AddParagraph(s.Subtitle)
+                                p.SetAlign("center")
+                        }
+                        if len(s.Bullets) > 0 {
+                                pdfDoc.AddList(s.Bullets)
+                        }
+                        if i < len(req.Spec.Slides)-1 {
+                                pdfDoc.AddPageBreak()
+                        }
+                }
+        }
+
+        pdfData, err := pdfDoc.Bytes()
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        filename := req.Spec.Title
+        if filename == "" { filename = "untitled" }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s_print.pdf"`, filename))
+        c.Data(http.StatusOK, "application/pdf", pdfData)
+}
+
+// handleXlsPrint 智能体 Excel 打印 — 接收 XlsSpec + PrintSpec, 返回打印就绪 PDF
+func handleXlsPrint(c *gin.Context) {
+        var req struct {
+                Spec  XlsSpec   `json:"spec"`
+                Print PrintSpec `json:"print"`
+        }
+        if err := c.ShouldBindJSON(&req); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        printSettings := defaultPrintSpec(req.Print)
+
+        pdfDoc := pdfgo.New()
+        pdfDoc.SetTitle("Spreadsheet Print")
+        pdfDoc.SetPageSize(resolvePageSize(printSettings.PaperSize))
+        pdfDoc.SetMargins(resolveMargins(printSettings.MarginTop, printSettings.MarginBottom, printSettings.MarginLeft, printSettings.MarginRight))
+        pdfDoc.SetPageNumber(true)
+
+        // 将每个 sheet 渲染为表格
+        for _, sheet := range req.Spec.Sheets {
+                pdfDoc.AddHeading(sheet.Name, 2)
+                // 表头 + 数据行 → 二维数组
+                var rows [][]string
+                if len(sheet.Headers) > 0 {
+                        rows = append(rows, sheet.Headers)
+                }
+                rows = append(rows, sheet.Rows...)
+                if len(rows) > 0 {
+                        pdfDoc.AddTable(rows)
+                }
+        }
+
+        pdfData, err := pdfDoc.Bytes()
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        filename := "spreadsheet"
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s_print.pdf"`, filename))
+        c.Data(http.StatusOK, "application/pdf", pdfData)
+}
+
 // === 示例 ===
 
 func handleExamples(c *gin.Context) {
@@ -780,6 +1097,64 @@ func handleExamples(c *gin.Context) {
                                 {Type: "table", Rows: [][]string{{"A", "B"}, {"1", "2"}}},
                                 {Type: "code", Language: "go", Code: "fmt.Println(\"hi\")"},
                                 {Type: "divider"},
+                        },
+                },
+                "print_doc": map[string]interface{}{
+                        "endpoint": "POST /api/lib/doc/print",
+                        "desc":     "智能体 Word 打印 — 接收 DocSpec + PrintSpec, 返回打印就绪 PDF",
+                        "example": map[string]interface{}{
+                                "spec": DocSpec{
+                                        Title:  "打印报告",
+                                        Author: "Agent",
+                                        Elements: []DocElement{
+                                                {Type: "heading", Text: "报告标题", Level: 1},
+                                                {Type: "paragraph", Text: "正文内容"},
+                                        },
+                                },
+                                "print": PrintSpec{
+                                        Copies:      3,
+                                        PaperSize:   "A4",
+                                        Orientation: "portrait",
+                                        MarginTop:   25,
+                                        Duplex:      "long",
+                                        Color:       "color",
+                                },
+                        },
+                },
+                "print_ppt": map[string]interface{}{
+                        "endpoint": "POST /api/lib/ppt/print",
+                        "desc":     "智能体 PPT 打印 — 支持 full/handout/notes/outline 四种模式",
+                        "example": map[string]interface{}{
+                                "spec": PptSpec{
+                                        Title: "打印演示",
+                                        Slides: []PptSlide{
+                                                {Layout: "title", Title: "标题页"},
+                                                {Layout: "content", Title: "内容页", Bullets: []string{"要点1"}},
+                                        },
+                                },
+                                "print": PrintSpec{
+                                        PptContent:    "handout",
+                                        SlidesPerPage: 2,
+                                        PaperSize:     "A4",
+                                },
+                        },
+                },
+                "print_xls": map[string]interface{}{
+                        "endpoint": "POST /api/lib/xls/print",
+                        "desc":     "智能体 Excel 打印 — 每个 sheet 渲染为表格",
+                        "example": map[string]interface{}{
+                                "spec": XlsSpec{
+                                        Sheets: []XlsSheetSpec{{
+                                                Name:    "Sheet1",
+                                                Headers: []string{"A", "B"},
+                                                Rows:    [][]string{{"1", "2"}},
+                                        }},
+                                },
+                                "print": PrintSpec{
+                                        PaperSize:      "A4",
+                                        PrintGridlines: true,
+                                        Orientation:    "landscape",
+                                },
                         },
                 },
         })

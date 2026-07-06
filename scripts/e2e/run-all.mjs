@@ -1065,6 +1065,89 @@ console.log('\n--- 模块 6: 后端 API ---');
     const ms = Date.now() - t0;
     if (ms >= 500) throw new Error(`耗时 ${ms}ms`);
   });
+
+  // === 智能体打印 API ===
+  await safe('AP1', '智能体 Word 打印 API', async () => {
+    const body = JSON.stringify({
+      spec: {
+        title: 'API打印测试',
+        elements: [
+          { type: 'heading', text: '测试报告', level: 1 },
+          { type: 'paragraph', text: '智能体打印API测试。' },
+          { type: 'list', items: ['页范围', '份数', '纸张'] },
+        ],
+      },
+      print: { copies: 2, paperSize: 'A4', duplex: 'long' },
+    });
+    const r = await httpReq('POST', '/api/lib/doc/print', {
+      headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (r.status !== 200) throw new Error(`HTTP ${r.status}: ${r.body.toString().slice(0, 200)}`);
+    const ct = r.headers['content-type'] || '';
+    if (!/pdf/i.test(ct)) throw new Error(`content-type: ${ct}`);
+    if (r.body.length < 1000) throw new Error(`PDF 太小: ${r.body.length}`);
+  });
+
+  await safe('AP2', '智能体 PPT 打印 API (讲义模式)', async () => {
+    const body = JSON.stringify({
+      spec: {
+        title: 'PPT打印',
+        slides: [
+          { layout: 'title', title: '第一页' },
+          { layout: 'content', title: '第二页', bullets: ['要点1', '要点2'] },
+        ],
+      },
+      print: { pptContent: 'handout', slidesPerPage: 2, paperSize: 'A4' },
+    });
+    const r = await httpReq('POST', '/api/lib/ppt/print', {
+      headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+    if (!/pdf/i.test(r.headers['content-type'] || '')) throw new Error('非PDF');
+  });
+
+  await safe('AP3', '智能体 PPT 打印 API (备注页模式)', async () => {
+    const body = JSON.stringify({
+      spec: {
+        title: 'PPT备注打印',
+        slides: [
+          { layout: 'content', title: '幻灯片1', notes: '这是备注内容' },
+        ],
+      },
+      print: { pptContent: 'notes', paperSize: 'A4' },
+    });
+    const r = await httpReq('POST', '/api/lib/ppt/print', {
+      headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+  });
+
+  await safe('AP4', '智能体 Excel 打印 API', async () => {
+    const body = JSON.stringify({
+      spec: {
+        sheets: [{
+          name: '数据表',
+          headers: ['姓名', '分数'],
+          rows: [['张三', '95'], ['李四', '87']],
+        }],
+      },
+      print: { paperSize: 'A4', printGridlines: true, orientation: 'landscape' },
+    });
+    const r = await httpReq('POST', '/api/lib/xls/print', {
+      headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+    if (!/pdf/i.test(r.headers['content-type'] || '')) throw new Error('非PDF');
+  });
+
+  await safe('AP5', '智能体打印 API examples', async () => {
+    const r = await httpReq('GET', '/api/lib/examples');
+    if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+    const j = JSON.parse(r.body);
+    if (!j.print_doc) throw new Error('无 print_doc 示例');
+    if (!j.print_ppt) throw new Error('无 print_ppt 示例');
+    if (!j.print_xls) throw new Error('无 print_xls 示例');
+  });
 }
 
 // ============ 模块 7: 响应式 (移动端) ============
