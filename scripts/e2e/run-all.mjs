@@ -819,6 +819,38 @@ console.log('\n--- 模块 5b: PDF 阅读器 ---');
     }
   });
 
+  await safe('PDF7', 'PDF 打印按钮可见', async () => {
+    // 需要 PDF 已加载 (PDF4 已加载)
+    // 重新加载 PDF
+    const pdfPath = '/tmp/govdoc-inspect/政府公文-GB9704标准.pdf';
+    const fs2 = await import('fs');
+    if (fs2.existsSync(pdfPath) && await page.locator('[data-testid="pdf-open-btn"]').count()) {
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent('filechooser', { timeout: 5000 }),
+        page.locator('[data-testid="pdf-open-btn"]').click(),
+      ]);
+      await fileChooser.setFiles(pdfPath);
+      await page.waitForTimeout(2000);
+    }
+    const printBtn = page.locator('[data-testid="pdf-print-btn"]');
+    if (!await printBtn.count()) throw new Error('无打印按钮');
+    const visible = await printBtn.isVisible().catch(() => false);
+    if (!visible) throw new Error('打印按钮不可见');
+  });
+
+  await safe('PDF8', 'PDF 打开打印对话框', async () => {
+    await page.locator('[data-testid="pdf-print-btn"]').click({ timeout: 3000 });
+    await page.waitForTimeout(500);
+    await page.waitForSelector('[data-testid="print-dialog"]', { state: 'visible', timeout: 5000 });
+    // 检查常规 Tab 内容
+    if (!await page.locator('[data-testid="print-printer"]').count()) throw new Error('无打印机选择');
+    if (!await page.locator('[data-testid="print-range-all"]').count()) throw new Error('无页范围');
+    await shot(page, 'pdf8-print-dialog');
+    // 关闭
+    await page.locator('[data-testid="print-cancel"]').click({ timeout: 2000 });
+    await page.waitForTimeout(300);
+  });
+
   await ctx.close();
 }
 

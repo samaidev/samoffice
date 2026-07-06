@@ -119,6 +119,8 @@ const dict: Record<string, { en: string; zh: string }> = {
 
   // === PdfViewer ===
   'pdf.openFile': { en: 'Open PDF', zh: '打开 PDF' },
+  'pdf.print': { en: 'Print', zh: '打印' },
+  'pdf.previewPageN': { en: 'Page {n}', zh: '第 {n} 页' },
   'pdf.prevPage': { en: 'Previous Page', zh: '上一页' },
   'pdf.nextPage': { en: 'Next Page', zh: '下一页' },
   'pdf.zoomIn': { en: 'Zoom In', zh: '放大' },

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useI18n } from '../../i18n'
+import { PrintDialog } from '../../components/PrintDialog'
 
 // 声明全局 pdfjsLib (通过 vendor/pdf.min.js 加载)
 declare global {
@@ -24,6 +25,7 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
   const [pdfUrl, setPdfUrl] = useState(initialUrl || '')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const renderTaskRef = useRef<any>(null)
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
 
   // 加载 PDF.js 库 (如果尚未加载)
   const ensurePdfLib = useCallback(async () => {
@@ -142,6 +144,42 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
     a.href = pdfUrl
     a.download = fileName || 'document.pdf'
     a.click()
+  }
+
+  // 打印 PDF — 使用浏览器原生 PDF 打印 (在新窗口打开 PDF 并触发打印)
+  const handlePrint = () => {
+    if (!pdfUrl) return
+    // 方案1: 在新窗口打开 PDF, 浏览器原生 PDF 阅读器支持打印
+    const printWin = window.open(pdfUrl, '_blank')
+    if (printWin) {
+      // 等待 PDF 加载后触发打印
+      printWin.addEventListener('load', () => {
+        setTimeout(() => {
+          try { printWin.print() } catch (e) { /* 用户可手动 Ctrl+P */ }
+        }, 1000)
+      })
+    }
+  }
+
+  // 打印当前页 (通过 canvas 渲染到打印窗口)
+  const handlePrintCurrentPage = () => {
+    if (!canvasRef.current || !pdfDoc) return
+    const canvas = canvasRef.current
+    const dataUrl = canvas.toDataURL('image/png')
+    const printWin = window.open('', '_blank', 'width=800,height=600')
+    if (!printWin) return
+    printWin.document.write(`
+      <html><head><title>${fileName || 'Print'} - Page ${pageNum}</title>
+      <style>
+        @page { margin: 0; }
+        body { margin: 0; padding: 0; display: flex; justify-content: center; }
+        img { max-width: 100%; height: auto; }
+      </style>
+      </head><body>
+      <img src="${dataUrl}" onload="window.print(); setTimeout(() => window.close(), 500)" />
+      </body></html>
+    `)
+    printWin.document.close()
   }
 
   // 页面跳转
@@ -284,6 +322,14 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
               title={t('pdf.download')}
             >⬇</button>
 
+            <button
+              onClick={() => setPrintDialogOpen(true)}
+              data-testid="pdf-print-btn"
+              className="p-1.5 rounded-md transition-colors hover:bg-slate-100"
+              style={{ color: 'var(--color-text)' }}
+              title={t('pdf.print')}
+            >🖨</button>
+
             <div className="flex-1" />
             <span className="text-xs truncate max-w-[200px]" style={{ color: 'var(--color-text-muted)' }} title={fileName}>
               {fileName}
@@ -346,6 +392,30 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
           <span>{Math.round(scale * 100)}%</span>
         </div>
       )}
+
+      {/* 打印对话框 */}
+      <PrintDialog
+        open={printDialogOpen}
+        onClose={() => setPrintDialogOpen(false)}
+        editorType="word"
+        printSelector="canvas"
+        renderPreview={(settings) => (
+          <div className="w-full h-full flex flex-col items-center justify-center" style={{ color: '#000' }}>
+            <div className="text-[10px] font-bold mb-2">{fileName || 'document.pdf'}</div>
+            <div className="border-2 border-gray-300 p-3 bg-gray-50" style={{ width: '80%', aspectRatio: '1/1.414' }}>
+              <div className="text-[7px] text-gray-400 text-center mt-1/2">{t('pdf.previewPageN', { n: pageNum })}</div>
+              <div className="text-[7px] mt-1 leading-tight">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i} className="h-1 bg-gray-200 rounded mb-0.5" style={{ width: `${70 + Math.random() * 25}%` }} />
+                ))}
+              </div>
+            </div>
+            <div className="text-[8px] text-gray-500 mt-2">
+              {settings.pageRange === 'all' ? t('print.allPages') : settings.pageRange === 'current' ? t('print.currentPage') : settings.customPages} · {settings.copies} {t('print.copies')}
+            </div>
+          </div>
+        )}
+      />
     </div>
   )
 }
