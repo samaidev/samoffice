@@ -48,6 +48,10 @@ interface ShapeItem {
   type: string; x: number; y: number; w: number; h: number
   fill: string; text: string; shadow: boolean; glow: boolean
   gradient: string; rotation: number
+  // 现代扩展
+  stroke?: string; strokeWidth?: number
+  fontSize?: number; fontBold?: boolean; fontColor?: string; font?: string
+  glowColor?: string; glowRadius?: number
 }
 
 interface ArtTextItem {
@@ -60,7 +64,7 @@ interface AnimItem {
   target: string; effect: string; category: string; delay: number
 }
 
-type RibbonTab = 'home' | 'insert' | 'design' | 'animations' | 'transition' | 'view'
+type RibbonTab = 'home' | 'insert' | 'design' | 'modern' | 'animations' | 'transition' | 'view'
 
 function RibbonButton({ icon, label, onClick, active, disabled, title }: any) {
   return (
@@ -161,7 +165,7 @@ export function SlideEditor() {
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('slide.ribbon.home') }, { id: 'insert', label: t('slide.ribbon.insert') }, { id: 'design', label: t('slide.ribbon.design') },
-    { id: 'animations', label: t('slide.ribbon.animation') }, { id: 'transition', label: t('slide.ribbon.transition') }, { id: 'view', label: t('slide.ribbon.view') },
+    { id: 'modern', label: 'Modern' }, { id: 'animations', label: t('slide.ribbon.animation') }, { id: 'transition', label: t('slide.ribbon.transition') }, { id: 'view', label: t('slide.ribbon.view') },
   ]
 
   const presentingSlide = slides[presentSlide] || slides[0]
@@ -273,6 +277,101 @@ export function SlideEditor() {
             <RibbonButton icon="💫" label={t('slide.glow')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { glow: !current.shapes[current.shapes.length-1].glow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].glow} />
             <RibbonButton icon="🌑" label={t('slide.shadow')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { shadow: !current.shapes[current.shapes.length-1].shadow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].shadow} />
             <RibbonButton icon="🔄" label={t('slide.rotate')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { rotation: (current.shapes[current.shapes.length-1].rotation + 15) % 360 }) }} />
+          </RibbonGroup>
+        </>)}
+
+        {ribbonTab === 'modern' && (<>
+          {/* 主题预设 */}
+          <RibbonGroup label="Theme">
+            <div className="flex items-center gap-1 px-1">
+              {[
+                { id: 'aurora', name: 'Aurora', bg: '#0B1120', c1: '#6366F1', c2: '#22D3EE' },
+                { id: 'midnight', name: 'Midnight', bg: '#020617', c1: '#818CF8', c2: '#F472B6' },
+                { id: 'ocean', name: 'Ocean', bg: '#0C4A6E', c1: '#06B6D4', c2: '#FBBF24' },
+                { id: 'sunset', name: 'Sunset', bg: '#431407', c1: '#F59E0B', c2: '#EC4899' },
+                { id: 'minimal', name: 'Minimal', bg: '#FFFFFF', c1: '#0F172A', c2: '#6366F1' },
+              ].map(th => (
+                <button key={th.id} onClick={() => updateActive({ bg: th.bg })} className="w-12 h-12 rounded-lg border-2 transition-transform hover:scale-110 flex flex-col items-center justify-center text-[8px] font-bold"
+                  style={{ background: th.bg, borderColor: current.bg === th.bg ? 'var(--color-primary)' : 'var(--color-border)', color: th.bg === '#FFFFFF' ? '#0F172A' : '#F8FAFC' }}
+                  title={th.name}>
+                  <span style={{ color: th.c1 }}>●</span>
+                  <span style={{ color: th.c2 }}>●</span>
+                </button>
+              ))}
+            </div>
+          </RibbonGroup>
+
+          {/* 渐变背景 */}
+          <RibbonGroup label="Gradient BG">
+            <div className="flex items-center gap-1 px-1">
+              {[
+                { name: 'Indigo', colors: '0B1120,131C30' },
+                { name: 'Aurora', colors: '1e1b4b,312e81' },
+                { name: 'Ocean', colors: '0C4A6E,0E7490' },
+                { name: 'Sunset', colors: '431407,9A3412' },
+                { name: 'Forest', colors: '064E3B,065F46' },
+              ].map(g => (
+                <button key={g.name} onClick={() => {
+                  // 渐变背景通过两个色叠加近似: 用第一色作 bg
+                  const c1 = g.colors.split(',')[0]
+                  updateActive({ bg: '#' + c1 })
+                }} className="w-10 h-10 rounded-md border-2 transition-transform hover:scale-110"
+                  style={{ background: `linear-gradient(135deg, #${g.colors.split(',')[0]}, #${g.colors.split(',')[1]})`, borderColor: 'var(--color-border)' }}
+                  title={g.name + ' 渐变'} />
+              ))}
+            </div>
+          </RibbonGroup>
+
+          {/* 现代组件 */}
+          <RibbonGroup label="Components">
+            <RibbonButton icon="📊" label="KPI Card" onClick={() => {
+              const x = 200 + current.shapes.length * 50
+              updateActive({
+                shapes: [...current.shapes,
+                  { type: 'roundRect', x, y: 200, w: 300, h: 180, fill: '#1A2540', stroke: '#334155', strokeWidth: 2, text: '10x', fontSize: 28, fontBold: true, fontColor: '#818CF8', font: 'Space Grotesk', shadow: true, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'rect', x: x + 30, y: 230, w: 60, h: 8, fill: '#6366F1', stroke: '', strokeWidth: 0, text: '', fontSize: 0, fontBold: false, fontColor: '', font: '', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'rect', x, y: 310, w: 300, h: 30, fill: '', stroke: '', strokeWidth: 0, text: 'PERF GAIN', fontSize: 10, fontBold: true, fontColor: '#94A3B8', font: 'Inter', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                ]
+              })
+            }} />
+            <RibbonButton icon="💡" label="Glass Card" onClick={() => {
+              const x = 200 + current.shapes.length * 30
+              updateActive({
+                shapes: [...current.shapes,
+                  { type: 'roundRect', x, y: 200, w: 350, h: 200, fill: '#1A2540', stroke: '#334155', strokeWidth: 2, text: 'Glass Card', fontSize: 16, fontBold: true, fontColor: '#F8FAFC', font: 'Space Grotesk', shadow: true, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                ]
+              })
+            }} />
+            <RibbonButton icon="📝" label="Code Block" onClick={() => {
+              const x = 200 + current.shapes.length * 30
+              updateActive({
+                shapes: [...current.shapes,
+                  { type: 'roundRect', x, y: 200, w: 400, h: 150, fill: '#0B1120', stroke: '#1e293b', strokeWidth: 2, text: 'fmt.Println("Hello")', fontSize: 12, fontBold: false, fontColor: '#86EFAC', font: 'Consolas', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                ]
+              })
+            }} />
+            <RibbonButton icon="🏷️" label="Pill" onClick={() => {
+              const x = 200 + current.shapes.length * 30
+              updateActive({
+                shapes: [...current.shapes,
+                  { type: 'roundRect', x, y: 200, w: 120, h: 30, fill: '#6366F1', stroke: '', strokeWidth: 0, text: 'NEW', fontSize: 9, fontBold: true, fontColor: '#FFFFFF', font: 'Inter', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                ]
+              })
+            }} />
+            <RibbonButton icon="✨" label="Glow Text" onClick={() => {
+              const x = 200 + current.shapes.length * 30
+              updateActive({
+                shapes: [...current.shapes,
+                  { type: 'rect', x, y: 200, w: 400, h: 60, fill: '', stroke: '', strokeWidth: 0, text: 'Glow Title', fontSize: 28, fontBold: true, fontColor: '#F8FAFC', font: 'Space Grotesk', shadow: false, glow: true, glowColor: '#6366F1', glowRadius: 60000, gradient: '', rotation: 0 },
+                ]
+              })
+            }} />
+          </RibbonGroup>
+
+          {/* 玻璃质感 */}
+          <RibbonGroup label="Effects">
+            <RibbonButton icon="🔮" label="Glass" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { glow: !current.shapes[current.shapes.length-1].glow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].glow} />
+            <RibbonButton icon="🌗" label="Shadow" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { shadow: !current.shapes[current.shapes.length-1].shadow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].shadow} />
           </RibbonGroup>
         </>)}
 

@@ -22,7 +22,7 @@ interface Props {
 
 type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
 
-const LINE_HEIGHTS = [{ name: '1.0', value: '1.0' }, { name: '1.5', value: '1.5' }, { name: '1.75', value: '1.75' }, { name: '2.0', value: '2.0' }]
+const LINE_HEIGHTS = [{ name: '1.0', value: '1.0' }, { name: '1.5', value: '1.5' }, { name: '1.75', value: '1.75' }, { name: '2.0', value: '2.0' }, { name: '固定28pt (公文)', value: '28pt' }, { name: '固定30pt', value: '30pt' }]
 const COLORS = ['#000000','#374151','#6B7280','#9CA3AF','#EF4444','#F59E0B','#10B981','#3B82F6','#6366F1','#8B5CF6','#EC4899','#6B7280']
 const HL_COLORS = ['#fef08a','#bbf7d0','#bfdbfe','#fbcfe8','#fed7aa','#e9d5ff']
 
@@ -406,8 +406,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="⇄" label="RTL" onClick={() => exec('toggleRTL')} active={activeAttrs.rtl} />
             <RibbonButton icon="💧" label={t('doc.watermark')} onClick={applyWatermark} />
           </RibbonGroup>
+          <RibbonGroup label="公文 GB/T 9704">
+            <RibbonButton icon="📜" label="公文模板" onClick={() => {
+              // 应用政府公文标准排版: 3号仿宋 + 固定28磅 + 首行缩进2字符
+              setParaAttr('lineHeight', '28pt')
+              setParaAttr('indent', 2)
+              setParaAttr('align', 'justify')
+            }} title="应用 GB/T 9704-2012 政府公文标准排版" />
+            <RibbonButton icon="🇨" label="红头线" onClick={() => setParaAttr('border', activeAttrs.border === 'redBottom' ? '' : 'redBottom')} active={activeAttrs.border === 'redBottom'} title="红色分隔线" />
+          </RibbonGroup>
         </>)}
-
         {ribbonTab === 'review' && (<>
           <RibbonGroup label={t('doc.proofing')}>
             <RibbonButton icon="🔍" label={t('doc.findReplace')} onClick={() => setSearchOpen(!searchOpen)} />

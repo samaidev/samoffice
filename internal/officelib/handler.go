@@ -38,20 +38,48 @@ type DocSpec struct {
         Footer   string       `json:"footer"`
         PageNum  bool         `json:"pageNum"`
         Elements []DocElement `json:"elements"`
+        // 政府公文扩展 (GB/T 9704-2012)
+        GovDoc        bool          `json:"govDoc"`        // 启用政府公文标准排版
+        DocGrid       *DocGridSpec  `json:"docGrid"`       // 文档网格
+        PageMargins   *DocMargins   `json:"pageMargins"`   // 自定义页边距
+        RedHeaderLine bool          `json:"redHeaderLine"` // 红色分隔线
+}
+
+// DocGridSpec 文档网格规格
+type DocGridSpec struct {
+        CharsPerLine int `json:"charsPerLine"` // 每行字符数 (如 28)
+        LinesPerPage int `json:"linesPerPage"` // 每页行数 (如 22)
+}
+
+// DocMargins 页边距规格 (cm)
+type DocMargins struct {
+        Top, Bottom, Left, Right float64 `json:"top,bottom,left,right"`
 }
 
 // DocElement docx 元素（多态）
 type DocElement struct {
-        Type     string     `json:"type"` // heading/paragraph/list/table/code/toc
-        Text     string     `json:"text,omitempty"`
-        Level    int        `json:"level,omitempty"`
-        Items    []string   `json:"items,omitempty"`
-        Ordered  bool       `json:"ordered,omitempty"`
-        Rows     [][]string `json:"rows,omitempty"`
-        Language string     `json:"language,omitempty"`
-        Code     string     `json:"code,omitempty"`
-        Runs     []DocRun   `json:"runs,omitempty"`
-        MaxLevel int        `json:"maxLevel,omitempty"`
+        Type            string     `json:"type"` // heading/paragraph/list/table/code/toc
+        Text            string     `json:"text,omitempty"`
+        Level           int        `json:"level,omitempty"`
+        Items           []string   `json:"items,omitempty"`
+        Ordered         bool       `json:"ordered,omitempty"`
+        Rows            [][]string `json:"rows,omitempty"`
+        Language        string     `json:"language,omitempty"`
+        Code            string     `json:"code,omitempty"`
+        Runs            []DocRun   `json:"runs,omitempty"`
+        MaxLevel        int        `json:"maxLevel,omitempty"`
+        // 段落扩展属性
+        Align           string `json:"align,omitempty"`           // left/center/right/justify
+        LineSpacing     float64 `json:"lineSpacing,omitempty"`     // 行距倍数
+        LineSpacingExact int    `json:"lineSpacingExact,omitempty"` // 固定行距 pt
+        FirstLineIndent int    `json:"firstLineIndent,omitempty"` // 首行缩进字符数
+        SpaceBefore     int    `json:"spaceBefore,omitempty"`     // 段前 pt
+        SpaceAfter      int    `json:"spaceAfter,omitempty"`      // 段后 pt
+        CharSpacing     int    `json:"charSpacing,omitempty"`      // 字符间距
+        RedBottomLine   bool   `json:"redBottomLine,omitempty"`   // 红色下划线
+        PageBreakBefore bool   `json:"pageBreakBefore,omitempty"` // 段前分页
+        Font            string `json:"font,omitempty"`            // 段落默认字体
+        FontSize        int    `json:"fontSize,omitempty"`        // 段落默认字号 pt
 }
 
 // DocRun 段落文本片段
@@ -61,6 +89,7 @@ type DocRun struct {
         Italic bool   `json:"italic,omitempty"`
         Color  string `json:"color,omitempty"`
         Size   int    `json:"size,omitempty"`
+        Font   string `json:"font,omitempty"` // 字体名
 }
 
 func handleDocCreate(c *gin.Context) {
@@ -78,12 +107,46 @@ func handleDocCreate(c *gin.Context) {
         if spec.Footer != "" { doc.SetFooter(spec.Footer) }
         if spec.PageNum { doc.SetPageNumber(true) }
 
+        // 政府公文标准排版 (GB/T 9704-2012)
+        if spec.GovDoc {
+                doc.SetGovMargins()
+                doc.SetDocGrid(28, 22) // 每行28字 每页22行
+                doc.SetRedHeaderLine(true)
+        }
+        // 自定义页边距 (cm → twips, 1cm = 567 twips)
+        if spec.PageMargins != nil {
+                m := docgo.DefaultPageMargins()
+                if spec.PageMargins.Top > 0 { m.Top = int(spec.PageMargins.Top * 567) }
+                if spec.PageMargins.Bottom > 0 { m.Bottom = int(spec.PageMargins.Bottom * 567) }
+                if spec.PageMargins.Left > 0 { m.Left = int(spec.PageMargins.Left * 567) }
+                if spec.PageMargins.Right > 0 { m.Right = int(spec.PageMargins.Right * 567) }
+                doc.SetMargins(m)
+        }
+        // 文档网格
+        if spec.DocGrid != nil {
+                doc.SetDocGrid(spec.DocGrid.CharsPerLine, spec.DocGrid.LinesPerPage)
+        }
+        if spec.RedHeaderLine {
+                doc.SetRedHeaderLine(true)
+        }
+
         for _, e := range spec.Elements {
                 switch e.Type {
                 case "heading":
                         doc.AddHeading(e.Text, e.Level)
                 case "paragraph":
                         p := doc.AddParagraph("")
+                        // 应用段落级属性
+                        if e.Align != "" { p.SetAlign(e.Align) }
+                        if e.LineSpacing > 0 { p.SetLineSpacing(e.LineSpacing) }
+                        if e.LineSpacingExact > 0 { p.SetLineSpacingExact(e.LineSpacingExact) }
+                        if e.FirstLineIndent > 0 { p.SetFirstLineIndent(e.FirstLineIndent) }
+                        if e.SpaceBefore > 0 { p.SetSpaceBefore(e.SpaceBefore) }
+                        if e.SpaceAfter > 0 { p.SetSpaceAfter(e.SpaceAfter) }
+                        if e.CharSpacing > 0 { p.SetCharSpacing(e.CharSpacing) }
+                        if e.RedBottomLine { p.SetRedBottomLine(true) }
+                        if e.PageBreakBefore { p.SetPageBreakBefore(true) }
+                        // 添加文本 runs
                         if len(e.Runs) > 0 {
                                 for _, r := range e.Runs {
                                         run := p.AddRun(r.Text)
@@ -91,9 +154,15 @@ func handleDocCreate(c *gin.Context) {
                                         if r.Italic { run.Italic(true) }
                                         if r.Color != "" { run.Color(r.Color) }
                                         if r.Size > 0 { run.Size(r.Size) }
+                                        if r.Font != "" { run.Font(r.Font) }
+                                        // 段落级默认字体/字号 (当 run 未指定时)
+                                        if r.Font == "" && e.Font != "" { run.Font(e.Font) }
+                                        if r.Size == 0 && e.FontSize > 0 { run.Size(e.FontSize) }
                                 }
                         } else if e.Text != "" {
-                                p.AddRun(e.Text)
+                                run := p.AddRun(e.Text)
+                                if e.Font != "" { run.Font(e.Font) }
+                                if e.FontSize > 0 { run.Size(e.FontSize) }
                         }
                 case "list":
                         if e.Ordered {

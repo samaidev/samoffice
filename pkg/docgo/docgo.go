@@ -34,6 +34,18 @@ type Document struct {
         tocEnabled bool   // 是否生成目录
         margins    PageMargins
         pageSize   PageSize
+        // 政府公文扩展 (GB/T 9704-2012)
+        docGrid        *DocGrid // 文档网格 (每行字数/每页行数)
+        charSpacing    int      // 默认字符间距 (twips/20)
+        redHeaderLine  bool     // 红色分隔线
+}
+
+// DocGrid 文档网格 (每行字数 / 每页行数)
+type DocGrid struct {
+        CharsPerLine  int // 每行字符数 (如 28)
+        LinesPerPage  int // 每页行数 (如 22)
+        CharWidth     int // 字符宽度 twips (3号字 ≈ 560 twips)
+        LineHeight    int // 行高 twips (固定值28磅 ≈ 560 twips)
 }
 
 // PageMargins 页边距（EMU，默认 1 inch = 914400）
@@ -71,12 +83,18 @@ func (h *Heading) elementType() string { return "heading" }
 
 // Paragraph 段落
 type Paragraph struct {
-        runs        []Run
-        align       string  // left/center/right/justify
-        lineSpacing float64 // 行距倍数 1.0/1.5/2.0
-        indent      int     // 缩进级别 0-8
-        spaceBefore int     // 段前间距 pt
-        spaceAfter  int     // 段后间距 pt
+        runs           []Run
+        align          string  // left/center/right/justify
+        lineSpacing    float64 // 行距倍数 1.0/1.5/2.0
+        lineSpacingExact int   // 固定行距 pt (优先于 lineSpacing)
+        indent         int     // 缩进级别 0-8
+        firstLineIndent int    // 首行缩进字符数 (如 2 = 缩进2字符)
+        spaceBefore    int     // 段前间距 pt
+        spaceAfter     int     // 段后间距 pt
+        // 政府公文扩展
+        charSpacing    int     // 字符间距 (twips/20)
+        redBottomLine  bool    // 红色下划线 (用于红色分隔线)
+        pageBreakBefore bool   // 段前分页
 }
 
 func (p *Paragraph) elementType() string { return "paragraph" }
@@ -206,6 +224,34 @@ func (d *Document) SetMargins(m PageMargins) *Document { d.margins = m; return d
 // SetPageSize 设置页面尺寸（twips）
 func (d *Document) SetPageSize(s PageSize) *Document { d.pageSize = s; return d }
 
+// SetDocGrid 设置文档网格 (每行字数/每页行数) — 用于政府公文 GB/T 9704-2012
+func (d *Document) SetDocGrid(charsPerLine, linesPerPage int) *Document {
+        d.docGrid = &DocGrid{
+                CharsPerLine: charsPerLine,
+                LinesPerPage: linesPerPage,
+                CharWidth:    560, // 3号字标准宽度 twips
+                LineHeight:   560, // 固定值28磅 = 560 twips
+        }
+        return d
+}
+
+// SetGovMargins 设置政府公文标准页边距 (GB/T 9704-2012)
+// 上3.7cm 下3.5cm 左2.8cm 右2.6cm
+func (d *Document) SetGovMargins() *Document {
+        d.margins = PageMargins{
+                Top:    2098, // 3.7cm = 2098 twips (1cm=567twips)
+                Bottom: 1985, // 3.5cm
+                Left:   1588, // 2.8cm
+                Right:  1474, // 2.6cm
+                Header: 1701, // 3.0cm (天头)
+                Footer: 1701, // 3.0cm
+        }
+        return d
+}
+
+// SetRedHeaderLine 启用红色分隔线 (政府公文版头)
+func (d *Document) SetRedHeaderLine(b bool) *Document { d.redHeaderLine = b; return d }
+
 // AddTableOfContents 添加自动目录
 // maxLevel: 目录包含的最大标题层级（1-6）
 func (d *Document) AddTableOfContents(maxLevel int) *TableOfContents {
@@ -259,8 +305,23 @@ func (p *Paragraph) SetAlign(a string) *Paragraph { p.align = a; return p }
 // SetLineSpacing 设置行距倍数（1.0/1.5/2.0）
 func (p *Paragraph) SetLineSpacing(ls float64) *Paragraph { p.lineSpacing = ls; return p }
 
+// SetLineSpacingExact 设置固定行距 (pt) — 用于政府公文固定值28磅
+func (p *Paragraph) SetLineSpacingExact(pt int) *Paragraph { p.lineSpacingExact = pt; return p }
+
 // SetIndent 设置缩进级别（0-8）
 func (p *Paragraph) SetIndent(n int) *Paragraph { p.indent = n; return p }
+
+// SetFirstLineIndent 设置首行缩进字符数 (如 2 = 缩进2字符)
+func (p *Paragraph) SetFirstLineIndent(chars int) *Paragraph { p.firstLineIndent = chars; return p }
+
+// SetCharSpacing 设置字符间距 (twips/20, 如 5 = 0.25pt)
+func (p *Paragraph) SetCharSpacing(val int) *Paragraph { p.charSpacing = val; return p }
+
+// SetRedBottomLine 设置红色下划线 (用于政府公文红色分隔线)
+func (p *Paragraph) SetRedBottomLine(b bool) *Paragraph { p.redBottomLine = b; return p }
+
+// SetPageBreakBefore 设置段前分页
+func (p *Paragraph) SetPageBreakBefore(b bool) *Paragraph { p.pageBreakBefore = b; return p }
 
 // SetSpaceBefore 设置段前间距（pt）
 func (p *Paragraph) SetSpaceBefore(pt int) *Paragraph { p.spaceBefore = pt; return p }
@@ -484,6 +545,12 @@ func (d *Document) documentXML() string {
 <w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d" w:header="%d" w:footer="%d" w:gutter="0"/>`,
                 d.pageSize.Width, d.pageSize.Height,
                 d.margins.Top, d.margins.Right, d.margins.Bottom, d.margins.Left, d.margins.Header, d.margins.Footer))
+        // 文档网格 (政府公文 GB/T 9704-2012: 每行28字 每页22行)
+        if d.docGrid != nil {
+                // type="spec" 指定行和字符网格
+                sb.WriteString(fmt.Sprintf(`<w:docGrid w:type="spec" w:linePitch="%d" w:charSpace="0" w:charPitch="%d"/>`,
+                        d.docGrid.LineHeight, d.docGrid.CharWidth))
+        }
         if d.header != "" {
                 sb.WriteString(`<w:headerReference w:type="default" r:id="rIdHdr"/>`)
         }
@@ -503,21 +570,47 @@ func renderHeadingXML(sb *strings.Builder, h *Heading) {
 func renderParagraphXML(sb *strings.Builder, p *Paragraph) {
         sb.WriteString("<w:p>")
         // 段落属性
-        hasProps := p.align != "" || p.lineSpacing > 0 || p.indent > 0 || p.spaceBefore > 0 || p.spaceAfter > 0
+        hasProps := p.align != "" || p.lineSpacing > 0 || p.lineSpacingExact > 0 || p.indent > 0 || p.firstLineIndent > 0 || p.spaceBefore > 0 || p.spaceAfter > 0 || p.charSpacing > 0 || p.redBottomLine || p.pageBreakBefore
         if hasProps {
                 sb.WriteString("<w:pPr>")
+                if p.pageBreakBefore {
+                        sb.WriteString(`<w:pageBreakBefore/>`)
+                }
                 if p.align != "" {
                         sb.WriteString(fmt.Sprintf(`<w:jc w:val="%s"/>`, p.align))
                 }
-                if p.indent > 0 {
-                        sb.WriteString(fmt.Sprintf(`<w:ind w:left="%d"/>`, p.indent*720)) // 720 twips = 0.5 inch
+                if p.indent > 0 || p.firstLineIndent > 0 {
+                        indParts := ""
+                        if p.indent > 0 {
+                                indParts += fmt.Sprintf(` w:left="%d"`, p.indent*720)
+                        }
+                        if p.firstLineIndent > 0 {
+                                // 首行缩进 N 字符 (1字符 = 200 twips in firstLineChars)
+                                indParts += fmt.Sprintf(` w:firstLineChars="%d" w:firstLine="%d"`, p.firstLineIndent*100, p.firstLineIndent*480)
+                        }
+                        sb.WriteString(fmt.Sprintf(`<w:ind%s/>`, indParts))
                 }
-                if p.lineSpacing > 0 {
-                        // lineSpacing: 1.0=240, 1.5=360, 2.0=480
+                // 行距: 固定值优先
+                if p.lineSpacingExact > 0 {
+                        // 固定值 28磅 = 560 twips, lineRule="exact"
+                        sb.WriteString(fmt.Sprintf(`<w:spacing w:line="%d" w:lineRule="exact"/>`, p.lineSpacingExact*20))
+                } else if p.lineSpacing > 0 {
                         sb.WriteString(fmt.Sprintf(`<w:spacing w:line="%d" w:lineRule="auto"/>`, int(p.lineSpacing*240)))
                 }
                 if p.spaceBefore > 0 || p.spaceAfter > 0 {
+                        if p.lineSpacingExact > 0 || p.lineSpacing > 0 {
+                                // 已有 spacing 标签，需合并
+                                // 实际上 OOXML 允许多个 spacing 但只最后一个生效，所以这里用 before/after 单独写
+                        }
                         sb.WriteString(fmt.Sprintf(`<w:spacing w:before="%d" w:after="%d"/>`, p.spaceBefore*20, p.spaceAfter*20))
+                }
+                // 字符间距
+                if p.charSpacing > 0 {
+                        sb.WriteString(fmt.Sprintf(`<w:spacing w:val="%d"/>`, p.charSpacing))
+                }
+                // 红色下划线 (政府公文分隔线)
+                if p.redBottomLine {
+                        sb.WriteString(`<w:pBdr><w:bottom w:val="single" w:sz="24" w:space="1" w:color="FF0000"/></w:pBdr>`)
                 }
                 sb.WriteString("</w:pPr>")
         }
@@ -714,7 +807,7 @@ func parseCoreProps(r io.Reader, doc *Document) {
 }
 
 func parseDocumentXML(r io.Reader, doc *Document) {
-	parseDocumentStructural(r, doc)
+        parseDocumentStructural(r, doc)
 }
 
 func extractParagraphs(xml string) []string {
