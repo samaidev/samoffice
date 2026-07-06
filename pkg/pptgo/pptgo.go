@@ -52,6 +52,8 @@ type Slide struct {
         artTexts     []ArtText
         flowCharts   []FlowChart
         bgColor      string
+        bgGradient   *BgGradient // 渐变背景 (modern)
+        bgAurora     *BgAurora   // Aurora mesh 背景 (modern)
         transition   string
         transitionDur int     // 过渡时长 ms
         animations   []Animation
@@ -71,6 +73,7 @@ type Shape struct {
         FontSize int     // 文字字号（pt*100，如 1600=16pt）
         FontBold bool
         FontColor string // 文字颜色
+        Font     string  // 字体名 (modern)
         // 特效
         Shadow     bool
         Glow       bool
@@ -80,6 +83,14 @@ type Shape struct {
         SoftEdge   bool
         Gradient   string // 渐变色 "4f46e5,818cf8"
         Rotation   int    // 旋转角度
+        // 现代扩展字段
+        Glass        bool       // 玻璃质感 (半透明 + 模糊)
+        GlassAlpha   int        // 玻璃填充透明度 0-100
+        GlassBlur    int        // 玻璃模糊半径 EMU
+        CornerRadius int        // 圆角半径 EMU (用于 roundRect 自定义)
+        TextAlign    string     // 文字水平对齐 "l"/"ctr"/"r"/"just"
+        TextAnchor   string     // 文字垂直对齐 "t"/"ctr"/"b"
+        MultiText    []TextRun  // 多段文本 (优先于 Text)
 }
 
 // ArtText 艺术字
@@ -268,6 +279,10 @@ func (sh *Shape) SetText(text string) *Shape { sh.Text = text; return sh }
 func (sh *Shape) SetFontSize(pt int) *Shape { sh.FontSize = pt * 100; return sh }
 // SetFontColor 设置文字颜色
 func (sh *Shape) SetFontColor(hex string) *Shape { sh.FontColor = hex; return sh }
+// SetFontBold 设置文字粗细 (modern)
+func (sh *Shape) SetFontBold(b bool) *Shape { sh.FontBold = b; return sh }
+// SetFont 设置文字字体 (modern)
+func (sh *Shape) SetFont(font string) *Shape { sh.Font = font; return sh }
 // SetShadow 设置阴影
 func (sh *Shape) SetShadow(b bool) *Shape { sh.Shadow = b; return sh }
 // SetGlow 设置发光
@@ -419,8 +434,28 @@ func (s *Slide) slideXML(num int) string {
 <p:cSld><p:spTree>
 `)
 
-        // 背景
-        if s.bgColor != "" && s.bgColor != "#ffffff" {
+        // 背景 — 优先级: aurora > gradient > solid
+        if s.bgAurora != nil {
+                // Aurora 用基础色背景 + 装饰性发光圆 (通过 shapes 实现)
+                bgHex := strings.TrimPrefix(s.bgAurora.BaseColor, "#")
+                if bgHex == "" { bgHex = "0B1120" }
+                sb.WriteString(fmt.Sprintf(`<p:bg><p:bgPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill></p:bgPr></p:bg>`, bgHex))
+                // 装饰性发光圆 (在所有形状之前渲染，作为背景层)
+                for _, g := range s.bgAurora.Glows {
+                        glowHex := strings.TrimPrefix(g.Color, "#")
+                        alphaVal := 100000 - alphaToOOXML(g.Alpha)
+                        if alphaVal < 0 { alphaVal = 0 }
+                        if alphaVal > 100000 { alphaVal = 100000 }
+                        sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="0" name="AuroraGlow"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>
+<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>
+<a:solidFill><a:srgbClr val="%s"><a:alpha val="%d"/></a:srgbClr></a:solidFill>
+<a:effectLst><a:blur rad="%d"/></a:effectLst></p:spPr></p:sp>`,
+                                g.X-g.R, g.Y-g.R, g.R*2, g.R*2, glowHex, alphaVal, g.R))
+                }
+        } else if s.bgGradient != nil {
+                sb.WriteString(fmt.Sprintf(`<p:bg><p:bgPr>%s</p:bgPr></p:bg>`, s.bgGradient.toXML()))
+        } else if s.bgColor != "" && s.bgColor != "#ffffff" {
                 bgHex := strings.TrimPrefix(s.bgColor, "#")
                 sb.WriteString(fmt.Sprintf(`<p:bg><p:bgPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill></p:bgPr></p:bg>`, bgHex))
         }
@@ -486,6 +521,12 @@ func (s *Slide) slideXML(num int) string {
 
                 // 效果容器
                 effectLst := ""
+                if sh.Glass {
+                        // 玻璃质感: 在 shadow 之前加 blur
+                        blurRad := sh.GlassBlur
+                        if blurRad == 0 { blurRad = 20000 }
+                        effectLst += fmt.Sprintf(`<a:effectLst><a:blur rad="%d"/></a:effectLst>`, blurRad)
+                }
                 if sh.Shadow {
                         effectLst += `<a:effectLst><a:outerShdw blurRad="40000" dist="20000" dir="5400000" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="40000"/></a:srgbClr></a:outerShdw></a:effectLst>`
                 }
@@ -495,8 +536,12 @@ func (s *Slide) slideXML(num int) string {
                 if sh.Reflection { effectLst += `<a:effectLst><a:reflection blurRad="50000" stA="50000" stPos="0" endA="0" endPos="50000"/></a:effectLst>` }
                 if sh.SoftEdge { effectLst += `<a:effectLst><a:softEdge rad="30000"/></a:effectLst>` }
 
-                // 填充
+                // 填充 (支持玻璃半透明)
                 fillXML := fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"/></a:solidFill>`, fillHex)
+                if sh.Glass && sh.GlassAlpha > 0 {
+                        alphaVal := alphaToOOXML(sh.GlassAlpha)
+                        fillXML = fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"><a:alpha val="%d"/></a:srgbClr></a:solidFill>`, fillHex, alphaVal)
+                }
                 if sh.Gradient != "" {
                         colors := strings.Split(sh.Gradient, ",")
                         if len(colors) == 2 {
@@ -504,17 +549,56 @@ func (s *Slide) slideXML(num int) string {
                         }
                 }
 
-                // 文字
+                // 圆角自定义 (roundRect 用 avLst 设置半径)
+                geomXML := fmt.Sprintf(`<a:prstGeom prst="%s"><a:avLst/></a:prstGeom>`, prst)
+                if prst == "roundRect" && sh.CornerRadius > 0 {
+                        geomXML = fmt.Sprintf(`<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val %d"/></a:avLst></a:prstGeom>`, sh.CornerRadius/1000)
+                }
+
+                // 文字 (优先 MultiText, 其次单 Text)
                 textXML := ""
-                if sh.Text != "" {
-                        textXML = fmt.Sprintf(`<p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="%d" b="%d"><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:rPr><a:t>%s</a:t></a:r></a:p></p:txBody>`,
-                                sh.FontSize, boolToInt(sh.FontBold), strings.TrimPrefix(sh.FontColor, "#"), escapeXML(sh.Text))
+                if len(sh.MultiText) > 0 {
+                        anchor := sh.TextAnchor
+                        if anchor == "" { anchor = "t" }
+                        algn := sh.TextAlign
+                        if algn == "" { algn = "l" }
+                        var txBuf strings.Builder
+                        txBuf.WriteString(fmt.Sprintf(`<p:txBody><a:bodyPr wrap="square" anchor="%s" lIns="91440" tIns="91440" rIns="91440" bIns="91440"/><a:lstStyle/>`, anchor))
+                        for _, run := range sh.MultiText {
+                                runColor := strings.TrimPrefix(run.Color, "#")
+                                if runColor == "" { runColor = "F8FAFC" }
+                                runSize := run.Size
+                                if runSize == 0 { runSize = 1200 }
+                                boldStr := "0"
+                                if run.Bold { boldStr = "1" }
+                                italStr := "0"
+                                if run.Italic { italStr = "1" }
+                                fontLatin := ""
+                                if run.Font != "" {
+                                        fontLatin = fmt.Sprintf(`<a:latin typeface="%s"/><a:ea typeface="%s"/>`, run.Font, run.Font)
+                                }
+                                runPropsXML := fmt.Sprintf(`<a:rPr lang="zh-CN" sz="%d" b="%s" i="%s">%s<a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:rPr>`, runSize, boldStr, italStr, fontLatin, runColor)
+                                txBuf.WriteString(fmt.Sprintf(`<a:p><a:pPr algn="%s" indent="0"><a:endParaRPr lang="zh-CN" sz="%d"/></a:pPr><a:r>%s<a:t>%s</a:t></a:r></a:p>`, algn, runSize, runPropsXML, escapeXML(run.Text)))
+                        }
+                        txBuf.WriteString(`</p:txBody>`)
+                        textXML = txBuf.String()
+                } else if sh.Text != "" {
+                        anchor := sh.TextAnchor
+                        if anchor == "" { anchor = "ctr" }
+                        algn := sh.TextAlign
+                        if algn == "" { algn = "ctr" }
+                        fontLatin := ""
+                        if sh.Font != "" {
+                                fontLatin = fmt.Sprintf(`<a:latin typeface="%s"/><a:ea typeface="%s"/>`, sh.Font, sh.Font)
+                        }
+                        textXML = fmt.Sprintf(`<p:txBody><a:bodyPr wrap="square" anchor="%s"/><a:lstStyle/><a:p><a:pPr algn="%s"/><a:r><a:rPr lang="zh-CN" sz="%d" b="%d">%s<a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:rPr><a:t>%s</a:t></a:r></a:p></p:txBody>`,
+                                anchor, algn, sh.FontSize, boolToInt(sh.FontBold), fontLatin, strings.TrimPrefix(sh.FontColor, "#"), escapeXML(sh.Text))
                 }
 
                 sb.WriteString(fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="%d" name="Shape %d"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
 <p:spPr><a:xfrm%s><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>
-<a:prstGeom prst="%s"><a:avLst/></a:prstGeom>%s<a:ln w="%d"><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln>%s</p:spPr>
-%s</p:sp>`, shapeID, i+1, rotXML, sh.X, sh.Y, sh.W, sh.H, prst, fillXML, sh.StrokeW, strokeHex, effectLst, textXML))
+%s%s<a:ln w="%d"><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln>%s</p:spPr>
+%s</p:sp>`, shapeID, i+1, rotXML, sh.X, sh.Y, sh.W, sh.H, geomXML, fillXML, sh.StrokeW, strokeHex, effectLst, textXML))
         }
 
         // 艺术字
