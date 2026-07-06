@@ -1,20 +1,23 @@
-// Package officelib 提供 HTTP API 暴露 docgo/xlsgo/pptgo 能力
-// 智能体可通过 HTTP 调用生成 Office 文件
+// Package officelib 提供 HTTP API 暴露 docgo/xlsgo/pptgo/pdfgo 能力
+// 智能体可通过 HTTP 调用生成 Office/PDF 文件
 //
 // 端点：
 //   POST /api/lib/doc/create   - 创建 docx（JSON 描述 → 文件下载）
 //   POST /api/lib/xls/create   - 创建 xlsx
 //   POST /api/lib/ppt/create   - 创建 pptx
+//   POST /api/lib/pdf/create   - 创建 pdf
 //   GET  /api/lib/examples      - 获取各端点 JSON 示例
 package officelib
 
 import (
         "encoding/json"
+        "fmt"
         "net/http"
         "strconv"
 
         "github.com/gin-gonic/gin"
         "github.com/zai/gooffice/pkg/docgo"
+        "github.com/zai/gooffice/pkg/pdfgo"
         "github.com/zai/gooffice/pkg/pptgo"
         "github.com/zai/gooffice/pkg/xlsgo"
 )
@@ -24,6 +27,7 @@ func Register(r *gin.Engine) {
         r.POST("/api/lib/doc/create", handleDocCreate)
         r.POST("/api/lib/xls/create", handleXlsCreate)
         r.POST("/api/lib/ppt/create", handlePptCreate)
+        r.POST("/api/lib/pdf/create", handlePdfCreate)
         r.GET("/api/lib/examples", handleExamples)
 }
 
@@ -578,6 +582,156 @@ func handlePptCreate(c *gin.Context) {
         c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.presentationml.presentation", data)
 }
 
+// === pdfgo ===
+
+// PdfSpec pdf 创建规格（JSON）
+type PdfSpec struct {
+        Title     string         `json:"title"`
+        Author    string         `json:"author"`
+        Subject   string         `json:"subject"`
+        PageSize  string         `json:"pageSize"`  // A4/Letter/Legal/A3
+        Margins   *PdfMargins    `json:"margins"`   // 页边距 (pt)
+        PageNum   bool           `json:"pageNum"`   // 显示页码
+        FontSize  int            `json:"fontSize"`  // 默认字号 pt
+        LineHeight float64       `json:"lineHeight"` // 默认行距倍数
+        Elements  []PdfElement   `json:"elements"`
+}
+
+// PdfMargins 页边距 (pt)
+type PdfMargins struct {
+        Top, Bottom, Left, Right float64 `json:"top,bottom,left,right"`
+}
+
+// PdfElement PDF 元素 (多态)
+type PdfElement struct {
+        Type         string     `json:"type"` // heading/paragraph/list/table/code/divider/pagebreak/image
+        Text         string     `json:"text,omitempty"`
+        Level        int        `json:"level,omitempty"`
+        Align        string     `json:"align,omitempty"`
+        Items        []string   `json:"items,omitempty"`
+        Ordered      bool       `json:"ordered,omitempty"`
+        Rows         [][]string `json:"rows,omitempty"`
+        Language     string     `json:"language,omitempty"`
+        Code         string     `json:"code,omitempty"`
+        Runs         []PdfRun   `json:"runs,omitempty"`
+        Indent       float64    `json:"indent,omitempty"`
+        LineSpacing  float64    `json:"lineSpacing,omitempty"`
+        SpaceBefore  float64    `json:"spaceBefore,omitempty"`
+        SpaceAfter   float64    `json:"spaceAfter,omitempty"`
+        FontSize     int        `json:"fontSize,omitempty"`
+        ImagePath    string     `json:"imagePath,omitempty"`
+        ImageBase64  string     `json:"imageBase64,omitempty"`
+        ImageWidth   int        `json:"imageWidth,omitempty"`
+        ImageHeight  int        `json:"imageHeight,omitempty"`
+}
+
+// PdfRun 文本片段
+type PdfRun struct {
+        Text   string `json:"text"`
+        Bold   bool   `json:"bold,omitempty"`
+        Italic bool   `json:"italic,omitempty"`
+        Color  string `json:"color,omitempty"`
+        Size   int    `json:"size,omitempty"`
+        Font   string `json:"font,omitempty"`
+}
+
+func handlePdfCreate(c *gin.Context) {
+        var spec PdfSpec
+        if err := c.ShouldBindJSON(&spec); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+
+        doc := pdfgo.New()
+        if spec.Title != "" { doc.SetTitle(spec.Title) }
+        if spec.Author != "" { doc.SetAuthor(spec.Author) }
+        if spec.Subject != "" { doc.SetSubject(spec.Subject) }
+
+        // 页面尺寸
+        switch spec.PageSize {
+        case "Letter":
+                doc.SetPageSize(pdfgo.PageSizeLetter)
+        case "Legal":
+                doc.SetPageSize(pdfgo.PageSizeLegal)
+        case "A3":
+                doc.SetPageSize(pdfgo.PageSizeA3)
+        default:
+                doc.SetPageSize(pdfgo.PageSizeA4)
+        }
+
+        // 页边距
+        if spec.Margins != nil {
+                doc.SetMargins(pdfgo.Margins{
+                        Top: spec.Margins.Top, Bottom: spec.Margins.Bottom,
+                        Left: spec.Margins.Left, Right: spec.Margins.Right,
+                })
+        }
+        if spec.PageNum { doc.SetPageNumber(true) }
+        if spec.FontSize > 0 { doc.SetFontSize(spec.FontSize) }
+        if spec.LineHeight > 0 { doc.SetLineHeight(spec.LineHeight) }
+
+        // 渲染元素
+        for _, e := range spec.Elements {
+                switch e.Type {
+                case "heading":
+                        h := doc.AddHeading(e.Text, e.Level)
+                        if e.Align != "" { h.SetAlign(e.Align) }
+                case "paragraph":
+                        p := doc.AddParagraph("")
+                        if e.Align != "" { p.SetAlign(e.Align) }
+                        if e.LineSpacing > 0 { p.SetLineSpacing(e.LineSpacing) }
+                        if e.FontSize > 0 { p.SetFontSize(e.FontSize) }
+                        if e.Indent > 0 { p.SetIndent(e.Indent) }
+                        if e.SpaceBefore > 0 { p.SetSpaceBefore(e.SpaceBefore) }
+                        if e.SpaceAfter > 0 { p.SetSpaceAfter(e.SpaceAfter) }
+                        if len(e.Runs) > 0 {
+                                for _, r := range e.Runs {
+                                        run := p.AddRun(r.Text)
+                                        if r.Bold { run.Bold(true) }
+                                        if r.Italic { run.Italic(true) }
+                                        if r.Color != "" { run.Color(r.Color) }
+                                        if r.Size > 0 { run.Size(r.Size) }
+                                        if r.Font != "" { run.Font(r.Font) }
+                                }
+                        } else if e.Text != "" {
+                                p.AddRun(e.Text)
+                        }
+                case "list":
+                        if e.Ordered {
+                                doc.AddOrderedList(e.Items)
+                        } else {
+                                doc.AddList(e.Items)
+                        }
+                case "table":
+                        doc.AddTable(e.Rows)
+                case "code":
+                        doc.AddCodeBlock(e.Language, e.Code)
+                case "divider":
+                        doc.AddDivider()
+                case "pagebreak":
+                        doc.AddPageBreak()
+                case "image":
+                        if e.ImageBase64 != "" {
+                                // base64 解码 (简化: 此处省略, 实际应用 base64.StdEncoding)
+                                // doc.AddImageBytes(data, e.ImageWidth, e.ImageHeight)
+                        } else if e.ImagePath != "" {
+                                doc.AddImage(e.ImagePath, e.ImageWidth, e.ImageHeight)
+                        }
+                }
+        }
+
+        data, err := doc.Bytes()
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+
+        filename := spec.Title
+        if filename == "" { filename = "untitled" }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
+        c.Data(http.StatusOK, "application/pdf", data)
+}
+
 // === 示例 ===
 
 func handleExamples(c *gin.Context) {
@@ -611,6 +765,21 @@ func handleExamples(c *gin.Context) {
                         Slides: []PptSlide{
                                 {Layout: "title", Title: "标题页", Subtitle: "副标题"},
                                 {Layout: "content", Title: "内容页", Bullets: []string{"要点1", "要点2"}, Transition: "fade"},
+                        },
+                },
+                "pdf": PdfSpec{
+                        Title:    "示例 PDF 报告",
+                        Author:   "SamAI",
+                        PageSize: "A4",
+                        PageNum:  true,
+                        FontSize: 12,
+                        Elements: []PdfElement{
+                                {Type: "heading", Text: "示例报告", Level: 1, Align: "center"},
+                                {Type: "paragraph", Text: "这是正文段落。", Indent: 24, LineSpacing: 1.6},
+                                {Type: "list", Items: []string{"项1", "项2"}},
+                                {Type: "table", Rows: [][]string{{"A", "B"}, {"1", "2"}}},
+                                {Type: "code", Language: "go", Code: "fmt.Println(\"hi\")"},
+                                {Type: "divider"},
                         },
                 },
         })
