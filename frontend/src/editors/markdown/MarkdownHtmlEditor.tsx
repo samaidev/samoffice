@@ -55,7 +55,9 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
         }
         return `<pre><code>${escapeHtml(code)}</code></pre>`
       }
-      return w.marked.parse(md, { renderer })
+      const raw = w.marked.parse(md, { renderer })
+      // 安全过滤：移除 script/iframe/object/embed/style 标签、事件处理器、javascript: 协议
+      return sanitizeHtml(raw)
     } catch (e: any) {
       return `<p style="color:red">${t('md.renderError', { msg: e.message })}</p>`
     }
@@ -88,7 +90,8 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
   }, [])
 
   const renderHtml = useCallback((html: string): string => {
-    return html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    // HTML 模式同样需要安全过滤
+    return sanitizeHtml(html)
   }, [])
 
   useEffect(() => {
@@ -260,4 +263,34 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * HTML 安全过滤：防止 XSS 攻击
+ * 1. 移除 <script>、<iframe>、<object>、<embed>、<style>、<link>、<meta> 等危险标签
+ * 2. 移除所有 on* 事件处理器属性（onclick、onerror、onload 等）
+ * 3. 移除 javascript: 协议的 href/src 属性
+ * 4. 移除 data: 协议的 href/src 属性（防止 data:text/html 执行）
+ */
+function sanitizeHtml(html: string): string {
+  return html
+    // 移除 <script>...</script>（含内容）
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    // 移除 <noscript>...</noscript>
+    .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '')
+    // 移除自闭合或未闭合的危险标签（含内容到下一个 >）
+    .replace(/<(iframe|object|embed|style|link|meta|base|form|input|button|textarea|svg|math)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+    // 移除独立的危险标签（无闭合）
+    .replace(/<\/?(iframe|object|embed|style|link|meta|base|form|input|button|textarea|svg|math|script|noscript)\b[^>]*>/gi, '')
+    // 移除所有事件处理器属性 on*="..."
+    .replace(/\s+on\w+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\s+on\w+\s*=\s*'[^']*'/gi, '')
+    .replace(/\s+on\w+\s*=\s*[^\s>]+/gi, '')
+    // 移除 javascript: 协议的 href/src
+    .replace(/(href|src)\s*=\s*"\s*javascript:[^"]*"/gi, '$1="#"')
+    .replace(/(href|src)\s*=\s*'\s*javascript:[^']*'/gi, '$1="#"')
+    .replace(/(href|src)\s*=\s*javascript:[^\s>]+/gi, '$1="#"')
+    // 移除 data:text/html 等可执行 data 协议
+    .replace(/(href|src)\s*=\s*"\s*data:text\/html[^"]*"/gi, '$1="#"')
+    .replace(/(href|src)\s*=\s*'\s*data:text\/html[^']*'/gi, '$1="#"')
 }

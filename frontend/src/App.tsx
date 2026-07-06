@@ -328,6 +328,7 @@ ${t('sample.md.more')}
             onClick={() => setMenuOpen(!menuOpen)}
             className="p-2 rounded-md hover:bg-white/15 transition-colors"
             aria-label={t('app.menu')}
+            data-testid="hamburger-toggle"
           >
             <div className="w-5 h-0.5 bg-white mb-1.5 rounded transition-all" style={{ transform: menuOpen ? 'rotate(45deg) translate(4px, 4px)' : '' }}></div>
             <div className="w-5 h-0.5 bg-white mb-1.5 rounded transition-all" style={{ opacity: menuOpen ? 0 : 1 }}></div>
@@ -341,13 +342,19 @@ ${t('sample.md.more')}
         <button
           onClick={toggleTheme}
           data-tooltip={`${t('app.theme')}: ${themeLabel}`}
+          data-testid="theme-toggle"
+          aria-label={t('app.theme')}
           className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0"
         >
           <span className="text-sm">{themeIcon}</span>
         </button>
 
         {/* 模式标识 */}
-        <div className="text-xs opacity-80 hidden md:flex items-center gap-1.5">
+        <div
+          className="text-xs opacity-80 hidden md:flex items-center gap-1.5"
+          data-testid="mode-badge"
+          data-mode={backend?.mode || 'remote'}
+        >
           <span className={`w-1.5 h-1.5 rounded-full ${backend?.mode === 'local' ? 'bg-green-300' : 'bg-blue-300'} animate-pulse`}></span>
           {backend?.mode === 'local' ? t('app.local') : t('app.remote')}
         </div>
@@ -371,11 +378,12 @@ ${t('sample.md.more')}
           className="shadow-lg flex-shrink-0 border-b animate-fade-in"
           style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
         >
-          {menuItems.map((it) => (
+          {menuItems.map((it, idx) => (
             <button
               key={it.label}
               onClick={it.onClick}
               disabled={loading}
+              data-testid={`mobile-menu-item-${idx}`}
               className="block w-full text-left px-4 py-3 text-sm border-b disabled:opacity-50 flex items-center gap-3 transition-colors"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'}
@@ -405,6 +413,7 @@ ${t('sample.md.more')}
           <button
             key={t.id}
             onClick={() => setTab(t.id as Tab)}
+            data-testid={`tab-${t.id}`}
             className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${
               tab === t.id
                 ? 'border-indigo-600 text-indigo-600'
