@@ -44,7 +44,24 @@ const dict: Record<string, { en: string; zh: string }> = {
   'tab.slide': { en: 'Slide', zh: '演示' },
   'tab.markdown': { en: 'MD', zh: 'MD' },
   'tab.html': { en: 'HTML', zh: 'HTML' },
+  'tab.pdf': { en: 'PDF', zh: 'PDF' },
   'tab.about': { en: 'About', zh: '关于' },
+
+  // === PdfViewer ===
+  'pdf.openFile': { en: 'Open PDF', zh: '打开 PDF' },
+  'pdf.prevPage': { en: 'Previous Page', zh: '上一页' },
+  'pdf.nextPage': { en: 'Next Page', zh: '下一页' },
+  'pdf.zoomIn': { en: 'Zoom In', zh: '放大' },
+  'pdf.zoomOut': { en: 'Zoom Out', zh: '缩小' },
+  'pdf.zoomReset': { en: 'Reset Zoom', zh: '重置缩放' },
+  'pdf.download': { en: 'Download', zh: '下载' },
+  'pdf.loading': { en: 'Loading PDF...', zh: '正在加载 PDF...' },
+  'pdf.loadError': { en: 'Failed to load PDF', zh: 'PDF 加载失败' },
+  'pdf.emptyTitle': { en: 'PDF Viewer', zh: 'PDF 阅读器' },
+  'pdf.emptyDesc': { en: 'Open a PDF file to view it in the browser', zh: '打开一个 PDF 文件在浏览器中查看' },
+  'pdf.shortcutNav': { en: 'Navigation', zh: '导航' },
+  'pdf.shortcutZoom': { en: 'Zoom', zh: '缩放' },
+  'pdf.pageOf': { en: 'Page {current} of {total}', zh: '第 {current} / {total} 页' },
 
   // === DocumentEditor ===
   'doc.ribbon.home': { en: 'Home', zh: '开始' },

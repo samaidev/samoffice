@@ -722,6 +722,106 @@ console.log('\n--- 模块 5: Markdown / HTML ---');
   await ctx.close();
 }
 
+// ============ 模块 5b: PDF 阅读器 ============
+console.log('\n--- 模块 5b: PDF 阅读器 ---');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(DEFAULT_TIMEOUT);
+  await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(800);
+
+  await safe('PDF1', '切换到 PDF Tab', async () => {
+    // 等待 React 渲染
+    await page.waitForSelector('[data-testid="tab-pdf"]', { state: 'visible', timeout: 8000 });
+    await page.locator('[data-testid="tab-pdf"]').click({ timeout: 5000 });
+    await page.waitForTimeout(500);
+    // 检查 PDF 工具栏可见
+    await page.waitForSelector('[data-testid="pdf-toolbar"]', { state: 'visible', timeout: 5000 });
+    // 检查空状态提示
+    await page.waitForSelector('[data-testid="pdf-empty"]', { state: 'visible', timeout: 5000 });
+    await shot(page, 'pdf1-empty');
+  });
+
+  await safe('PDF2', 'PDF 打开按钮可见', async () => {
+    const openBtn = page.locator('[data-testid="pdf-open-btn"]');
+    if (!await openBtn.count()) throw new Error('无打开按钮');
+    const txt = await openBtn.innerText();
+    if (!/open|打开/i.test(txt) && !/📂/.test(txt)) throw new Error(`按钮文本异常: "${txt}"`);
+  });
+
+  await safe('PDF3', 'PDF 空状态文案', async () => {
+    const empty = page.locator('[data-testid="pdf-empty"]');
+    const txt = await empty.innerText();
+    if (!/pdf|阅读|viewer/i.test(txt)) throw new Error(`空状态文案异常: "${txt.slice(0, 100)}"`);
+  });
+
+  await safe('PDF4', 'PDF 加载本地 PDF 文件', async () => {
+    // 用之前生成的政府公文 PDF 作为测试文件
+    const pdfPath = '/tmp/govdoc-inspect/政府公文-GB9704标准.pdf';
+    // 如果该文件不存在，先生成一个
+    const fs2 = await import('fs');
+    if (!fs2.existsSync(pdfPath)) {
+      throw new Error('测试 PDF 文件不存在，请先生成');
+    }
+    // 通过 setInputFiles 上传文件到隐藏的 input
+    const fileInput = page.locator('input[type="file"][accept*="pdf"]').first();
+    if (!await fileInput.count()) {
+      // 直接触发打开按钮，然后用 page.setInputFiles
+      await page.locator('[data-testid="pdf-open-btn"]').click({ timeout: 2000 });
+      // Playwright 的 file chooser 处理
+    }
+    // 使用 event-based 文件选择
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout: 5000 }),
+      page.locator('[data-testid="pdf-open-btn"]').click(),
+    ]);
+    await fileChooser.setFiles(pdfPath);
+    await page.waitForTimeout(2000); // 等待 PDF.js 加载
+    // 检查 canvas 是否渲染
+    const canvas = page.locator('[data-testid="pdf-canvas"]');
+    if (!await canvas.count()) throw new Error('PDF canvas 未渲染');
+    // 检查状态栏页码
+    const status = page.locator('[data-testid="pdf-statusbar"]');
+    if (await status.count()) {
+      const txt = await status.innerText();
+      if (!/\d+\s*\/\s*\d+/.test(txt) && !/page|页/i.test(txt)) throw new Error(`状态栏异常: "${txt}"`);
+    }
+    await shot(page, 'pdf4-loaded');
+  });
+
+  await safe('PDF5', 'PDF 翻页', async () => {
+    // 等待 PDF 加载完成
+    await page.waitForTimeout(1000);
+    const pageInput = page.locator('[data-testid="pdf-page-input"]');
+    if (!await pageInput.count()) throw new Error('无页码输入');
+    const beforePage = await pageInput.inputValue();
+    const nextBtn = page.locator('[data-testid="pdf-next-btn"]');
+    if (await nextBtn.count() && await nextBtn.isEnabled()) {
+      await nextBtn.click({ timeout: 2000 });
+      await page.waitForTimeout(800);
+      const afterPage = await pageInput.inputValue();
+      if (afterPage === beforePage) throw new Error('页码未变化');
+    }
+  });
+
+  await safe('PDF6', 'PDF 缩放', async () => {
+    const zoomIn = page.locator('[data-testid="pdf-zoom-in"]');
+    if (!await zoomIn.count()) throw new Error('无放大按钮');
+    if (await zoomIn.isEnabled()) {
+      await zoomIn.click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+    }
+    const zoomOut = page.locator('[data-testid="pdf-zoom-out"]');
+    if (await zoomOut.count() && await zoomOut.isEnabled()) {
+      await zoomOut.click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+    }
+  });
+
+  await ctx.close();
+}
+
 // ============ 模块 6: API ============
 console.log('\n--- 模块 6: 后端 API ---');
 {

@@ -5,10 +5,11 @@ import { DocumentEditor } from './editors/document/DocumentEditor'
 import { SpreadsheetEditor } from './editors/spreadsheet/SpreadsheetEditor'
 import { SlideEditor } from './editors/slide/SlideEditor'
 import { MarkdownHtmlEditor } from './editors/markdown/MarkdownHtmlEditor'
+import { PdfViewer } from './editors/pdf/PdfViewer'
 import { AboutPage } from './components/AboutPage'
 import { useI18n } from './i18n'
 
-type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'about'
+type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
 
 function App() {
@@ -177,10 +178,23 @@ ${t('sample.md.more')}
     setMenuOpen(false)
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.docx,.md,.markdown,.xlsx,.pptx'
+    input.accept = '.docx,.md,.markdown,.xlsx,.pptx,.pdf'
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) return
+
+      // PDF 文件直接切换到 PDF Tab，用 blob URL 加载
+      if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
+        setTab('pdf')
+        showToast(t('app.opening', { name: file.name }))
+        // 等待 PdfViewer 组件挂载后，通过自定义事件传递文件
+        setTimeout(() => {
+          const url = URL.createObjectURL(file)
+          window.dispatchEvent(new CustomEvent('pdf-open', { detail: { url, name: file.name } }))
+        }, 300)
+        return
+      }
+
       setLoading(true)
       showToast(t('app.opening', { name: file.name }))
       try {
@@ -409,6 +423,7 @@ ${t('sample.md.more')}
           { id: 'slide', icon: '🎞', label: t('tab.slide') },
           { id: 'markdown', icon: '📝', label: t('tab.markdown') },
           { id: 'html', icon: '🌐', label: t('tab.html') },
+          { id: 'pdf', icon: '📕', label: t('tab.pdf') },
           { id: 'about', icon: 'ℹ️', label: t('tab.about') },
         ]).map((t) => (
           <button
@@ -484,6 +499,7 @@ ${t('sample.md.more')}
               onChange={setHtmlContent}
             />
           )}
+          {tab === 'pdf' && <PdfViewer />}
           {tab === 'about' && <AboutPage />}
         </div>
 
