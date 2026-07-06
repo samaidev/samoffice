@@ -11,6 +11,7 @@ import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign } from './tableCommands'
 import { useI18n } from '../../i18n'
+import { PrintDialog } from '../../components/PrintDialog'
 import type { Document, SpellError } from '../../types/udm'
 
 interface Props {
@@ -26,9 +27,9 @@ const LINE_HEIGHTS = [{ name: '1.0', value: '1.0' }, { name: '1.5', value: '1.5'
 const COLORS = ['#000000','#374151','#6B7280','#9CA3AF','#EF4444','#F59E0B','#10B981','#3B82F6','#6366F1','#8B5CF6','#EC4899','#6B7280']
 const HL_COLORS = ['#fef08a','#bbf7d0','#bfdbfe','#fbcfe8','#fed7aa','#e9d5ff']
 
-function RibbonButton({ icon, label, onClick, active, disabled, title }: any) {
+function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
-    <button onClick={onClick} disabled={disabled} title={title || label}
+    <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
       className="flex flex-col items-center justify-center gap-0.5 px-2.5 py-1 rounded-md transition-colors min-w-[48px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
@@ -86,6 +87,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [zoom, setZoom] = useState(100)
   const [trackChanges, setTrackChanges] = useState(false)
   const [printPreview, setPrintPreview] = useState(false)
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [inTable, setInTable] = useState(false)
   const [watermark, setWatermark] = useState('')
   const [showMiniToolbar, setShowMiniToolbar] = useState(false)
@@ -547,7 +549,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('doc.newWindowTitle')} />
             <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setParaAttr('split', !activeAttrs.split)} active={activeAttrs.split} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
-          <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintPreview(!printPreview)} /></RibbonGroup>
+          <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
         </>)}
       </div>
 
@@ -606,12 +608,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div className="flex-1 overflow-auto" style={{ zoom: `${zoom}%` }} ref={editorRef as any} />
 
-      {printPreview && (
-        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(15,23,42,0.9)' }}>
-          <div className="flex items-center gap-2 px-4 py-2 text-white"><span className="font-semibold">{t('doc.printPreview')}</span><div className="flex-1" /><button onClick={handlePrint} className="btn btn-primary btn-sm">🖨 {t('doc.print')}</button><button onClick={() => setPrintPreview(false)} className="btn btn-ghost btn-sm" style={{ color: 'white' }}>✕ {t('doc.close')}</button></div>
-          <div className="flex-1 overflow-auto p-8 flex justify-center"><div className="bg-white shadow-2xl" style={{ width: '210mm', minHeight: '297mm', padding: '20mm' }}><div ref={editorRef as any} /></div></div>
-        </div>
-      )}
+      {/* MS Office 风格打印对话框 */}
+      <PrintDialog
+        open={printDialogOpen}
+        onClose={() => setPrintDialogOpen(false)}
+        editorType="word"
+        printSelector=".ProseMirror"
+        renderPreview={(settings) => (
+          <div className="text-xs leading-relaxed" style={{ color: '#000' }}>
+            <h1 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>{document.meta?.title || t('app.untitled')}</h1>
+            {(document.blocks || []).slice(0, 6).map((b: any, i: number) => (
+              <p key={i} style={{ marginBottom: '4px', textIndent: b.inline?.[0]?.content ? '2em' : 0 }}>
+                {(b.inline || []).map((r: any) => r.content).join('').slice(0, 80)}
+              </p>
+            ))}
+            <div style={{ marginTop: '12px', fontSize: '10px', color: '#999' }}>- 1 -</div>
+          </div>
+        )}
+      />
     </div>
   )
 }

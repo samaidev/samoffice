@@ -822,6 +822,111 @@ console.log('\n--- 模块 5b: PDF 阅读器 ---');
   await ctx.close();
 }
 
+// ============ 模块 5c: 打印对话框 ============
+console.log('\n--- 模块 5c: 打印对话框 ---');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(DEFAULT_TIMEOUT);
+  await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(800);
+  await page.waitForSelector('.ProseMirror', { timeout: 8000 });
+
+  await safe('PR1', 'Word 打开打印对话框', async () => {
+    // 切到 View ribbon
+    await page.locator('[data-testid="ribbon-tab-view"]').click({ timeout: 3000 });
+    await page.waitForTimeout(300);
+    // 点击打印按钮
+    await page.locator('[data-testid="word-print-btn"]').click({ timeout: 3000 });
+    await page.waitForTimeout(500);
+    // 检查对话框可见
+    await page.waitForSelector('[data-testid="print-dialog"]', { state: 'visible', timeout: 5000 });
+    await shot(page, 'pr1-word-print-dialog');
+  });
+
+  await safe('PR2', '打印对话框常规 Tab', async () => {
+    // 检查打印机选择
+    const printer = page.locator('[data-testid="print-printer"]');
+    if (!await printer.count()) throw new Error('无打印机选择');
+    // 检查页范围
+    if (!await page.locator('[data-testid="print-range-all"]').count()) throw new Error('无全部页选项');
+    // 检查份数
+    if (!await page.locator('[data-testid="print-copies"]').count()) throw new Error('无份数输入');
+    // 检查方向
+    if (!await page.locator('[data-testid="print-portrait"]').count()) throw new Error('无纵向选项');
+    // 检查颜色
+    if (!await page.locator('[data-testid="print-color"]').count()) throw new Error('无颜色选择');
+  });
+
+  await safe('PR3', '打印对话框版式 Tab', async () => {
+    await page.locator('[data-testid="print-tab-layout"]').click({ timeout: 2000 });
+    await page.waitForTimeout(300);
+    // 检查纸张大小
+    if (!await page.locator('[data-testid="print-paper-size"]').count()) throw new Error('无纸张大小');
+    // 检查页边距
+    if (!await page.locator('[data-testid="print-margin-top"]').count()) throw new Error('无页边距');
+    // 检查缩放
+    if (!await page.locator('[data-testid="print-scale"]').count()) throw new Error('无缩放');
+    // 检查双面
+    if (!await page.locator('[data-testid="print-duplex"]').count()) throw new Error('无双面打印');
+  });
+
+  await safe('PR4', '打印对话框页范围自定义', async () => {
+    await page.locator('[data-testid="print-tab-general"]').click({ timeout: 2000 });
+    await page.waitForTimeout(200);
+    await page.locator('[data-testid="print-range-custom"]').click({ timeout: 2000 });
+    await page.waitForTimeout(200);
+    const customInput = page.locator('[data-testid="print-custom-pages"]');
+    if (!await customInput.count()) throw new Error('自定义页范围未显示');
+    await customInput.fill('1-3,5');
+    await page.waitForTimeout(200);
+  });
+
+  await safe('PR5', '打印对话框方向切换', async () => {
+    await page.locator('[data-testid="print-landscape"]').click({ timeout: 2000 });
+    await page.waitForTimeout(300);
+    // 预览应反映横向 (宽 > 高)
+    const preview = page.locator('[data-testid="print-preview"]');
+    if (!await preview.count()) throw new Error('无预览');
+    const box = await preview.boundingBox();
+    if (!box || box.width <= box.height) throw new Error(`横向预览异常: ${box?.width}x${box?.height}`);
+  });
+
+  await safe('PR6', '打印对话框关闭', async () => {
+    await page.locator('[data-testid="print-cancel"]').click({ timeout: 2000 });
+    await page.waitForTimeout(300);
+    if (await page.locator('[data-testid="print-dialog"]').count()) throw new Error('对话框未关闭');
+  });
+
+  // Excel 打印
+  await safe('PR7', 'Excel 打开打印对话框', async () => {
+    await page.locator('[data-testid="tab-spreadsheet"]').click({ timeout: 3000 });
+    await page.waitForTimeout(500);
+    await page.locator('[data-testid="ribbon-tab-view"]').click({ timeout: 2000 });
+    await page.waitForTimeout(300);
+    await page.locator('[data-testid="excel-print-btn"]').click({ timeout: 3000 });
+    await page.waitForTimeout(500);
+    await page.waitForSelector('[data-testid="print-dialog"]', { state: 'visible', timeout: 5000 });
+    // 检查 Excel 专用选项 (高级 tab)
+    await page.locator('[data-testid="print-cancel"]').click({ timeout: 2000 });
+  });
+
+  // PPT 打印
+  await safe('PR8', 'PPT 打开打印对话框', async () => {
+    await page.locator('[data-testid="tab-slide"]').click({ timeout: 3000 });
+    await page.waitForTimeout(1500);
+    await page.locator('[data-testid="ribbon-tab-view"]').click({ timeout: 2000 });
+    await page.waitForTimeout(300);
+    await page.locator('[data-testid="ppt-print-btn"]').click({ timeout: 3000 });
+    await page.waitForTimeout(500);
+    await page.waitForSelector('[data-testid="print-dialog"]', { state: 'visible', timeout: 5000 });
+    await shot(page, 'pr8-ppt-print-dialog');
+    await page.locator('[data-testid="print-cancel"]').click({ timeout: 2000 });
+  });
+
+  await ctx.close();
+}
+
 // ============ 模块 6: API ============
 console.log('\n--- 模块 6: 后端 API ---');
 {

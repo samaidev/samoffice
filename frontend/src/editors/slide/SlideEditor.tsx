@@ -1,5 +1,6 @@
 import { useState, useMemo, memo } from 'react'
 import { useI18n } from '../../i18n'
+import { PrintDialog } from '../../components/PrintDialog'
 
 interface Slide {
   id: number; title: string; content: string; bg: string
@@ -66,9 +67,9 @@ interface AnimItem {
 
 type RibbonTab = 'home' | 'insert' | 'design' | 'modern' | 'animations' | 'transition' | 'view'
 
-function RibbonButton({ icon, label, onClick, active, disabled, title }: any) {
+function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
-    <button onClick={onClick} disabled={disabled} title={title || label}
+    <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
       className="flex flex-col items-center justify-center gap-0.5 px-2.5 py-1 rounded-md transition-colors min-w-[48px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
@@ -114,6 +115,7 @@ export function SlideEditor() {
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showAnimPanel, setShowAnimPanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
 
   const addSlide = () => { setSlides(s => [...s, { id: Date.now(), title: t('slide.slideN', { n: s.length + 1 }), content: t('slide.addContentHere'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }]); setActive(slides.length) }
   const deleteSlide = (idx: number) => { if (slides.length <= 1) return; setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
@@ -500,8 +502,49 @@ export function SlideEditor() {
             <RibbonButton icon="▶" label={t('slide.fromStart')} onClick={() => { setActive(0); startPresent() }} />
             <RibbonButton icon="▶" label={t('slide.fromCurrent')} onClick={startPresent} />
           </RibbonGroup>
+          {/* MS Office 风格打印 */}
+          <RibbonGroup label={t('print.title')}>
+            <RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="ppt-print-btn" title={t('print.title')} />
+          </RibbonGroup>
         </>)}
       </div>
+
+      {/* 打印对话框 */}
+      <PrintDialog
+        open={printDialogOpen}
+        onClose={() => setPrintDialogOpen(false)}
+        editorType="ppt"
+        printSelector=".slide-canvas"
+        renderPreview={(settings) => {
+          const slidesToShow = settings.pptContent === 'handout'
+            ? slides.slice(0, settings.slidesPerPage * 2)
+            : slides.slice(0, 2)
+          return (
+            <div style={{ color: '#000' }}>
+              {settings.pptContent === 'notes' ? (
+                <div className="text-[8px]">
+                  <div className="font-bold mb-1">{slides[0]?.title}</div>
+                  <div className="text-[7px] text-gray-600">{slides[0]?.notes || t('slide.noAnim')}</div>
+                </div>
+              ) : settings.pptContent === 'outline' ? (
+                <div className="text-[8px] space-y-0.5">
+                  {slides.map((s, i) => <div key={i}><b>{i + 1}.</b> {s.title}</div>)}
+                </div>
+              ) : (
+                <div className={`grid gap-1 ${settings.slidesPerPage <= 1 ? 'grid-cols-1' : settings.slidesPerPage <= 2 ? 'grid-cols-1' : settings.slidesPerPage <= 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+                  {slidesToShow.map((s, i) => (
+                    <div key={i} className="border p-1 text-[6px]" style={{ background: s.bg, aspectRatio: '16/9' }}>
+                      <div className="font-bold truncate">{s.title}</div>
+                      <div className="text-[5px] text-gray-600 truncate">{s.content}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="text-[8px] text-gray-500 mt-1 text-center">- 1 -</div>
+            </div>
+          )
+        }}
+      />
 
       {/* 主体 */}
       <div className="flex flex-1 overflow-hidden min-h-0">

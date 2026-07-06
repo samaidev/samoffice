@@ -1,14 +1,15 @@
 import { useState } from 'react'
 import { useI18n } from '../../i18n'
+import { PrintDialog } from '../../components/PrintDialog'
 
 interface Cell { value: string; formula?: string }
 interface Props { initialRows?: number; initialCols?: number; title?: string }
 
 type RibbonTab = 'home' | 'insert' | 'data' | 'view'
 
-function RibbonButton({ icon, label, onClick, active, disabled, title }: any) {
+function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
-    <button onClick={onClick} disabled={disabled} title={title || label}
+    <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
       className="flex flex-col items-center justify-center gap-0.5 px-2.5 py-1 rounded-md transition-colors min-w-[48px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
@@ -46,6 +47,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
   const [showCondPanel, setShowCondPanel] = useState(false)
   const [showValidPanel, setShowValidPanel] = useState(false)
   const [validList, setValidList] = useState('')
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const colName = (c: number) => {
     if (c < 26) return String.fromCharCode(65 + c)
     return String.fromCharCode(65 + Math.floor(c / 26) - 1) + String.fromCharCode(65 + (c % 26))
@@ -268,8 +270,47 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => {}} title={t('sheet.pageLayoutTitle')} />
             <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => {}} title={t('sheet.customViewsTitle')} />
           </RibbonGroup>
+          {/* MS Office 风格打印 */}
+          <RibbonGroup label={t('print.title')}>
+            <RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="excel-print-btn" title={t('print.title')} />
+          </RibbonGroup>
         </>)}
       </div>
+
+      {/* 打印对话框 */}
+      <PrintDialog
+        open={printDialogOpen}
+        onClose={() => setPrintDialogOpen(false)}
+        editorType="excel"
+        printSelector="table"
+        renderPreview={(settings) => (
+          <div className="w-full h-full" style={{ color: '#000' }}>
+            <table className="w-full text-[8px] border-collapse" style={{ border: '1px solid #ccc' }}>
+              <thead>
+                <tr>
+                  <th className="border p-0.5 bg-gray-100"></th>
+                  {Array.from({ length: Math.min(cols, 8) }).map((_, c) => (
+                    <th key={c} className="border p-0.5 bg-gray-100">{colName(c)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: Math.min(rows, 12) }).map((_, r) => (
+                  <tr key={r}>
+                    <td className="border p-0.5 bg-gray-100 text-center">{r + 1}</td>
+                    {Array.from({ length: Math.min(cols, 8) }).map((_, c) => (
+                      <td key={c} className="border p-0.5" style={{ fontFamily: settings.printGridlines ? 'monospace' : 'inherit' }}>
+                        {getCell(r, c).value.slice(0, 10)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {settings.printGridlines && <div className="text-[8px] text-gray-500 mt-1">{t('print.excelGridlines')} ✓</div>}
+          </div>
+        )}
+      />
 
       {/* 公式栏 */}
       <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
