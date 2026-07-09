@@ -465,6 +465,27 @@ input:focus, textarea:focus, select:focus {
 .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
 .animate-spin { animation: spin 0.8s linear infinite; }
 
+/* === Ribbon 弹出菜单统一规范 ===
+ * 解决问题：
+ *  1) 不同编辑器弹出菜单 z-index 不一致（z-20/z-30/z-50 混用）
+ *  2) padding/shadow/rounded 各异
+ *  3) 右侧按钮的弹出菜单向右越界被 overflow-hidden 裁剪
+ * 用法：在 .relative 容器内的弹出层加 className="ribbon-popup"（默认左对齐）
+ *       右侧按钮加 className="ribbon-popup ribbon-popup-right"（右对齐，向左展开）
+ */
+.ribbon-popup {
+  z-index: 50;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  animation: fade-in 0.2s var(--ease-out);
+}
+.ribbon-popup_compact {
+  padding: 0.375rem 0;
+}
+
 /* === 骨架屏 === */
 .skeleton {
   background: linear-gradient(90deg,

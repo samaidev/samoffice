@@ -363,7 +363,7 @@ ${t('sample.md.more')}
             {filesOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setFilesOpen(false)} />
-                <div className="absolute top-full left-0 z-50 mt-1 py-1 rounded-lg shadow-xl animate-fade-in min-w-[180px]" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup ribbon-popup_compact min-w-[180px] mt-1">
                   {fileItems.map((it) => (
                     <button
                       key={it.label}

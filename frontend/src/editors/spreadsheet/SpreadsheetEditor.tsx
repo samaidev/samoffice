@@ -113,7 +113,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmt(active.r, active.c, { bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
             <div className="relative group">
               <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => {}} />
-              <div className="absolute top-full left-0 z-30 p-2 rounded-lg shadow-xl hidden group-hover:block animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.5rem' }}>
                 <div className="grid grid-cols-4 gap-1">
                   {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899'].map(c => (
                     <button key={c} onClick={() => setCellFmt(active.r, active.c, { color: c })} className="w-5 h-5 rounded transition-transform hover:scale-110" style={{ background: c }} title={c} />
@@ -141,7 +141,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => setShowChartPanel(!showChartPanel)} />
               {showChartPanel && (
-                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup">
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { type: 'bar', icon: '📊', name: t('sheet.chart.bar') },
@@ -166,7 +166,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="▭" label={t('sheet.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
-                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup">
                   <div className="grid grid-cols-4 gap-2">
                     {[{i:'▭',n:t('doc.shape.rect')},{i:'▢',n:t('doc.shape.rounded')},{i:'⬭',n:t('doc.shape.ellipse')},{i:'△',n:t('doc.shape.triangle')},
                      {i:'◇',n:t('doc.shape.diamond')},{i:'→',n:t('doc.shape.arrow')},{i:'★',n:t('doc.shape.star')},{i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -199,7 +199,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="ƒx" label={t('sheet.function')} onClick={() => setShowFuncPanel(!showFuncPanel)} />
               {showFuncPanel && (
-                <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
+                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160 }}>
                   <button onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.sum')}</button>
                   <button onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0'); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.average')}</button>
                   <button onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.count')}</button>
@@ -228,7 +228,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => setShowValidPanel(!showValidPanel)} />
               {showValidPanel && (
-                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup">
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('sheet.dropdownOptions')}</div>
                   <input type="text" placeholder={t('sheet.dropdownPlaceholder')} value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
                   <button onClick={() => { setShowValidPanel(false); alert(t('sheet.validationSet', { list: validList })) }} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>
@@ -268,7 +268,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="🎨" label={t('sheet.conditionalFormat')} onClick={() => setShowCondPanel(!showCondPanel)} />
               {showCondPanel && (
-                <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
+                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160 }}>
                   <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v > avg) ? { ...cell, bg: '#dcfce7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
                   <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v < avg) ? { ...cell, bg: '#fef3c7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
                   <button onClick={() => { const vals: {r:number;v:number}[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push({r,v}) } vals.sort((a,b)=>b.v-a.v).slice(0,10).forEach(x => setCellFmt(x.r, active.c, { bg: '#dbeafe' })); setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>

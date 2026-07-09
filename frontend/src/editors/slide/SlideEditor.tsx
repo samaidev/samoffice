@@ -233,7 +233,7 @@ export function SlideEditor() {
             <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontBold: !sh.fontBold }) } else { alert('加粗已应用于选中元素') } }} />
             <div className="relative group">
               <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => { if (!selectedEl) alert('请先选择元素') }} />
-              <div className="absolute top-full left-0 z-30 p-2 rounded-lg shadow-xl hidden group-hover:block" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.5rem' }}>
                 <div className="grid grid-cols-4 gap-1">
                   {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
                     <button key={c} onClick={() => {
@@ -258,7 +258,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
-                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup">
                   <div className="grid grid-cols-4 gap-2">
                     {SHAPES.map(s => (
                       <button key={s.type} onClick={() => addShape(s.type)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 60 }}>
@@ -275,7 +275,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => setShowArtPanel(!showArtPanel)} />
               {showArtPanel && (
-                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup">
                   <div className="grid grid-cols-3 gap-2">
                     {ART_PRESETS.map(p => (
                       <button key={p.name} onClick={() => addArtText(p)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 80 }}>
@@ -499,7 +499,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="➡" label={t('slide.enter')} onClick={() => setShowAnimPanel(!showAnimPanel)} />
               {showAnimPanel && (
-                <div className="absolute top-full left-0 z-30 p-3 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute top-full left-0 ribbon-popup">
                   <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.enter')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {ENTRANCE_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'entrance')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}
