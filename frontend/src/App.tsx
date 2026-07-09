@@ -326,7 +326,7 @@ ${t('sample.md.more')}
     <div className="flex flex-col h-screen" style={{ background: 'var(--color-bg)' }}>
       {/* 合并后的顶部栏: LOGO + 菜单按钮 + Tab + 主题/语言 */}
       <header
-        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-x-auto"
+        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)'
