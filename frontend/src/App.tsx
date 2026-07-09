@@ -323,10 +323,10 @@ ${t('sample.md.more')}
   }, [tab, t, loading])
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: 'var(--color-bg)' }}>
+    <div className="flex flex-col h-screen overflow-x-hidden" style={{ background: 'var(--color-bg)' }}>
       {/* 合并后的顶部栏: LOGO + 菜单按钮 + Tab + 主题/语言 */}
       <header
-        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0"
+        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-x-hidden"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)'
@@ -402,32 +402,32 @@ ${t('sample.md.more')}
 
         <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
 
-        {/* Tab 切换 (合并到同一行) */}
-        {([
-          { id: 'document', icon: '📄', label: t('tab.document') },
-          { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
-          { id: 'slide', icon: '🎞', label: t('tab.slide') },
-          { id: 'markdown', icon: '📝', label: t('tab.markdown') },
-          { id: 'html', icon: '🌐', label: t('tab.html') },
-          { id: 'pdf', icon: '📕', label: t('tab.pdf') },
-          { id: 'about', icon: 'ℹ️', label: t('tab.about') },
-        ]).map((tt) => (
-          <button
-            key={tt.id}
-            onClick={() => setTab(tt.id as Tab)}
-            data-testid={`tab-${tt.id}`}
-            className="px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex items-center gap-1 rounded-md"
-            style={{
-              background: tab === tt.id ? 'rgba(255,255,255,0.2)' : 'transparent',
-              color: tab === tt.id ? '#ffffff' : 'rgba(255,255,255,0.75)'
-            }}
-          >
-            <span>{tt.icon}</span>
-            <span className="hidden md:inline">{tt.label}</span>
-          </button>
-        ))}
-
-        <div className="flex-1" />
+        {/* Tab 切换 (可滚动容器，避免移动端越界) */}
+        <div className="header-tabs-scroll flex items-center gap-0.5">
+          {([
+            { id: 'document', icon: '📄', label: t('tab.document') },
+            { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
+            { id: 'slide', icon: '🎞', label: t('tab.slide') },
+            { id: 'markdown', icon: '📝', label: t('tab.markdown') },
+            { id: 'html', icon: '🌐', label: t('tab.html') },
+            { id: 'pdf', icon: '📕', label: t('tab.pdf') },
+            { id: 'about', icon: 'ℹ️', label: t('tab.about') },
+          ]).map((tt) => (
+            <button
+              key={tt.id}
+              onClick={() => setTab(tt.id as Tab)}
+              data-testid={`tab-${tt.id}`}
+              className="px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex items-center gap-1 rounded-md flex-shrink-0"
+              style={{
+                background: tab === tt.id ? 'rgba(255,255,255,0.2)' : 'transparent',
+                color: tab === tt.id ? '#ffffff' : 'rgba(255,255,255,0.75)'
+              }}
+            >
+              <span>{tt.icon}</span>
+              <span className="hidden md:inline">{tt.label}</span>
+            </button>
+          ))}
+        </div>
 
         {/* 主题切换 */}
         <button
@@ -444,8 +444,8 @@ ${t('sample.md.more')}
         <select
           value={lang}
           onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-          className="text-xs rounded-md px-1.5 py-1 flex-shrink-0"
-          style={{ minWidth: '60px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)' }}
+          className="text-xs rounded-md px-1 py-1 flex-shrink-0"
+          style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)' }}
         >
           <option value="zh" style={{ color: '#000' }}>中文</option>
           <option value="en" style={{ color: '#000' }}>EN</option>

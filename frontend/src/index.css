@@ -485,6 +485,51 @@ input:focus, textarea:focus, select:focus {
 .ribbon-popup_compact {
   padding: 0.375rem 0;
 }
+/* 右对齐弹出菜单：用于右侧按钮，向左展开，避免越界视口右边缘 */
+.ribbon-popup-right {
+  left: auto;
+  right: 0;
+}
+/* 智能弹出菜单：通过 JS 检测位置自动选择左/右对齐 */
+.ribbon-popup-auto {
+  /* JS 会动态设置 left/right */
+}
+
+/* === Ribbon 内容区横向滚动规范 ===
+ * 桌面端保持 overflow: visible（弹出菜单需要逃出容器边界）
+ * 移动端启用横向滚动（移动端无 hover，弹出菜单不适用）
+ */
+.ribbon-scroll {
+  overflow: visible;
+}
+@media (max-width: 768px) {
+  .ribbon-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ribbon-scroll::-webkit-scrollbar {
+    height: 4px;
+  }
+  .ribbon-scroll::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.3);
+    border-radius: 2px;
+  }
+}
+
+/* === 移动端 header 可滚动 Tab 栏 === */
+.header-tabs-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.header-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
 
 /* === 骨架屏 === */
 .skeleton {

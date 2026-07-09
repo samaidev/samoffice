@@ -103,7 +103,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', overflow: 'visible', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 30 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
             <RibbonButton icon="📋" label={t('sheet.copy')} onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />

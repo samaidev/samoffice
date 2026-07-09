@@ -241,6 +241,20 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     return () => window.removeEventListener('keydown', onKey)
   }, [zoom])
 
+  // Escape 关闭所有弹出层（右键菜单、mini工具栏、形状/艺术字面板）
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (showContextMenu) { setShowContextMenu(false); e.preventDefault() }
+      else if (showMiniToolbar) { setShowMiniToolbar(false); e.preventDefault() }
+      else if (showShapePanel) { setShowShapePanel(false); e.preventDefault() }
+      else if (showArtPanel) { setShowArtPanel(false); e.preventDefault() }
+      else if (searchOpen) { setSearchOpen(false); e.preventDefault() }
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [showContextMenu, showMiniToolbar, showShapePanel, showArtPanel, searchOpen])
+
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('doc.ribbon.home') }, { id: 'insert', label: t('doc.ribbon.insert') }, { id: 'layout', label: t('doc.ribbon.layout') }, { id: 'review', label: t('doc.ribbon.review') }, { id: 'view', label: t('doc.ribbon.view') },
   ]
@@ -275,7 +289,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', overflow: 'visible', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 30 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
