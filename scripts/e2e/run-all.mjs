@@ -731,6 +731,48 @@ console.log('\n--- 模块 5b: PDF 阅读器 ---');
   await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(800);
 
+  // === 测试数据准备: 通过 /api/doc/export-pdf 生成多页测试 PDF ===
+  // 修复点: 原测试硬编码依赖 /tmp/govdoc-inspect/政府公文-GB9704标准.pdf，
+  // 但该文件由外部脚本生成，新克隆仓库运行时不存在，导致 PDF4-PDF8 全部级联失败。
+  // 改为测试自给自足：调用现有 PDF 导出 API 生成 2 页测试 PDF。
+  const TEST_PDF_DIR = '/tmp/govdoc-inspect';
+  const TEST_PDF_PATH = path.join(TEST_PDF_DIR, '政府公文-GB9704标准.pdf');
+  try {
+    fs.mkdirSync(TEST_PDF_DIR, { recursive: true });
+    const udm = JSON.stringify({
+      meta: { title: '政府公文-GB9704标准', author: 'E2E Test' },
+      blocks: [
+        { type: 'heading', level: 1, inline: [{ content: '关于推进办公软件标准化建设的通知' }] },
+        { type: 'paragraph', inline: [{ content: '各分公司、各部门：' }] },
+        { type: 'paragraph', inline: [{ content: '为贯彻落实办公软件标准化建设要求，提升公文处理效率和质量，现就推进办公软件标准化建设有关事项通知如下。' }] },
+        { type: 'heading', level: 2, inline: [{ content: '一、总体要求' }] },
+        { type: 'paragraph', inline: [{ content: '以习近平新时代中国特色社会主义思想为指导，全面贯彻党的二十大和二十届历次全会精神，坚持统一标准、分步实施、注重实效的原则，力争用三年时间建成统一的办公软件标准体系。' }] },
+        { type: 'paragraph', inline: [{ content: '制定统一的文件格式、排版规范、字体字号标准，确保各类公文格式一致、风格统一。严格执行 GB/T 9704-2012《党政机关公文格式》国家标准。' }] },
+        { type: 'paragraph', inline: [{ content: '正文统一使用 3 号仿宋_GB2312 字体，数字和英文使用 Times New Roman。一级标题用黑体，二级标题用楷体_GB2312，标题序号依次为一、（一）、1.、（1）。' }] },
+        { type: 'paragraph', inline: [{ content: '正文统一采用固定值 28 磅行距，禁止单倍或多倍行距。每段首行缩进 2 字符，段前段后 0 行。每页 22 行，每行 28 字。' }] },
+        { type: 'heading', level: 2, inline: [{ content: '二、重点任务' }] },
+        { type: 'paragraph', inline: [{ content: '一是完善标准体系。二是推进平台建设。三是加强培训指导。四是强化监督检查。' }] },
+        { type: 'paragraph', inline: [{ content: '附件：1.办公软件标准化建设实施方案' }] },
+        { type: 'paragraph', inline: [{ content: '      2.公文格式规范对照表' }] },
+        { type: 'paragraph', inline: [{ content: 'SamAI 集团办公厅                    ' }] },
+        { type: 'paragraph', inline: [{ content: '2026年7月6日                        ' }] },
+        { type: 'paragraph', inline: [{ content: '抄送：集团领导，各部门。' }] },
+        { type: 'paragraph', inline: [{ content: 'SamAI 集团办公厅                        2026年7月6日印发' }] },
+      ],
+    });
+    const r = await httpReq('POST', '/api/doc/export-pdf', {
+      headers: { 'Content-Type': 'application/json' },
+      body: udm,
+    });
+    if (r.status !== 200 || !/pdf/i.test(r.headers['content-type'] || '')) {
+      throw new Error(`生成测试 PDF 失败: HTTP ${r.status}`);
+    }
+    fs.writeFileSync(TEST_PDF_PATH, r.body);
+    console.log(`  ℹ️  已生成测试 PDF: ${TEST_PDF_PATH} (${r.body.length} bytes)`);
+  } catch (e) {
+    console.log(`  ⚠️  生成测试 PDF 失败: ${e.message}`);
+  }
+
   await safe('PDF1', '切换到 PDF Tab', async () => {
     // 等待 React 渲染
     await page.waitForSelector('[data-testid="tab-pdf"]', { state: 'visible', timeout: 8000 });
@@ -757,19 +799,10 @@ console.log('\n--- 模块 5b: PDF 阅读器 ---');
   });
 
   await safe('PDF4', 'PDF 加载本地 PDF 文件', async () => {
-    // 用之前生成的政府公文 PDF 作为测试文件
-    const pdfPath = '/tmp/govdoc-inspect/政府公文-GB9704标准.pdf';
-    // 如果该文件不存在，先生成一个
-    const fs2 = await import('fs');
-    if (!fs2.existsSync(pdfPath)) {
-      throw new Error('测试 PDF 文件不存在，请先生成');
-    }
-    // 通过 setInputFiles 上传文件到隐藏的 input
-    const fileInput = page.locator('input[type="file"][accept*="pdf"]').first();
-    if (!await fileInput.count()) {
-      // 直接触发打开按钮，然后用 page.setInputFiles
-      await page.locator('[data-testid="pdf-open-btn"]').click({ timeout: 2000 });
-      // Playwright 的 file chooser 处理
+    // 用模块开头通过 /api/doc/export-pdf 生成的测试 PDF
+    const pdfPath = TEST_PDF_PATH;
+    if (!fs.existsSync(pdfPath)) {
+      throw new Error('测试 PDF 文件不存在（生成失败）');
     }
     // 使用 event-based 文件选择
     const [fileChooser] = await Promise.all([
@@ -777,7 +810,7 @@ console.log('\n--- 模块 5b: PDF 阅读器 ---');
       page.locator('[data-testid="pdf-open-btn"]').click(),
     ]);
     await fileChooser.setFiles(pdfPath);
-    await page.waitForTimeout(2000); // 等待 PDF.js 加载
+    await page.waitForTimeout(2500); // 等待 PDF.js 加载
     // 检查 canvas 是否渲染
     const canvas = page.locator('[data-testid="pdf-canvas"]');
     if (!await canvas.count()) throw new Error('PDF canvas 未渲染');
@@ -820,21 +853,20 @@ console.log('\n--- 模块 5b: PDF 阅读器 ---');
   });
 
   await safe('PDF7', 'PDF 打印按钮可见', async () => {
-    // 需要 PDF 已加载 (PDF4 已加载)
-    // 重新加载 PDF
-    const pdfPath = '/tmp/govdoc-inspect/政府公文-GB9704标准.pdf';
-    const fs2 = await import('fs');
-    if (fs2.existsSync(pdfPath) && await page.locator('[data-testid="pdf-open-btn"]').count()) {
+    // 需要 PDF 已加载 (PDF4 已加载)。如未加载则重新加载一次
+    const pdfPath = TEST_PDF_PATH;
+    const printBtn = page.locator('[data-testid="pdf-print-btn"]');
+    if (!await printBtn.count() && fs.existsSync(pdfPath) && await page.locator('[data-testid="pdf-open-btn"]').count()) {
       const [fileChooser] = await Promise.all([
         page.waitForEvent('filechooser', { timeout: 5000 }),
         page.locator('[data-testid="pdf-open-btn"]').click(),
       ]);
       await fileChooser.setFiles(pdfPath);
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(2500);
     }
-    const printBtn = page.locator('[data-testid="pdf-print-btn"]');
-    if (!await printBtn.count()) throw new Error('无打印按钮');
-    const visible = await printBtn.isVisible().catch(() => false);
+    const printBtn2 = page.locator('[data-testid="pdf-print-btn"]');
+    if (!await printBtn2.count()) throw new Error('无打印按钮');
+    const visible = await printBtn2.isVisible().catch(() => false);
     if (!visible) throw new Error('打印按钮不可见');
   });
 
