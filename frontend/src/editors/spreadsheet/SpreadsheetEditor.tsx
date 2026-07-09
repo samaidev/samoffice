@@ -2,7 +2,12 @@ import { useState } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 
-interface Cell { value: string; formula?: string }
+interface Cell {
+  value: string; formula?: string
+  bold?: boolean; color?: string; bg?: string
+  align?: 'left' | 'center' | 'right'
+  format?: 'percent' | 'decimal' | 'general'
+}
 interface Props { initialRows?: number; initialCols?: number; title?: string }
 
 type RibbonTab = 'home' | 'insert' | 'data' | 'view'
@@ -48,12 +53,22 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
   const [showValidPanel, setShowValidPanel] = useState(false)
   const [validList, setValidList] = useState('')
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
+  const [showGrid, setShowGrid] = useState(true)
+  const [showHeadings, setShowHeadings] = useState(true)
+  const [showFormulaBar, setShowFormulaBar] = useState(true)
   const colName = (c: number) => {
     if (c < 26) return String.fromCharCode(65 + c)
     return String.fromCharCode(65 + Math.floor(c / 26) - 1) + String.fromCharCode(65 + (c % 26))
   }
   const getCell = (r: number, c: number): Cell => data[`${r}-${c}`] || { value: '' }
-  const setCell = (r: number, c: number, value: string) => setData(d => ({ ...d, [`${r}-${c}`]: { value } }))
+  const setCell = (r: number, c: number, value: string) => setData(d => {
+    const existing = d[`${r}-${c}`] || {}
+    return { ...d, [`${r}-${c}`]: { ...existing, value } }
+  })
+  const setCellFmt = (r: number, c: number, fmt: Partial<Cell>) => setData(d => {
+    const existing = d[`${r}-${c}`] || { value: '' }
+    return { ...d, [`${r}-${c}`]: { ...existing, ...fmt } }
+  })
   const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
   const switchSheet = (id: number) => setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
@@ -95,17 +110,26 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="📥" label={t('sheet.paste')} onClick={() => { navigator.clipboard.readText().then(t => setCell(active.r, active.c, t)) }} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.font')}>
-            <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => {}} />
-            <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => {}} />
+            <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmt(active.r, active.c, { bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
+            <div className="relative group">
+              <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => {}} />
+              <div className="absolute top-full left-0 z-30 p-2 rounded-lg shadow-xl hidden group-hover:block animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="grid grid-cols-4 gap-1">
+                  {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899'].map(c => (
+                    <button key={c} onClick={() => setCellFmt(active.r, active.c, { color: c })} className="w-5 h-5 rounded transition-transform hover:scale-110" style={{ background: c }} title={c} />
+                  ))}
+                </div>
+              </div>
+            </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.alignment')}>
-            <RibbonButton icon="⬅" label={t('sheet.alignLeft')} onClick={() => {}} />
-            <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => {}} />
-            <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => {}} />
+            <RibbonButton icon="⬅" label={t('sheet.alignLeft')} onClick={() => setCellFmt(active.r, active.c, { align: 'left' })} active={getCell(active.r, active.c).align === 'left'} />
+            <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => setCellFmt(active.r, active.c, { align: 'center' })} active={getCell(active.r, active.c).align === 'center'} />
+            <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => setCellFmt(active.r, active.c, { align: 'right' })} active={getCell(active.r, active.c).align === 'right'} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.number')}>
-            <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCell(active.r, active.c, `${parseFloat(v) * 100}%`) }} />
-            <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => {}} />
+            <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCellFmt(active.r, active.c, { value: `${parseFloat(v) * 100}%`, format: 'percent' }) }} />
+            <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => { const v = getCell(active.r, active.c).value; const n = parseFloat(v); if (!isNaN(n)) setCellFmt(active.r, active.c, { value: n.toFixed(2), format: 'decimal' }) }} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.cellOps')}>
             <RibbonButton icon="↧+" label={t('sheet.addRow')} onClick={() => setRows(r => r + 1)} />
@@ -157,7 +181,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.illustration')}>
-            <RibbonButton icon="🖼" label={t('sheet.image')} onClick={() => {}} />
+            <RibbonButton icon="🖼" label={t('sheet.image')} onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'image/*'
+              input.onchange = () => {
+                const file = input.files?.[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = () => { setCell(active.r, active.c, `[img]${reader.result}`) }
+                reader.readAsDataURL(file)
+              }
+              input.click()
+            }} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.function')}>
             <div className="relative">
@@ -178,14 +214,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           <RibbonGroup label={t('sheet.sortFilter')}>
             <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => sortByCol(true)} />
             <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => sortByCol(false)} />
-            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => {}} />
+            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => { const v = prompt(t('sheet.filter') + ':'); if (v !== null) { const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { for (let c = 0; c < cols; c++) { const cell = getCell(r, c); if (cell.value && cell.value.includes(v)) { newData[`${r}-${c}`] = { ...cell, bg: '#fef3c7' } } else { newData[`${r}-${c}`] = cell } } } setData(newData) } }} />
             {/* MS Office 风格排序对话框 */}
             <RibbonButton icon="⇅" label={t('sheet.customSort')} onClick={() => {
               const col = prompt(t('sheet.customSortPrompt'), colName(active.c))
               if (col) sortByCol(true)
             }} title={t('sheet.customSortTitle')} />
-            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => {}} title={t('sheet.clearFilterTitle')} />
-            <RibbonButton icon="🔂" label={t('sheet.reapply')} onClick={() => {}} title={t('sheet.reapplyTitle')} />
+            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => { const newData: Record<string, Cell> = {}; for (const k of Object.keys(data)) { newData[k] = { ...data[k], bg: undefined } } setData(newData) }} title={t('sheet.clearFilterTitle')} />
+            <RibbonButton icon="🔂" label={t('sheet.reapply')} onClick={() => alert(t('sheet.reapply'))} title={t('sheet.reapplyTitle')} />
           </RibbonGroup>
           {/* MS Office 风格数据工具 */}
           <RibbonGroup label={t('sheet.dataTools')}>
@@ -199,17 +235,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
                 </div>
               )}
             </div>
-            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => {}} title={t('sheet.textToColumnsTitle')} />
-            <RibbonButton icon="🔗" label={t('sheet.removeDup')} onClick={() => {}} title={t('sheet.removeDupTitle')} />
-            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={() => {}} title={t('sheet.whatIfTitle')} />
-            <RibbonButton icon="🔮" label={t('sheet.forecast')} onClick={() => {}} title={t('sheet.forecastTitle')} />
-            <RibbonButton icon="📊" label={t('sheet.group')} onClick={() => {}} title={t('sheet.groupTitle')} />
-            <RibbonButton icon="⊟" label={t("sheet.ungroup")} onClick={() => {}} title={t('sheet.ungroupTitle')} />
+            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) { const parts = v.split(/[\s,;\t]+/); parts.forEach((p, i) => setCell(active.r, active.c + i, p)) } }} title={t('sheet.textToColumnsTitle')} />
+            <RibbonButton icon="🔗" label={t('sheet.removeDup')} onClick={() => { const seen = new Set<string>(); const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const v = getCell(r, active.c).value; if (v) { if (seen.has(v)) continue; seen.add(v) } for (let c = 0; c < cols; c++) { const cell = getCell(r, c); if (cell.value) newData[`${r}-${c}`] = cell } } setData(newData) }} title={t('sheet.removeDupTitle')} />
+            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={() => { const v = prompt(t('sheet.whatIf') + ' (e.g. =100*2):'); if (v && v.startsWith('=')) { try { const expr = v.slice(1).replace(/([A-Z]+)(\d+)/g, (_, col, row) => { const c = col.charCodeAt(0) - 65; const r = parseInt(row) - 1; return String(parseFloat(getCell(r, c).value) || 0) }); setCell(active.r, active.c, String(Function('return ' + expr)())) } catch { alert('Error') } } }} title={t('sheet.whatIfTitle')} />
+            <RibbonButton icon="🔮" label={t('sheet.forecast')} onClick={() => alert(t('sheet.forecast'))} title={t('sheet.forecastTitle')} />
+            <RibbonButton icon="📊" label={t('sheet.group')} onClick={() => alert(t('sheet.group'))} title={t('sheet.groupTitle')} />
+            <RibbonButton icon="⊟" label={t("sheet.ungroup")} onClick={() => alert(t('sheet.ungroup'))} title={t('sheet.ungroupTitle')} />
           </RibbonGroup>
           {/* MS Office 风格获取和转换数据 */}
           <RibbonGroup label={t('sheet.getTransform')}>
-            <RibbonButton icon="📥" label={t('sheet.fromWeb')} onClick={() => {}} title={t('sheet.fromWebTitle')} />
-            <RibbonButton icon="📄" label={t('sheet.fromText')} onClick={() => {}} title={t('sheet.fromTextTitle')} />
+            <RibbonButton icon="📥" label={t('sheet.fromWeb')} onClick={() => { const url = prompt('URL:'); if (url) { fetch(url).then(r => r.text()).then(text => { text.split('\n').slice(0, rows).forEach((line, r) => { line.split(/\t|,/).slice(0, cols).forEach((v, c) => setCell(r, c, v.trim())) }) }).catch(e => alert(e.message)) } }} title={t('sheet.fromWebTitle')} />
+            <RibbonButton icon="📄" label={t('sheet.fromText')} onClick={() => { const input = document.createElement('input'); input.type='file'; input.accept='.txt'; input.onchange = async () => { const f = input.files?.[0]; if (!f) return; const text = await f.text(); text.split('\n').slice(0, rows).forEach((line, r) => { line.split(/\t|,|\s+/).slice(0, cols).forEach((v, c) => setCell(r, c, v.trim())) }) }; input.click() }} title={t('sheet.fromTextTitle')} />
             <RibbonButton icon="🗂" label={t('sheet.fromCsv')} onClick={() => {
               const input = document.createElement('input')
               input.type = 'file'
@@ -226,18 +262,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
               }
               input.click()
             }} title={t('sheet.fromCsvTitle')} />
-            <RibbonButton icon="🔄" label={t('sheet.refresh')} onClick={() => {}} title={t('sheet.refreshTitle')} />
+            <RibbonButton icon="🔄" label={t('sheet.refresh')} onClick={() => alert(t('sheet.refresh'))} title={t('sheet.refreshTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.conditionalFormat')}>
             <div className="relative">
               <RibbonButton icon="🎨" label={t('sheet.conditionalFormat')} onClick={() => setShowCondPanel(!showCondPanel)} />
               {showCondPanel && (
                 <div className="absolute top-full left-0 z-30 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 160 }}>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.dataBar')}</button>
-                  <button onClick={() => { setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.colorScale')}</button>
+                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v > avg) ? { ...cell, bg: '#dcfce7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
+                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v < avg) ? { ...cell, bg: '#fef3c7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
+                  <button onClick={() => { const vals: {r:number;v:number}[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push({r,v}) } vals.sort((a,b)=>b.v-a.v).slice(0,10).forEach(x => setCellFmt(x.r, active.c, { bg: '#dbeafe' })); setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>
+                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } const max = Math.max(...vals), min = Math.min(...vals); for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { const pct = max > min ? (v - min) / (max - min) : 0.5; setCellFmt(r, active.c, { bg: `rgba(59,130,246,${pct * 0.6 + 0.1})` }) } } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.dataBar')}</button>
+                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } const max = Math.max(...vals), min = Math.min(...vals); for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { const pct = max > min ? (v - min) / (max - min) : 0.5; setCellFmt(r, active.c, { bg: pct < 0.5 ? `rgba(239,68,68,${1 - pct*2})` : `rgba(34,197,94,${pct*2-1})` }) } } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.colorScale')}</button>
                 </div>
               )}
             </div>
@@ -253,22 +289,22 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           {/* MS Office 风格窗口 */}
           <RibbonGroup label={t('sheet.window')}>
             <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} title={t('sheet.freezeTitle')} />
-            <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => {}} title={t('sheet.splitTitle')} />
+            <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => alert(t('sheet.split'))} title={t('sheet.splitTitle')} />
             <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('sheet.newWindowTitle')} />
-            <RibbonButton icon="▦" label={t("sheet.arrange")} onClick={() => {}} title={t('sheet.arrangeTitle')} />
+            <RibbonButton icon="▦" label={t("sheet.arrange")} onClick={() => alert(t('sheet.arrange'))} title={t('sheet.arrangeTitle')} />
           </RibbonGroup>
           {/* MS Office 风格显示 */}
           <RibbonGroup label={t('sheet.show')}>
-            <RibbonButton icon="📐" label={t('sheet.gridlines')} onClick={() => {}} active={true} title={t('sheet.gridlinesTitle')} />
-            <RibbonButton icon="🔤" label={t('sheet.headings')} onClick={() => {}} active={true} title={t('sheet.headingsTitle')} />
-            <RibbonButton icon="📊" label={t('sheet.formulaBar')} onClick={() => {}} active={true} title={t('sheet.formulaBarTitle')} />
+            <RibbonButton icon="📐" label={t('sheet.gridlines')} onClick={() => setShowGrid(!showGrid)} active={showGrid} title={t('sheet.gridlinesTitle')} />
+            <RibbonButton icon="🔤" label={t('sheet.headings')} onClick={() => setShowHeadings(!showHeadings)} active={showHeadings} title={t('sheet.headingsTitle')} />
+            <RibbonButton icon="📊" label={t('sheet.formulaBar')} onClick={() => setShowFormulaBar(!showFormulaBar)} active={showFormulaBar} title={t('sheet.formulaBarTitle')} />
           </RibbonGroup>
           {/* MS Office 风格工作簿视图 */}
           <RibbonGroup label={t('sheet.workbookViews')}>
             <RibbonButton icon="📄" label={t('sheet.normal')} onClick={() => {}} active={true} title={t('sheet.normalTitle')} />
-            <RibbonButton icon="🖨" label={t('sheet.pageBreakPreview')} onClick={() => {}} title={t('sheet.pageBreakTitle')} />
-            <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => {}} title={t('sheet.pageLayoutTitle')} />
-            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => {}} title={t('sheet.customViewsTitle')} />
+            <RibbonButton icon="🖨" label={t('sheet.pageBreakPreview')} onClick={() => alert(t('sheet.pageBreakPreview'))} title={t('sheet.pageBreakTitle')} />
+            <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => alert(t('sheet.pageLayout'))} title={t('sheet.pageLayoutTitle')} />
+            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => alert(t('sheet.customViews'))} title={t('sheet.customViewsTitle')} />
           </RibbonGroup>
           {/* MS Office 风格打印 */}
           <RibbonGroup label={t('print.title')}>
@@ -313,15 +349,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
       />
 
       {/* 公式栏 */}
+      {showFormulaBar && (
       <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
         <div className="font-mono font-semibold px-2 py-0.5 rounded" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)', minWidth: '50px', textAlign: 'center' }}>{colName(active.c)}{active.r + 1}</div>
         <span style={{ color: 'var(--color-text-muted)' }}>fx</span>
-        <input value={getCell(active.r, active.c).value} onChange={e => setCell(active.r, active.c, e.target.value)} className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs" style={{ background: 'transparent', color: 'var(--color-text)' }} placeholder={t('sheet.formulaPlaceholder')} />
+        <input value={getCell(active.r, active.c).value} onChange={e => setCell(active.r, active.c, e.target.value)} className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs" style={{ background: 'transparent', color: getCell(active.r, active.c).color || 'var(--color-text)', fontWeight: getCell(active.r, active.c).bold ? 700 : 400 }} placeholder={t('sheet.formulaPlaceholder')} />
       </div>
+      )}
 
       {/* 表格主体 */}
       <div className="flex-1 overflow-auto p-2 sm:p-3" style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%` }}>
         <table className="border-collapse text-sm" style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+          {showHeadings && (
           <thead>
             <tr>
               <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}></th>
@@ -331,17 +370,27 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
               ))}
             </tr>
           </thead>
+          )}
           <tbody>
             {Array.from({ length: rows }).map((_, r) => (
               <tr key={r}>
+                {showHeadings && (
                 <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors ${active.r === r ? 'text-indigo-600 font-semibold' : ''}`}
                   style={{ background: active.r === r ? 'var(--color-primary-light)' : 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: active.r === r ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>{r + 1}</td>
+                )}
                 {Array.from({ length: cols }).map((_, c) => {
                   const isActive = active.r === r && active.c === c
                   return (
-                    <td key={c} className="border p-0 relative" style={{ background: isActive ? 'var(--color-primary-light)' : 'var(--color-surface)', borderColor: 'var(--color-border)', minWidth: '80px' }} onClick={() => setActive({ r, c })}>
+                    <td key={c} className="border p-0 relative" style={{ background: isActive ? 'var(--color-primary-light)' : (getCell(r,c).bg || 'var(--color-surface)'), borderColor: 'var(--color-border)', minWidth: '80px' }} onClick={() => setActive({ r, c })}>
                       {isActive && <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 0 2px var(--color-primary)' }}></div>}
-                      <input type="text" value={getCell(r, c).value} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent text-sm" style={{ color: 'var(--color-text)' }} />
+                      {(() => {
+                        const cell = getCell(r, c)
+                        const v = cell.value
+                        if (v && v.startsWith('[img]')) {
+                          return <img src={v.slice(5)} alt="" className="w-full h-full object-contain pointer-events-none" />
+                        }
+                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent text-sm" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, textAlign: cell.align || 'left' }} />
+                      })()}
                     </td>
                   )
                 })}

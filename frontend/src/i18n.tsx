@@ -11,6 +11,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'app.welcome': { en: 'Welcome to SamOffice', zh: '欢迎使用 SamOffice' },
   'app.subtitle': { en: 'A cross-platform office suite built with Go + Web', zh: '一款用 Go + Web 构建的跨平台办公套件' },
   'app.openFile': { en: 'Open File', zh: '打开文件' },
+  'app.files': { en: 'Files', zh: '文件' },
 
   // === 打印对话框 (对标 MS Office) ===
   'print.title': { en: 'Print', zh: '打印' },

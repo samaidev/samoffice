@@ -132,10 +132,10 @@ func main() {
                 log.Fatalf("embed assets: %v", err)
         }
 
-        fmt.Printf("GoOffice starting...\n  Local HTTP: http://127.0.0.1:%d\n", app.httpPort)
+        fmt.Printf("SamOffice starting...\n  Local HTTP: http://127.0.0.1:%d\n", app.httpPort)
 
         err = wails.Run(&options.App{
-                Title:     "GoOffice - Cross-platform Office Suite",
+                Title:     "SamOffice - Cross-platform Office Suite",
                 Width:     1280,
                 Height:    800,
                 MinWidth:  800,

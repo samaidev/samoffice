@@ -100,6 +100,7 @@ ${t('sample.md.more')}
   const [toast, setToast] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [spellPanelOpen, setSpellPanelOpen] = useState(false)
   const [theme, setTheme] = useState<Theme>('auto')
@@ -305,7 +306,9 @@ ${t('sample.md.more')}
 
   // 按当前 Tab 决定显示哪些导出/操作按钮
   // Excel 表格不显示 docx 按钮 (不该存成 docx); 演示/MD/HTML 各自合适
-  const menuItems = useMemo(() => {
+  // 顶栏 Files 下拉菜单项 (合并 打开/另存docx/导出PDF 为一个 Files 按钮)
+  // 插入图片不放在顶栏 — 每个编辑器内部有自己的插入图片按钮
+  const fileItems = useMemo(() => {
     const items: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
       { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
     ]
@@ -314,9 +317,6 @@ ${t('sample.md.more')}
     }
     if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
       items.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' })
-    }
-    if (tab === 'document') {
-      items.push({ icon: '🖼', label: t('app.insertImage'), onClick: handleInsertImage })
     }
     return items
   }, [tab, t, loading])
@@ -346,22 +346,42 @@ ${t('sample.md.more')}
 
         <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
 
-        {/* 桌面端菜单按钮 */}
+        {/* 桌面端 Files 下拉按钮 (合并 打开/另存docx/导出PDF) */}
         {!isMobile && (
-          <div className="flex gap-0.5 items-center flex-shrink-0">
-            {menuItems.map((it) => (
-              <button
-                key={it.label}
-                onClick={it.onClick}
-                disabled={loading}
-                data-tooltip={it.shortcut ? `${it.label} (${it.shortcut})` : it.label}
-                data-testid={`menu-${it.label.replace(/\s+/g, '-').toLowerCase()}`}
-                className="px-2.5 py-1.5 text-xs rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
-              >
-                <span className="text-xs opacity-90">{it.icon}</span>
-                <span className="hidden lg:inline">{it.label}</span>
-              </button>
-            ))}
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setFilesOpen(!filesOpen)}
+              disabled={loading}
+              data-testid="menu-files"
+              className="px-3 py-1.5 text-xs rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap font-medium"
+            >
+              <span>📁</span>
+              <span>{t('app.files') || 'Files'}</span>
+              <span style={{ fontSize: '9px', opacity: 0.7 }}>▾</span>
+            </button>
+            {filesOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setFilesOpen(false)} />
+                <div className="absolute top-full left-0 z-50 mt-1 py-1 rounded-lg shadow-xl animate-fade-in min-w-[180px]" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                  {fileItems.map((it) => (
+                    <button
+                      key={it.label}
+                      onClick={() => { it.onClick(); setFilesOpen(false) }}
+                      disabled={loading}
+                      data-testid={`menu-${it.label.replace(/\s+/g, '-').toLowerCase()}`}
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-xs disabled:opacity-50 transition-colors text-left"
+                      style={{ color: 'var(--color-text)' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span style={{ fontSize: '14px' }}>{it.icon}</span>
+                      <span className="flex-1">{it.label}</span>
+                      {it.shortcut && <span className="opacity-40 text-[10px]">{it.shortcut}</span>}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -459,7 +479,7 @@ ${t('sample.md.more')}
           className="shadow-lg flex-shrink-0 border-b animate-fade-in"
           style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
         >
-          {menuItems.map((it, idx) => (
+          {fileItems.map((it, idx) => (
             <button
               key={it.label}
               onClick={it.onClick}

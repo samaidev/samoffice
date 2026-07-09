@@ -259,7 +259,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b overflow-x-auto" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px' }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', overflow: 'visible' }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
@@ -298,11 +298,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <button onClick={() => exec('subscript')} className={`toolbar-btn ${activeMarks.has('subscript') ? 'active' : ''}`} title={t('doc.subscript')} type="button" style={{ width: 28, height: 26 }}>X₂</button>
                 <div className="relative group">
                   <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
-                  <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2.5 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}><div className="grid grid-cols-6 gap-1.5">{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+                  <div className="absolute top-full left-0 hidden group-hover:block z-50 p-3 rounded-lg shadow-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
                 </div>
                 <div className="relative group">
                   <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 26, background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }}>H</button>
-                  <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2.5 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}><div className="grid grid-cols-6 gap-1.5">{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+                  <div className="absolute top-full left-0 hidden group-hover:block z-50 p-3 rounded-lg shadow-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
                 </div>
               </div>
             </div>
@@ -496,7 +496,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               const f = prompt(t('doc.footerPrompt'), '')
               if (f !== null) setParaAttr('footer', f)
             }} title={t('doc.footerTitle')} />
-            <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => setParaAttr('pageNum', !activeAttrs.pageNum)} active={activeAttrs.pageNum} title={t('doc.pageNumTitle')} />
+            <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => {
+              // 插入页码字段到光标位置 (显示 "第 N 页" 占位)
+              const v = viewRef.current; if (!v) return
+              const text = '〔页码〕'
+              v.dispatch(v.state.tr.insertText(text))
+              v.focus()
+            }} title={t('doc.pageNumTitle')} />
           </RibbonGroup>
           <RibbonGroup label="公文 GB/T 9704">
             <RibbonButton icon="📜" label="公文模板" onClick={() => {
@@ -669,9 +675,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
-        style={{ zoom: `${zoom}%`, background: bgColor }}
-        ref={editorRef as any}
-      />
+        style={{ background: bgColor, ['--doc-zoom' as any]: `${zoom}%` }}
+      >
+        <div
+          ref={editorRef as any}
+          style={{
+            transform: `scale(${zoom / 100})`,
+            transformOrigin: 'top center',
+            width: `${10000 / Math.max(zoom, 1)}%`,
+            maxWidth: `${100 * 100 / Math.max(zoom, 1)}%`,
+            margin: '0 auto',
+          }}
+        />
+      </div>
 
       {/* MS Office 风格打印对话框 */}
       <PrintDialog

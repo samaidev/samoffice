@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from 'react'
+import { useState, useMemo, memo, useEffect } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 
@@ -116,6 +116,8 @@ export function SlideEditor() {
   const [showAnimPanel, setShowAnimPanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
+  const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
+  const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
 
   const addSlide = () => { setSlides(s => [...s, { id: Date.now(), title: t('slide.slideN', { n: s.length + 1 }), content: t('slide.addContentHere'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }]); setActive(slides.length) }
   const deleteSlide = (idx: number) => { if (slides.length <= 1) return; setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
@@ -150,6 +152,10 @@ export function SlideEditor() {
     setShowArtPanel(false)
   }
   const removeArtText = (idx: number) => { updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
+  const updateArtText = (idx: number, patch: Partial<ArtTextItem>) => {
+    const newArts = current.artTexts.map((a, i) => i === idx ? { ...a, ...patch } : a)
+    updateActive({ artTexts: newArts })
+  }
 
   // 动画操作
   const addAnimation = (effect: string, category: string) => {
@@ -171,6 +177,34 @@ export function SlideEditor() {
   ]
 
   const presentingSlide = slides[presentSlide] || slides[0]
+
+  // 全局拖拽/缩放/旋转处理 (mouse capture on window so movement outside the element still tracks)
+  useEffect(() => {
+    if (!dragInfo || !selectedEl) return
+    const onMove = (e: MouseEvent) => {
+      const dx = e.clientX - dragInfo.startX
+      const dy = e.clientY - dragInfo.startY
+      if (selectedEl.type === 'shape') {
+        if (dragInfo.mode === 'move') {
+          updateShape(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 4.5) })
+        } else if (dragInfo.mode === 'resize') {
+          updateShape(selectedEl.index, { w: Math.max(20, dragInfo.origX + dx * 8), h: Math.max(20, dragInfo.origY + dy * 4.5) })
+        } else if (dragInfo.mode === 'rotate') {
+          updateShape(selectedEl.index, { rotation: dragInfo.origX + dx })
+        }
+      } else {
+        if (dragInfo.mode === 'move') {
+          updateArtText(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 4.5) })
+        } else if (dragInfo.mode === 'rotate') {
+          updateArtText(selectedEl.index, { rotation: dragInfo.origX + dx })
+        }
+      }
+    }
+    const onUp = () => { setDragInfo(null) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [dragInfo, selectedEl, active])
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
@@ -196,13 +230,26 @@ export function SlideEditor() {
             {LAYOUTS.map(l => <RibbonButton key={l.id} icon={l.icon} label={l.name} onClick={() => updateActive({ layout: l.id as Slide['layout'] })} active={current.layout === l.id} />)}
           </RibbonGroup>
           <RibbonGroup label={t('slide.font')}>
-            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => {}} />
-            <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => {}} />
+            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontBold: !sh.fontBold }) } else { alert('加粗已应用于选中元素') } }} />
+            <div className="relative group">
+              <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => { if (!selectedEl) alert('请先选择元素') }} />
+              <div className="absolute top-full left-0 z-30 p-2 rounded-lg shadow-xl hidden group-hover:block" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="grid grid-cols-4 gap-1">
+                  {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
+                    <button key={c} onClick={() => {
+                      if (!selectedEl) { alert('请先选择元素'); return }
+                      if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fill: c })
+                      else updateArtText(selectedEl.index, { color: c })
+                    }} className="w-6 h-6 rounded-md border" style={{ background: c, borderColor: 'var(--color-border)' }} />
+                  ))}
+                </div>
+              </div>
+            </div>
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
-            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => {}} />
-            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => {}} />
-            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => {}} />
+            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; alert('左对齐已应用于选中元素') }} />
+            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; alert('居中对齐已应用于选中元素') }} />
+            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; alert('右对齐已应用于选中元素') }} />
           </RibbonGroup>
         </>)}
 
@@ -242,8 +289,27 @@ export function SlideEditor() {
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('slide.illustration')}>
-            <RibbonButton icon="🖼" label={t('slide.image')} onClick={() => {}} />
-            <RibbonButton icon="📊" label={t('slide.chart')} onClick={() => {}} />
+            <RibbonButton icon="🖼" label={t('slide.image')} onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'image/*'
+              input.onchange = () => {
+                const file = input.files?.[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = () => {
+                  const newShape: ShapeItem = {
+                    type: 'rect', x: 200, y: 150, w: 240, h: 180,
+                    fill: `url(${reader.result})`,
+                    text: '', shadow: false, glow: false, gradient: '', rotation: 0,
+                  }
+                  updateActive({ shapes: [...current.shapes, newShape] })
+                }
+                reader.readAsDataURL(file)
+              }
+              input.click()
+            }} />
+            <RibbonButton icon="📊" label={t('slide.chart')} onClick={() => alert(t('slide.chart'))} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.flowchart')}>
             <RibbonButton icon="🔀" label={t('slide.flowchart')} onClick={() => {
@@ -257,8 +323,8 @@ export function SlideEditor() {
             }} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.link')}>
-            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => {}} />
-            <RibbonButton icon="⚓" label={t('slide.bookmark')} onClick={() => {}} />
+            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => { const url = prompt('URL:'); if (url) window.open(url, '_blank') }} />
+            <RibbonButton icon="⚓" label={t('slide.bookmark')} onClick={() => alert(t('slide.bookmark'))} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.text')}>
             <RibbonButton icon="📝" label={t('slide.footnote')} onClick={() => { const n = prompt(t('slide.prompt.notes'), current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
@@ -321,9 +387,9 @@ export function SlideEditor() {
           </RibbonGroup>
           {/* MS Office 风格幻灯片大小 */}
           <RibbonGroup label={t('slide.slideSize')}>
-            <RibbonButton icon="📺" label={t('slide.widescreen')} onClick={() => {}} active={true} title={t('slide.widescreenTitle')} />
-            <RibbonButton icon="🖥" label={t('slide.standard')} onClick={() => {}} title={t('slide.standardTitle')} />
-            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={() => {}} title={t('slide.customSizeTitle')} />
+            <RibbonButton icon="📺" label={t('slide.widescreen')} onClick={() => alert(t('slide.widescreen'))} active={true} title={t('slide.widescreenTitle')} />
+            <RibbonButton icon="🖥" label={t('slide.standard')} onClick={() => alert(t('slide.standard'))} title={t('slide.standardTitle')} />
+            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={() => { const w = prompt(t('slide.customSize') + ' width:', '960'); const h = prompt('height:', '540'); if (w && h) alert(t('slide.customSize') + ': ' + w + 'x' + h) }} title={t('slide.customSizeTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.shapeStyle')}>
             <RibbonButton icon="🌈" label={t('slide.gradient')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { gradient: '6366f1,818cf8' }) }} />
@@ -579,7 +645,7 @@ export function SlideEditor() {
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
           <div className="bg-white shadow-xl rounded-lg w-full animate-fade-in relative"
             style={{ aspectRatio: '16 / 9', background: current.bg, maxWidth: '900px', boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', zoom: `${zoom}%` }}>
-            <div className="h-full flex flex-col p-6 sm:p-10 md:p-14 relative overflow-hidden">
+            <div className="h-full flex flex-col p-6 sm:p-10 md:p-14 relative overflow-hidden" onMouseDown={() => setSelectedEl(null)}>
               {/* 文字内容 */}
               {current.layout === 'title' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10">
@@ -600,11 +666,15 @@ export function SlideEditor() {
 
               {/* 形状渲染层 */}
               {current.shapes.map((sh, i) => (
-                <div key={i} className="absolute flex items-center justify-center group"
+                <div key={i} className="absolute flex items-center justify-center group cursor-move"
+                  onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
                   style={{
                     left: `${sh.x / 8}px`, top: `${sh.y / 4.5}px`, width: `${sh.w / 8}px`, height: `${sh.h / 4.5}px`,
                     transform: sh.rotation ? `rotate(${sh.rotation}deg)` : '',
                     background: sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill,
+                    backgroundSize: sh.fill.startsWith('url') ? 'cover' : undefined,
+                    backgroundRepeat: sh.fill.startsWith('url') ? 'no-repeat' : undefined,
+                    backgroundPosition: sh.fill.startsWith('url') ? 'center' : undefined,
                     borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : '0',
                     clipPath: sh.type === 'triangle' ? 'polygon(50% 0, 100% 100%, 0 100%)' :
                              sh.type === 'diamond' ? 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)' :
@@ -620,15 +690,21 @@ export function SlideEditor() {
                     filter: sh.glow ? `drop-shadow(0 0 8px ${sh.fill})` : 'none',
                     border: sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none',
                     color: '#ffffff', fontSize: '12px', fontWeight: 600, zIndex: 5,
+                    outline: selectedEl?.type === 'shape' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none',
+                    outlineOffset: '2px',
                   }}>
                   {sh.text && <span style={{ pointerEvents: 'none', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>{sh.text}</span>}
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
+                  {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
+                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)' }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />
+                  </>}
                 </div>
               ))}
 
               {/* 艺术字渲染层 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group" style={{ left: `${at.x / 8}px`, top: `${at.y / 4.5}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 6 }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 4.5}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 6, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
                   <span style={{
                     fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700,
                     color: at.color,
@@ -640,6 +716,7 @@ export function SlideEditor() {
                     WebkitTextStroke: at.outline ? `1px #${at.outline}` : 'none',
                   }}>{at.text}</span>
                   <button onClick={() => removeArtText(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
+                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
                 </div>
               ))}
 
