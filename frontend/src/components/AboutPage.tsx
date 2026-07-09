@@ -25,7 +25,7 @@ export function AboutPage() {
             className="text-4xl md:text-5xl font-bold mb-4"
             style={{ letterSpacing: '-0.03em', color: 'var(--color-text)' }}
           >
-            GoOffice
+            SamOffice
           </h1>
           <p className="text-lg mb-2" style={{ color: 'var(--color-text-secondary)' }}>
             {t('about.tagline')}
@@ -84,14 +84,6 @@ export function AboutPage() {
               className="btn btn-primary btn-sm"
             >
               🌐 {t('about.visit')}
-            </a>
-            <a
-              href="https://github.com/samaidev"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-outline btn-sm"
-            >
-              📦 {t('about.github')}
             </a>
           </div>
         </section>
@@ -207,14 +199,10 @@ export function AboutPage() {
         </section>
 
         <div className="text-center mt-8 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-          <p>GoOffice v0.4.0 · Made with ❤️ by SamAI Group</p>
+          <p>SamOffice v0.4.0 · Made with ❤️ by SamAI Group</p>
           <p className="mt-1">
             <a href="https://samai.cc" target="_blank" rel="noopener noreferrer" className="hover:underline">
               samai.cc
-            </a>
-            {' · '}
-            <a href="https://github.com/samaidev/samoffice" target="_blank" rel="noopener noreferrer" className="hover:underline">
-              GitHub
             </a>
           </p>
         </div>

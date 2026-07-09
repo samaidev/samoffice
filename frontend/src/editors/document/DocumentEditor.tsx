@@ -52,12 +52,27 @@ function RibbonGroup({ label, children }: any) {
 export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck }: Props) {
   const { t } = useI18n()
 
+  // 系统字体库 — 通过 queryLocalFonts() 加载 (Chrome/Edge 支持), 回退到常用字体列表
+  const [systemFonts, setSystemFonts] = useState<string[]>([
+    'SimSun', 'SimHei', 'KaiTi', 'FangSong', 'Microsoft YaHei', 'Microsoft JhengHei',
+    'Arial', 'Times New Roman', 'Calibri', 'Cambria', 'Georgia', 'Verdana',
+    'Tahoma', 'Trebuchet MS', 'Courier New', 'Consolas', 'Lucida Console',
+  ])
+  useEffect(() => {
+    const w = window as any
+    if (w.queryLocalFonts) {
+      w.queryLocalFonts().then((fonts: any[]) => {
+        if (fonts && fonts.length) {
+          const names = Array.from(new Set(fonts.map((f: any) => f.family))).sort()
+          setSystemFonts(names.length > 0 ? names : systemFonts)
+        }
+      }).catch(() => {})
+    }
+  }, [])
+
   const FONTS = [
     { name: t('doc.font.default'), value: '' },
-    { name: t('doc.font.songti'), value: '"Noto Serif SC", "SimSun", serif' },
-    { name: t('doc.font.heiti'), value: '"Liberation Sans", "SimHei", sans-serif' },
-    { name: t('doc.font.kaiti'), value: '"LXGW WenKai", "KaiTi", cursive' },
-    { name: t('doc.font.mono'), value: '"Liberation Mono", "Consolas", monospace' },
+    ...systemFonts.slice(0, 80).map(f => ({ name: f, value: `"${f}", sans-serif` })),
   ]
   const FONT_SIZES = [
     { name: t('doc.size.small'), value: '12px' }, { name: t('doc.size.body'), value: '15px' },
@@ -96,6 +111,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
+  const [bgColor, setBgColor] = useState('#ffffff')
+  // 显示编辑标记 (段落标记 ¶ / 分页符等)
+  const [showMarks, setShowMarks] = useState(false)
 
   useEffect(() => {
     if (!editorRef.current) return
@@ -249,8 +268,26 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.font')}>
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-1">
-                <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 100, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>{FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}</select>
-                <select value={activeFontSize} onChange={e => setFontSize(e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 60, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}><option value="">{t('doc.font.default')}</option>{FONT_SIZES.map(s => <option key={s.value} value={s.value}>{s.name}</option>)}</select>
+                <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 110, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>{FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}</select>
+                <input
+                  type="text"
+                  value={activeFontSize.replace(/px$/, '')}
+                  placeholder={t('doc.size.body').replace('px','')}
+                  onChange={e => {
+                    const raw = e.target.value.trim()
+                    if (raw === '') { setFontSize(''); return }
+                    const num = parseFloat(raw)
+                    if (!isNaN(num) && num > 0) setFontSize(`${num}px`)
+                  }}
+                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                  list="font-size-list"
+                  className="text-xs rounded-md px-2 py-1"
+                  style={{ width: 56, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                  title={t('doc.fontSize')}
+                />
+                <datalist id="font-size-list">
+                  {FONT_SIZES.map(s => <option key={s.value} value={s.value.replace('px','')} />)}
+                </datalist>
               </div>
               <div className="flex items-center gap-0.5">
                 <button onClick={() => exec('bold')} className={`toolbar-btn ${activeMarks.has('bold') ? 'active' : ''}`} title={t('doc.bold') + ' Ctrl+B'} type="button" style={{ width: 28, height: 26 }}><b>B</b></button>
@@ -526,20 +563,44 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
         {ribbonTab === 'view' && (<>
           <RibbonGroup label={t('doc.zoom')}>
-            <RibbonButton icon="−" label={t('doc.zoomOut')} onClick={() => setZoom(Math.max(50, zoom - 25))} />
-            <div className="flex flex-col items-center px-2"><span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-text)' }}>{zoom}%</span></div>
-            <RibbonButton icon="+" label={t('doc.zoomIn')} onClick={() => setZoom(Math.min(150, zoom + 25))} />
+            <RibbonButton icon="−" label={t('doc.zoomOut')} onClick={() => setZoom(Math.max(50, zoom - 10))} />
+            <div className="flex flex-col items-center px-1">
+              <input
+                type="number"
+                value={zoom}
+                min={50}
+                max={300}
+                onChange={e => {
+                  const v = parseInt(e.target.value) || 100
+                  setZoom(Math.max(50, Math.min(300, v)))
+                }}
+                className="text-center text-xs rounded w-12 px-1 py-0.5"
+                style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                title={t('doc.zoom')}
+              />
+              <span style={{ fontSize: '9px', color: 'var(--color-text-muted)' }}>%</span>
+            </div>
+            <RibbonButton icon="+" label={t('doc.zoomIn')} onClick={() => setZoom(Math.min(300, zoom + 10))} />
             <RibbonButton icon="▮" label="100%" onClick={() => setZoom(100)} />
           </RibbonGroup>
-          {/* MS Office 风格视图模式 */}
-          <RibbonGroup label={t('doc.viewMode')}>
-            <RibbonButton icon="📄" label={t('doc.printLayout')} onClick={() => setParaAttr('viewMode', 'print')} active={activeAttrs.viewMode === 'print' || !activeAttrs.viewMode} title={t('doc.printLayoutTitle')} />
-            <RibbonButton icon="📖" label={t('doc.readMode')} onClick={() => setParaAttr('viewMode', 'read')} active={activeAttrs.viewMode === 'read'} title={t('doc.readModeTitle')} />
-            <RibbonButton icon="🕸" label={t('doc.webLayout')} onClick={() => setParaAttr('viewMode', 'web')} active={activeAttrs.viewMode === 'web'} title={t('doc.webLayoutTitle')} />
-            <RibbonButton icon="📝" label={t('doc.outline')} onClick={() => setParaAttr('viewMode', 'outline')} active={activeAttrs.viewMode === 'outline'} title={t('doc.outlineTitle')} />
+          {/* 背景色 / 护眼模式 */}
+          <RibbonGroup label={t('doc.pageBg')}>
+            <div className="relative group">
+              <button className="toolbar-btn" title={t('doc.pageBg')} type="button" style={{ width: 40, height: 32, background: bgColor }}>▦</button>
+              <div className="absolute top-full left-0 hidden group-hover:block z-20 p-2.5 rounded-lg shadow-lg" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[['#ffffff', t('doc.bgWhite')], ['#c7edcc', t('doc.bgEyeGreen')], ['#f5f5dc', t('doc.bgBeige')], ['#faf3e0', t('doc.bgCream')], ['#e8e8e8', t('doc.bgGray')], ['#fff5e6', t('doc.bgWarm')]].map(([c, n]) => (
+                    <button key={c} onClick={() => setBgColor(c)} className="flex flex-col items-center gap-0.5 p-1 rounded" title={n as string}>
+                      <span className="w-7 h-7 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </RibbonGroup>
-          {/* 显示标记 */}
+          {/* 显示编辑标记 (¶ 段落标记 / 分页符) */}
           <RibbonGroup label={t('doc.show')}>
+            <RibbonButton icon="¶" label={t('doc.showMarks')} onClick={() => setShowMarks(!showMarks)} active={showMarks} title={t('doc.showMarksTitle')} />
             <RibbonButton icon="📏" label={t('doc.ruler')} onClick={() => setParaAttr('ruler', !activeAttrs.ruler)} active={activeAttrs.ruler} title={t('doc.rulerTitle')} />
             <RibbonButton icon="📐" label={t('doc.gridlines')} onClick={() => setParaAttr('gridlines', !activeAttrs.gridlines)} active={activeAttrs.gridlines} title={t('doc.gridlinesTitle')} />
             <RibbonButton icon="🗂" label={t('doc.navPane')} onClick={() => setParaAttr('navPane', !activeAttrs.navPane)} active={activeAttrs.navPane} title={t('doc.navPaneTitle')} />
@@ -606,7 +667,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       {watermark && (<div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)', fontSize: '72px', color: 'rgba(0,0,0,0.08)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap' }}>{watermark}</div>)}
 
-      <div className="flex-1 overflow-auto" style={{ zoom: `${zoom}%` }} ref={editorRef as any} />
+      <div
+        className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
+        style={{ zoom: `${zoom}%`, background: bgColor }}
+        ref={editorRef as any}
+      />
 
       {/* MS Office 风格打印对话框 */}
       <PrintDialog

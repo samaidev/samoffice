@@ -349,6 +349,30 @@ body {
   margin-top: 0;
 }
 
+/* === 显示编辑标记模式 (¶ 段落标记 / 分页符 / 分隔线) === */
+.show-edit-marks .ProseMirror p::after {
+  content: '¶';
+  color: #94a3b8;
+  font-size: 0.8em;
+  margin-left: 2px;
+  opacity: 0.6;
+}
+.show-edit-marks .ProseMirror div[data-page-break] {
+  background: repeating-linear-gradient(45deg, #fef3c7, #fef3c7 6px, #fff 6px, #fff 12px) !important;
+  border: 1px dashed #d97706 !important;
+  color: #d97706 !important;
+  font-weight: 600;
+  padding: 4px 0 !important;
+}
+.show-edit-marks .ProseMirror hr {
+  border-top: 2px dashed #6366f1 !important;
+  position: relative;
+}
+.show-edit-marks .ProseMirror br {
+  display: inline-block;
+  content: '↵';
+}
+
 /* 移动端 ProseMirror */
 @media (max-width: 768px) {
   .ProseMirror {

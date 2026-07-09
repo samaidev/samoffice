@@ -176,21 +176,43 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
         <div className="flex-1 flex overflow-hidden min-h-0">
           {viewMode !== 'preview' && (
             <div
-              className={viewMode === 'split' ? 'w-1/2 border-r' : 'w-full'}
+              className={viewMode === 'split' ? 'w-1/2 border-r relative' : 'w-full relative'}
               style={{ borderColor: 'var(--color-border)' }}
             >
+              {/* 语法高亮层 (仅 HTML 模式显示, Markdown 用纯文本即可) */}
+              {mode === 'html' && (
+                <pre
+                  aria-hidden="true"
+                  className="absolute inset-0 m-0 p-4 font-mono text-sm overflow-auto pointer-events-none whitespace-pre-wrap break-words"
+                  style={{
+                    color: 'var(--color-text)',
+                    background: 'var(--color-surface)',
+                    lineHeight: 1.6,
+                    fontFamily: "'JetBrains Mono', 'SFMono-Regular', Consolas, monospace",
+                  }}
+                  dangerouslySetInnerHTML={{ __html: highlightHtmlForEditor(content) + '\n' }}
+                />
+              )}
               <textarea
                 ref={editorRef}
                 value={content}
                 onChange={handleContentChange}
                 onKeyDown={handleKeyDown}
-                className="w-full h-full p-4 font-mono text-sm outline-none resize-none"
+                onScroll={(e) => {
+                  const ta = e.currentTarget
+                  const pre = ta.previousElementSibling as HTMLPreElement
+                  if (pre) { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft }
+                }}
+                className={`w-full h-full p-4 font-mono text-sm outline-none resize-none ${mode === 'html' ? 'relative' : ''}`}
                 style={{
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text)',
+                  background: mode === 'html' ? 'transparent' : 'var(--color-surface)',
+                  color: mode === 'html' ? 'transparent' : 'var(--color-text)',
+                  caretColor: 'var(--color-text)',
                   border: 'none',
                   lineHeight: 1.6,
-                  fontFamily: "'JetBrains Mono', 'SFMono-Regular', Consolas, monospace"
+                  fontFamily: "'JetBrains Mono', 'SFMono-Regular', Consolas, monospace",
+                  position: 'relative',
+                  zIndex: 1,
                 }}
                 placeholder={mode === 'markdown'
                   ? t('md.placeholder')
@@ -255,6 +277,23 @@ function slugify(text: string): string {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .trim()
+}
+
+/**
+ * 为 HTML 编辑器生成语法高亮 (用于 textarea overlay)
+ * 用 highlight.js 的 xml 语言高亮, 转义后包裹, 保证和 textarea 字符对齐
+ */
+function highlightHtmlForEditor(code: string): string {
+  const w = window as any
+  if (typeof w.hljs !== 'undefined' && w.hljs.getLanguage('xml')) {
+    try {
+      return w.hljs.highlight(code, { language: 'xml' }).value
+    } catch {}
+  }
+  return escapeHtml(code)
+    .replace(/(&lt;\/?)([\w-]+)/g, '$1<span style="color:#0550ae;font-weight:600">$2</span>')
+    .replace(/([\w-]+)=(&quot;[^&]*&quot;)/g, '<span style="color:#953800">$1</span>=<span style="color:#0a3069">$2</span>')
+    .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span style="color:#6e7781;font-style:italic">$1</span>')
 }
 
 function escapeHtml(s: string): string {

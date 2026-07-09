@@ -79,7 +79,7 @@ ${t('sample.md.more')}
   </style>
 </head>
 <body>
-  <h1>Hello from GoOffice</h1>
+  <h1>Hello from SamOffice</h1>
   <p>${t('sample.html.body')}</p>
   <div class="card">
     <strong>SamAI Group</strong> · ${t('sample.html.opensource')}
@@ -222,15 +222,28 @@ ${t('sample.md.more')}
       const mime = format === 'docx'
         ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         : 'application/pdf'
+      const safeDoc: Document = {
+        meta: doc.meta || { title: t('app.untitled') },
+        blocks: (doc.blocks || []).map((b: any) => {
+          if (b && Array.isArray(b.inline)) return b
+          if (b && typeof b.code === 'string') return { inline: [{ content: b.code }] }
+          if (b && typeof b.src === 'string') return { inline: [{ content: '[图片]' }] }
+          if (b && Array.isArray(b.items)) return { inline: [{ content: b.items.flat().map((it: any) => it?.inline?.[0]?.content || '').join(' ') }] }
+          if (b && Array.isArray(b.rows)) return { inline: [{ content: b.rows.flat().map((c: any) => c?.inline?.[0]?.content || '').join(' ') }] }
+          return { inline: [{ content: '' }] }
+        })
+      }
       const resp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(doc)
+        body: JSON.stringify(safeDoc)
       })
       if (resp.ok) {
         const blob = await resp.blob()
-        if (blob.type !== mime && blob.size < 500) {
-          showToast(t('app.exportFailed', { msg: await blob.text() }))
+        const ct = resp.headers.get('content-type') || ''
+        if (!ct.includes(format === 'docx' ? 'wordprocessingml' : 'pdf') && !ct.includes('octet-stream') && blob.size < 2000) {
+          const txt = await blob.text()
+          showToast(t('app.exportFailed', { msg: txt.slice(0, 150) }))
           return
         }
         const url = URL.createObjectURL(blob)
@@ -244,7 +257,8 @@ ${t('sample.md.more')}
         URL.revokeObjectURL(url)
         showToast(t('app.exported', { format: format.toUpperCase() }))
       } else {
-        showToast(t('app.exportFailed', { msg: await resp.text() }))
+        const errText = await resp.text()
+        showToast(t('app.exportFailed', { msg: errText.slice(0, 150) }))
       }
     } catch (e: any) {
       showToast(t('app.exportFailed', { msg: e.message }))
@@ -289,38 +303,52 @@ ${t('sample.md.more')}
   const themeIcon = theme === 'light' ? '☀️' : theme === 'dark' ? '🌙' : '🖥'
   const themeLabel = theme === 'light' ? t('app.theme.light') : theme === 'dark' ? t('app.theme.dark') : t('app.theme.auto')
 
-  const menuItems = [
-    { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
-    { icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' },
-    { icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' },
-    { icon: '🖼', label: t('app.insertImage'), onClick: handleInsertImage },
-  ]
+  // 按当前 Tab 决定显示哪些导出/操作按钮
+  // Excel 表格不显示 docx 按钮 (不该存成 docx); 演示/MD/HTML 各自合适
+  const menuItems = useMemo(() => {
+    const items: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
+      { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
+    ]
+    if (tab === 'document') {
+      items.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' })
+    }
+    if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
+      items.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' })
+    }
+    if (tab === 'document') {
+      items.push({ icon: '🖼', label: t('app.insertImage'), onClick: handleInsertImage })
+    }
+    return items
+  }, [tab, t, loading])
 
   return (
     <div className="flex flex-col h-screen" style={{ background: 'var(--color-bg)' }}>
-      {/* 顶部菜单栏 */}
+      {/* 合并后的顶部栏: LOGO + 菜单按钮 + Tab + 主题/语言 */}
       <header
-        className="text-white px-3 sm:px-5 py-2.5 flex items-center gap-3 flex-shrink-0"
+        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-x-auto"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)'
         }}
       >
-        <div className="font-bold text-base sm:text-lg flex items-center gap-2 flex-shrink-0">
+        {/* LOGO + 名称 */}
+        <div className="font-bold text-sm sm:text-base flex items-center gap-1.5 flex-shrink-0 py-2 pl-1">
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold"
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold flex-shrink-0"
             style={{
-              background: 'rgba(255,255,255,0.2)',
+              background: 'rgba(255,255,255,0.25)',
               backdropFilter: 'blur(8px)',
-              border: '1px solid rgba(255,255,255,0.15)'
+              border: '1px solid rgba(255,255,255,0.2)'
             }}
-          >Go</div>
-          <span className="hidden sm:inline tracking-tight">Office</span>
+          >S</div>
+          <span className="hidden sm:inline tracking-tight">SamOffice</span>
         </div>
 
-        {/* 桌面端菜单 */}
+        <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
+
+        {/* 桌面端菜单按钮 */}
         {!isMobile && (
-          <div className="flex gap-0.5 items-center">
+          <div className="flex gap-0.5 items-center flex-shrink-0">
             {menuItems.map((it) => (
               <button
                 key={it.label}
@@ -328,10 +356,10 @@ ${t('sample.md.more')}
                 disabled={loading}
                 data-tooltip={it.shortcut ? `${it.label} (${it.shortcut})` : it.label}
                 data-testid={`menu-${it.label.replace(/\s+/g, '-').toLowerCase()}`}
-                className="px-3 py-1.5 text-sm rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1.5"
+                className="px-2.5 py-1.5 text-xs rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
               >
                 <span className="text-xs opacity-90">{it.icon}</span>
-                <span className="hidden md:inline">{it.label}</span>
+                <span className="hidden lg:inline">{it.label}</span>
               </button>
             ))}
           </div>
@@ -341,7 +369,7 @@ ${t('sample.md.more')}
         {isMobile && (
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="p-2 rounded-md hover:bg-white/15 transition-colors"
+            className="p-2 rounded-md hover:bg-white/15 transition-colors flex-shrink-0"
             aria-label={t('app.menu')}
             data-testid="hamburger-toggle"
           >
@@ -350,6 +378,33 @@ ${t('sample.md.more')}
             <div className="w-5 h-0.5 bg-white rounded transition-all" style={{ transform: menuOpen ? 'rotate(-45deg) translate(4px, -4px)' : '' }}></div>
           </button>
         )}
+
+        <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
+
+        {/* Tab 切换 (合并到同一行) */}
+        {([
+          { id: 'document', icon: '📄', label: t('tab.document') },
+          { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
+          { id: 'slide', icon: '🎞', label: t('tab.slide') },
+          { id: 'markdown', icon: '📝', label: t('tab.markdown') },
+          { id: 'html', icon: '🌐', label: t('tab.html') },
+          { id: 'pdf', icon: '📕', label: t('tab.pdf') },
+          { id: 'about', icon: 'ℹ️', label: t('tab.about') },
+        ]).map((tt) => (
+          <button
+            key={tt.id}
+            onClick={() => setTab(tt.id as Tab)}
+            data-testid={`tab-${tt.id}`}
+            className="px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex items-center gap-1 rounded-md"
+            style={{
+              background: tab === tt.id ? 'rgba(255,255,255,0.2)' : 'transparent',
+              color: tab === tt.id ? '#ffffff' : 'rgba(255,255,255,0.75)'
+            }}
+          >
+            <span>{tt.icon}</span>
+            <span className="hidden md:inline">{tt.label}</span>
+          </button>
+        ))}
 
         <div className="flex-1" />
 
@@ -364,9 +419,20 @@ ${t('sample.md.more')}
           <span className="text-sm">{themeIcon}</span>
         </button>
 
+        {/* 语言下拉 */}
+        <select
+          value={lang}
+          onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
+          className="text-xs rounded-md px-1.5 py-1 flex-shrink-0"
+          style={{ minWidth: '60px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)' }}
+        >
+          <option value="zh" style={{ color: '#000' }}>中文</option>
+          <option value="en" style={{ color: '#000' }}>EN</option>
+        </select>
+
         {/* 模式标识 */}
         <div
-          className="text-xs opacity-80 hidden md:flex items-center gap-1.5"
+          className="text-xs opacity-80 hidden lg:flex items-center gap-1 flex-shrink-0"
           data-testid="mode-badge"
           data-mode={backend?.mode || 'remote'}
         >
@@ -378,7 +444,7 @@ ${t('sample.md.more')}
         {spellErrors.length > 0 && (
           <button
             onClick={() => setSpellPanelOpen(!spellPanelOpen)}
-            className="px-2.5 py-1 text-xs rounded-full font-semibold flex items-center gap-1 animate-scale-in"
+            className="px-2 py-1 text-xs rounded-full font-semibold flex items-center gap-1 animate-scale-in flex-shrink-0"
             style={{ background: 'rgba(225, 29, 72, 0.9)' }}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
@@ -411,52 +477,6 @@ ${t('sample.md.more')}
           ))}
         </div>
       )}
-
-      {/* Tab 切换栏 */}
-      <div
-        className="border-b px-2 sm:px-5 flex items-center gap-1 flex-shrink-0 overflow-x-auto"
-        style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-      >
-        {([
-          { id: 'document', icon: '📄', label: t('tab.document') },
-          { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
-          { id: 'slide', icon: '🎞', label: t('tab.slide') },
-          { id: 'markdown', icon: '📝', label: t('tab.markdown') },
-          { id: 'html', icon: '🌐', label: t('tab.html') },
-          { id: 'pdf', icon: '📕', label: t('tab.pdf') },
-          { id: 'about', icon: 'ℹ️', label: t('tab.about') },
-        ]).map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id as Tab)}
-            data-testid={`tab-${t.id}`}
-            className={`px-3 sm:px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${
-              tab === t.id
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-800'
-            }`}
-            style={{
-              borderColor: tab === t.id ? 'var(--color-primary)' : 'transparent',
-              color: tab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)'
-            }}
-          >
-            <span>{t.icon}</span>
-            {t.label}
-          </button>
-        ))}
-        <div className="flex-1" />
-        <div className="flex items-center gap-2 text-sm flex-shrink-0 py-1.5">
-          <select
-            value={lang}
-            onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-            className="text-xs rounded-md px-2 py-1"
-            style={{ minWidth: '70px', background: 'var(--color-surface)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}
-          >
-            <option value="zh">中文</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-      </div>
 
       {/* 主编辑区 */}
       <main className="flex-1 overflow-hidden min-h-0 flex">

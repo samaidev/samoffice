@@ -1,4 +1,4 @@
-// i18n.ts — GoOffice 国际化系统
+// i18n.ts — SamOffice 国际化系统
 // 默认英文，可切换中文
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 
@@ -8,7 +8,7 @@ export type Lang = 'en' | 'zh'
 const dict: Record<string, { en: string; zh: string }> = {
   // === App.tsx ===
   'app.untitled': { en: 'Untitled', zh: '未命名文档' },
-  'app.welcome': { en: 'Welcome to GoOffice', zh: '欢迎使用 GoOffice' },
+  'app.welcome': { en: 'Welcome to SamOffice', zh: '欢迎使用 SamOffice' },
   'app.subtitle': { en: 'A cross-platform office suite built with Go + Web', zh: '一款用 Go + Web 构建的跨平台办公套件' },
   'app.openFile': { en: 'Open File', zh: '打开文件' },
 
@@ -225,6 +225,16 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.zoom': { en: 'Zoom', zh: '缩放' },
   'doc.zoomOut': { en: 'Zoom Out', zh: '缩小' },
   'doc.zoomIn': { en: 'Zoom In', zh: '放大' },
+  'doc.fontSize': { en: 'Font Size', zh: '字号' },
+  'doc.pageBg': { en: 'Page Background', zh: '页面背景' },
+  'doc.bgWhite': { en: 'White', zh: '白色' },
+  'doc.bgEyeGreen': { en: 'Eye-care Green', zh: '护眼绿' },
+  'doc.bgBeige': { en: 'Beige', zh: '豆沙色' },
+  'doc.bgCream': { en: 'Cream', zh: '米黄' },
+  'doc.bgGray': { en: 'Light Gray', zh: '浅灰' },
+  'doc.bgWarm': { en: 'Warm', zh: '暖色' },
+  'doc.showMarks': { en: 'Show Marks', zh: '显示标记' },
+  'doc.showMarksTitle': { en: 'Show paragraph marks and hidden symbols', zh: '显示段落标记和隐藏符号' },
   'doc.preview': { en: 'Preview', zh: '预览' },
   'doc.printPreview': { en: 'Print Preview', zh: '打印预览' },
   'doc.print': { en: 'Print', zh: '打印' },
@@ -576,7 +586,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'about.samaiDesc1': { en: 'Headquartered in Singapore, a leading full-stack intelligent future builder', zh: '总部位于新加坡，全球领先的全栈智能未来构建者' },
   'about.samaiDesc2': { en: 'is a global AI group dedicated to building a full-stack intelligent future from communication to automation, from enterprise to individual.', zh: '是一家全球领先的 AI 集团，致力于构建从通信到自动化、从企业到个人的全栈智能未来。' },
   'about.samaiDesc3': { en: 'We believe AI should be accessible to everyone, so all open source projects are completely free, no ads, no subscriptions, no telemetry, permanently public welfare.', zh: '我们相信 AI 应当普惠大众，因此所有开源项目均完全免费、无广告、无订阅、无遥测，永久公益。' },
-  'about.goofficeDesc1': { en: 'GoOffice is one of SamAI Group\'s open source projects, aiming to provide global users with a lightweight, cross-platform,', zh: 'GoOffice 是 SamAI 集团公益开源项目之一，旨在为全球用户提供一款轻量、跨平台、' },
+  'about.goofficeDesc1': { en: 'SamOffice is one of SamAI Group\'s open source projects, aiming to provide global users with a lightweight, cross-platform,', zh: 'SamOffice 是 SamAI 集团公益开源项目之一，旨在为全球用户提供一款轻量、跨平台、' },
   'about.goofficeDesc2': { en: 'self-deployable office suite covering document, spreadsheet, presentation, Markdown, and HTML editing.', zh: '可自部署的办公套件，覆盖文档、表格、演示、Markdown、HTML 编辑全场景。' },
   'about.visit': { en: 'Visit samai.cc', zh: '访问 samai.cc' },
   'about.github': { en: 'GitHub Source', zh: 'GitHub 开源' },
@@ -650,8 +660,8 @@ const dict: Record<string, { en: string; zh: string }> = {
   'art.white': { en: 'White', zh: '纯白' },
 
   // Sample content
-  'sample.md.title': { en: '# GoOffice Markdown Example', zh: '# GoOffice Markdown 示例' },
-  'sample.md.intro': { en: 'Welcome to **GoOffice** Markdown editor, supporting *live preview* and `code highlighting`.', zh: '欢迎使用 **GoOffice** 的 Markdown 编辑器，支持 *实时预览* 和 `代码高亮`。' },
+  'sample.md.title': { en: '# SamOffice Markdown Example', zh: '# SamOffice Markdown 示例' },
+  'sample.md.intro': { en: 'Welcome to **SamOffice** Markdown editor, supporting *live preview* and `code highlighting`.', zh: '欢迎使用 **SamOffice** 的 Markdown 编辑器，支持 *实时预览* 和 `代码高亮`。' },
   'sample.md.features': { en: '## Features', zh: '## 功能特性' },
   'sample.md.split': { en: '- Split edit + preview', zh: '- 分屏编辑 + 预览' },
   'sample.md.toc': { en: '- Auto table of contents', zh: '- 自动生成目录' },
