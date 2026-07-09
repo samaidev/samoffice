@@ -19,6 +19,8 @@ interface Props {
   spellErrors?: SpellError[]
   onChange?: (doc: Document) => void
   onSpellCheck?: (text: string) => void
+  zoom?: number
+  onZoomChange?: (z: number) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
@@ -49,7 +51,7 @@ function RibbonGroup({ label, children }: any) {
   )
 }
 
-export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck }: Props) {
+export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange }: Props) {
   const { t } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 加载 (Chrome/Edge 支持), 回退到常用字体列表
@@ -99,7 +101,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [replaceQuery, setReplaceQuery] = useState('')
   const [matchCount, setMatchCount] = useState(0)
   const [activeMatch, setActiveMatch] = useState(-1)
-  const [zoom, setZoom] = useState(100)
+  const [zoomInternal, setZoomInternal] = useState(100)
+  const zoom = zoomProp ?? zoomInternal
+  const setZoom = (z: number) => { const v = Math.max(50, Math.min(300, z)); setZoomInternal(v); if (onZoomChange) onZoomChange(v) }
   const [trackChanges, setTrackChanges] = useState(false)
   const [printPreview, setPrintPreview] = useState(false)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
@@ -229,13 +233,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
-      if (e.key === '=' || e.key === '+') { e.preventDefault(); setZoom(z => Math.min(300, z + 10)) }
-      else if (e.key === '-') { e.preventDefault(); setZoom(z => Math.max(50, z - 10)) }
+      if (e.key === '=' || e.key === '+') { e.preventDefault(); setZoom(zoom + 10) }
+      else if (e.key === '-') { e.preventDefault(); setZoom(zoom - 10) }
       else if (e.key === '0') { e.preventDefault(); setZoom(100) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [zoom])
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('doc.ribbon.home') }, { id: 'insert', label: t('doc.ribbon.insert') }, { id: 'layout', label: t('doc.ribbon.layout') }, { id: 'review', label: t('doc.ribbon.review') }, { id: 'view', label: t('doc.ribbon.view') },
@@ -699,27 +703,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             margin: '0 auto',
           }}
         />
-      </div>
-
-      {/* 右下角浮动缩放控件 (MS Office 风格) */}
-      <div
-        className="absolute flex items-center gap-1 px-2 py-1 rounded-tl-lg shadow-lg flex-shrink-0"
-        style={{ right: 0, bottom: 0, background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRight: 'none', borderBottom: 'none', zIndex: 40 }}
-      >
-        <button onClick={() => setZoom(Math.max(50, zoom - 10))} className="toolbar-btn" title={t('doc.zoomOut') + ' (Ctrl+-)'} type="button" style={{ width: 28, height: 24 }}>−</button>
-        <input
-          type="number"
-          value={zoom}
-          min={50}
-          max={300}
-          onChange={e => { const v = parseInt(e.target.value) || 100; setZoom(Math.max(50, Math.min(300, v))) }}
-          className="text-center text-xs rounded w-12 px-1 py-0.5"
-          style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-          title={t('doc.zoom')}
-        />
-        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>%</span>
-        <button onClick={() => setZoom(Math.min(300, zoom + 10))} className="toolbar-btn" title={t('doc.zoomIn') + ' (Ctrl+=)'} type="button" style={{ width: 28, height: 24 }}>+</button>
-        <button onClick={() => setZoom(100)} className="toolbar-btn text-xs" title="100%" type="button" style={{ height: 24, padding: '0 6px' }}>100%</button>
       </div>
 
       {/* MS Office 风格打印对话框 */}

@@ -106,6 +106,7 @@ ${t('sample.md.more')}
   const [theme, setTheme] = useState<Theme>('auto')
   const [wordCount, setWordCount] = useState(0)
   const [charCount, setCharCount] = useState(0)
+  const [docZoom, setDocZoom] = useState(100)
   const [mdContent, setMdContent] = useState(sampleMd)
   const [htmlContent, setHtmlContent] = useState(sampleHtml)
   const spellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -519,6 +520,8 @@ ${t('sample.md.more')}
                   spellErrors={spellErrors}
                   onChange={(d) => setDoc(d)}
                   onSpellCheck={triggerSpellCheck}
+                  zoom={docZoom}
+                  onZoomChange={setDocZoom}
                 />
               </div>
             </div>
@@ -668,6 +671,25 @@ ${t('sample.md.more')}
         )}
         {spellErrors.length > 0 && (
           <span className="opacity-70 hidden sm:inline">{spellErrors.length} {t('app.spellErrors')}</span>
+        )}
+        {/* Word 缩放控件 (窗口整体右下角, 仅文档 Tab 显示) */}
+        {tab === 'document' && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button onClick={() => setDocZoom(Math.max(50, docZoom - 10))} className="px-1.5 py-0.5 rounded hover:bg-white/15 transition-colors" title={t('app.zoomOut') || '缩小 (Ctrl+-)'} style={{ minWidth: 20 }}>−</button>
+            <input
+              type="number"
+              value={docZoom}
+              min={50}
+              max={300}
+              onChange={e => { const v = parseInt(e.target.value) || 100; setDocZoom(Math.max(50, Math.min(300, v))) }}
+              className="text-center rounded w-10 px-0.5 py-0.5"
+              style={{ background: 'rgba(255,255,255,0.15)', color: 'var(--color-surface)', border: '1px solid rgba(255,255,255,0.2)', fontSize: '10px' }}
+              title={t('app.zoom') || '缩放'}
+            />
+            <span className="opacity-70" style={{ fontSize: '10px' }}>%</span>
+            <button onClick={() => setDocZoom(Math.min(300, docZoom + 10))} className="px-1.5 py-0.5 rounded hover:bg-white/15 transition-colors" title={t('app.zoomIn') || '放大 (Ctrl+=)'} style={{ minWidth: 20 }}>+</button>
+            <button onClick={() => setDocZoom(100)} className="px-1.5 py-0.5 rounded hover:bg-white/15 transition-colors opacity-80" style={{ fontSize: '10px' }}>100%</button>
+          </div>
         )}
         <span className="opacity-50">v0.3.0</span>
       </footer>
