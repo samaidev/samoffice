@@ -275,7 +275,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', overflow: 'visible', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', overflow: 'visible', position: 'relative', zIndex: 30 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />

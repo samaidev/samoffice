@@ -93,7 +93,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
       {/* Ribbon Tab 栏 */}
-      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 30 }}>
         {ribbonTabs.map(t => (
           <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
             style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
@@ -103,7 +103,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b overflow-x-auto" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px' }}>
+      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', overflow: 'visible', position: 'relative', zIndex: 30 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
             <RibbonButton icon="📋" label={t('sheet.copy')} onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />
