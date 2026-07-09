@@ -225,12 +225,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   useEffect(() => { if (viewRef.current) { const v = viewRef.current; v.dispatch(setSpellErrors(v.state.tr, spellErrors)); v.updateState(v.state); setTick(t => t + 1) } }, [spellErrors])
 
+  // 键盘缩放: Ctrl+= 放大, Ctrl+- 缩小, Ctrl+0 重置 (仅当焦点不在输入框时, 或允许组合键)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key === '=' || e.key === '+') { e.preventDefault(); setZoom(z => Math.min(300, z + 10)) }
+      else if (e.key === '-') { e.preventDefault(); setZoom(z => Math.max(50, z - 10)) }
+      else if (e.key === '0') { e.preventDefault(); setZoom(100) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('doc.ribbon.home') }, { id: 'insert', label: t('doc.ribbon.insert') }, { id: 'layout', label: t('doc.ribbon.layout') }, { id: 'review', label: t('doc.ribbon.review') }, { id: 'view', label: t('doc.ribbon.view') },
   ]
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" style={{ position: 'relative' }}>
       {searchOpen && (
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap animate-fade-in" style={{ background: 'var(--color-bg-alt)', borderBottom: '1px solid var(--color-border)' }}>
           <input type="text" placeholder={t('doc.findPlaceholder')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="text-sm" style={{ width: 160 }} />
@@ -248,7 +260,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       )}
 
       {/* Ribbon Tab 栏 */}
-      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 30 }}>
         {ribbonTabs.map(tab => (
           <button key={tab.id} onClick={() => setRibbonTab(tab.id)} data-testid={`ribbon-tab-${tab.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
             style={{ color: ribbonTab === tab.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === tab.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === tab.id ? 'var(--color-primary-50)' : 'transparent' }}>{tab.label}</button>
@@ -259,7 +271,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', overflow: 'visible' }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', overflow: 'visible', position: 'relative', zIndex: 30 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
@@ -675,7 +687,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
-        style={{ background: bgColor, ['--doc-zoom' as any]: `${zoom}%` }}
+        style={{ background: bgColor, position: 'relative', zIndex: 1 }}
       >
         <div
           ref={editorRef as any}
@@ -687,6 +699,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             margin: '0 auto',
           }}
         />
+      </div>
+
+      {/* 右下角浮动缩放控件 (MS Office 风格) */}
+      <div
+        className="absolute flex items-center gap-1 px-2 py-1 rounded-tl-lg shadow-lg flex-shrink-0"
+        style={{ right: 0, bottom: 0, background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRight: 'none', borderBottom: 'none', zIndex: 40 }}
+      >
+        <button onClick={() => setZoom(Math.max(50, zoom - 10))} className="toolbar-btn" title={t('doc.zoomOut') + ' (Ctrl+-)'} type="button" style={{ width: 28, height: 24 }}>−</button>
+        <input
+          type="number"
+          value={zoom}
+          min={50}
+          max={300}
+          onChange={e => { const v = parseInt(e.target.value) || 100; setZoom(Math.max(50, Math.min(300, v))) }}
+          className="text-center text-xs rounded w-12 px-1 py-0.5"
+          style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+          title={t('doc.zoom')}
+        />
+        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>%</span>
+        <button onClick={() => setZoom(Math.min(300, zoom + 10))} className="toolbar-btn" title={t('doc.zoomIn') + ' (Ctrl+=)'} type="button" style={{ width: 28, height: 24 }}>+</button>
+        <button onClick={() => setZoom(100)} className="toolbar-btn text-xs" title="100%" type="button" style={{ height: 24, padding: '0 6px' }}>100%</button>
       </div>
 
       {/* MS Office 风格打印对话框 */}
