@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>GoOffice 边缘测试报告</title>
+<style>
+  body { font-family: -apple-system, "Noto Sans SC", sans-serif; max-width: 1100px; margin: 0 auto; padding: 24px; color: #1f2937; background: #f9fafb; }
+  h1 { color: #111827; border-bottom: 2px solid #d1d5db; padding-bottom: 8px; }
+  .summary { display: flex; gap: 16px; margin: 20px 0; flex-wrap: wrap; }
+  .card { background: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; text-align: center; }
+  .card .num { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .card .lbl { font-size: 12px; color: #6b7280; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .card.total .num { color: #6366f1; }
+  .card.pass .num { color: #10b981; }
+  .card.fail .num { color: #ef4444; }
+  .card.rate .num { color: #f59e0b; }
+  table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  th { background: #f3f4f6; padding: 10px 12px; text-align: left; font-size: 13px; color: #374151; border-bottom: 1px solid #e5e7eb; }
+  td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #f3f4f6; font-family: ui-monospace, monospace; }
+  tr.pass .icon { color: #10b981; font-weight: 700; font-size: 16px; }
+  tr.fail .icon { color: #ef4444; font-weight: 700; font-size: 16px; }
+  tr.fail { background: #fef2f2; }
+  tr:hover { background: #f9fafb; }
+  .meta { color: #6b7280; font-size: 13px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>GoOffice 办公套件 — Playwright 边缘测试报告</h1>
+<div class="meta">被测对象: GoOffice v0.3.0 (HTTP 远程模式)　|　框架: Playwright Firefox　|　时间: 2026-07-09T02:05:59.640Z</div>
+<div class="meta">依据: <code>边缘测试方案.md</code> — 10 大模块 / 60+ 边缘用例 (API 边缘 / docx 容错 / 词库边缘 / 并发 / 导出边缘 / 前端 UI 边缘)</div>
+
+<div class="summary">
+  <div class="card total"><div class="num">64</div><div class="lbl">Total</div></div>
+  <div class="card pass"><div class="num">64</div><div class="lbl">Passed</div></div>
+  <div class="card fail"><div class="num">0</div><div class="lbl">Failed</div></div>
+  <div class="card rate"><div class="num">100.0%</div><div class="lbl">Pass Rate</div></div>
+</div>
+
+<table>
+<thead><tr><th></th><th>用例</th><th>详情</th></tr></thead>
+<tbody>
+<tr class="pass"><td class="icon">✓</td><td>空文本拼写检查</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>超长文本 10 万字符</td><td>status=200, errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>Unicode emoji/零宽/RTL</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>SQL 注入文本</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>XSS 文本</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>未知语言</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>缺少 text 参数</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>缺少 lang 参数</td><td>status=200, default lang used</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>学习空词</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>学习超长词 1 万字符</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>学习 SQL 注入词</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>SQL 注入后表仍可用</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>suggest 无 n 参数</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>suggest n=-5</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>suggest n=abc</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>不存在的 API</td><td>status=404</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>错误 HTTP method</td><td>status=405</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>保存空文档</td><td>status=200, type=application/vnd.openxmlformats-officedocument.wordprocessingml.document</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>保存无 blocks 字段</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>保存非法 JSON</td><td>status=400</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>PDF 导出空文档</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>PDF 导出超长标题</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>打开不存在文件</td><td>status=404</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>路径遍历攻击</td><td>status=422</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>本地打开无 path</td><td>status=400</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>上传 txt 文件</td><td>status=422</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>上传空文件</td><td>status=422</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>上传随机字节伪装 docx</td><td>status=422</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>上传无 file 字段</td><td>status=400</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>大文本伪装 docx</td><td>status=422</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>纯标点</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>纯数字</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>混合中英文 EN 模式</td><td>errors=1</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>混合中英文 ZH 模式</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>全大写</td><td>errors=1</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>单字符</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>含连字符词</td><td>errors=1</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>含撇号词</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>日文字符 EN 模式</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>韩文字符 EN 模式</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>阿拉伯文 EN 模式</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>含 emoji</td><td>errors=1</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>含零宽字符</td><td>errors=1</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>suggest 空词</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>10 并发拼写检查</td><td>10/10 ok</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>5 并发学习词库</td><td>5/5 ok</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>5 并发 docx 导出</td><td>5/5 ok</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>重复学习同一词</td><td>errors=0</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>docx 含特殊字符</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>docx 含 emoji</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>docx 嵌套结构</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>PDF 含中文</td><td>status=200</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>PDF 100 段落</td><td>status=200, size=53570</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>docx 100 段落</td><td>status=200, size=2174</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>快速切换 Tab 30 次</td><td>no errors</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>超长文本输入 5000 字符</td><td>len=6068</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>粘贴特殊字符</td><td>len=46</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>移动端 375px 汉堡菜单</td><td></td></tr>
+<tr class="pass"><td class="icon">✓</td><td>移动端菜单展开</td><td></td></tr>
+<tr class="pass"><td class="icon">✓</td><td>移动端表格可见</td><td></td></tr>
+<tr class="pass"><td class="icon">✓</td><td>移动端演示可见</td><td></td></tr>
+<tr class="pass"><td class="icon">✓</td><td>320px 超小尺寸无溢出</td><td>scrollW=320</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>切回桌面端恢复</td><td>5 buttons</td></tr>
+<tr class="pass"><td class="icon">✓</td><td>UI 测试无 pageerror</td><td></td></tr>
+</tbody>
+</table>
+
+<div class="meta" style="margin-top:20px">
+<b>本次修复</b>: edge.js 原本依赖外部预启动的后台服务器, 在沙箱环境后台进程会被清理, 导致 fetch 全部 ECONNREFUSED.
+改为 edge.js 自身 spawn 服务器子进程绑定生命周期; 同时 UI 测试模块原本用中文文本选择器 (<code>button:has-text("表格")</code>),
+但前端默认英文模式下 Tab 文本是 "Spreadsheet", 选择器 30s 超时. 修复: 开头切语言到中文 + 改用 <code>data-testid</code> 选择器.
+</div>
+
+</body>
+</html>

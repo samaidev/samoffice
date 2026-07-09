@@ -1,0 +1,329 @@
+{
+  "total": 64,
+  "pass": 64,
+  "fail": 0,
+  "rate": "100.0%",
+  "timestamp": "2026-07-09T02:05:59.640Z",
+  "results": [
+    {
+      "name": "空文本拼写检查",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "超长文本 10 万字符",
+      "status": "PASS",
+      "details": "status=200, errors=0"
+    },
+    {
+      "name": "Unicode emoji/零宽/RTL",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "SQL 注入文本",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "XSS 文本",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "未知语言",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "缺少 text 参数",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "缺少 lang 参数",
+      "status": "PASS",
+      "details": "status=200, default lang used"
+    },
+    {
+      "name": "学习空词",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "学习超长词 1 万字符",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "学习 SQL 注入词",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "SQL 注入后表仍可用",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "suggest 无 n 参数",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "suggest n=-5",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "suggest n=abc",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "不存在的 API",
+      "status": "PASS",
+      "details": "status=404"
+    },
+    {
+      "name": "错误 HTTP method",
+      "status": "PASS",
+      "details": "status=405"
+    },
+    {
+      "name": "保存空文档",
+      "status": "PASS",
+      "details": "status=200, type=application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    },
+    {
+      "name": "保存无 blocks 字段",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "保存非法 JSON",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "name": "PDF 导出空文档",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "PDF 导出超长标题",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "打开不存在文件",
+      "status": "PASS",
+      "details": "status=404"
+    },
+    {
+      "name": "路径遍历攻击",
+      "status": "PASS",
+      "details": "status=422"
+    },
+    {
+      "name": "本地打开无 path",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "name": "上传 txt 文件",
+      "status": "PASS",
+      "details": "status=422"
+    },
+    {
+      "name": "上传空文件",
+      "status": "PASS",
+      "details": "status=422"
+    },
+    {
+      "name": "上传随机字节伪装 docx",
+      "status": "PASS",
+      "details": "status=422"
+    },
+    {
+      "name": "上传无 file 字段",
+      "status": "PASS",
+      "details": "status=400"
+    },
+    {
+      "name": "大文本伪装 docx",
+      "status": "PASS",
+      "details": "status=422"
+    },
+    {
+      "name": "纯标点",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "纯数字",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "混合中英文 EN 模式",
+      "status": "PASS",
+      "details": "errors=1"
+    },
+    {
+      "name": "混合中英文 ZH 模式",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "全大写",
+      "status": "PASS",
+      "details": "errors=1"
+    },
+    {
+      "name": "单字符",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "含连字符词",
+      "status": "PASS",
+      "details": "errors=1"
+    },
+    {
+      "name": "含撇号词",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "日文字符 EN 模式",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "韩文字符 EN 模式",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "阿拉伯文 EN 模式",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "含 emoji",
+      "status": "PASS",
+      "details": "errors=1"
+    },
+    {
+      "name": "含零宽字符",
+      "status": "PASS",
+      "details": "errors=1"
+    },
+    {
+      "name": "suggest 空词",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "10 并发拼写检查",
+      "status": "PASS",
+      "details": "10/10 ok"
+    },
+    {
+      "name": "5 并发学习词库",
+      "status": "PASS",
+      "details": "5/5 ok"
+    },
+    {
+      "name": "5 并发 docx 导出",
+      "status": "PASS",
+      "details": "5/5 ok"
+    },
+    {
+      "name": "重复学习同一词",
+      "status": "PASS",
+      "details": "errors=0"
+    },
+    {
+      "name": "docx 含特殊字符",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "docx 含 emoji",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "docx 嵌套结构",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "PDF 含中文",
+      "status": "PASS",
+      "details": "status=200"
+    },
+    {
+      "name": "PDF 100 段落",
+      "status": "PASS",
+      "details": "status=200, size=53570"
+    },
+    {
+      "name": "docx 100 段落",
+      "status": "PASS",
+      "details": "status=200, size=2174"
+    },
+    {
+      "name": "快速切换 Tab 30 次",
+      "status": "PASS",
+      "details": "no errors"
+    },
+    {
+      "name": "超长文本输入 5000 字符",
+      "status": "PASS",
+      "details": "len=6068"
+    },
+    {
+      "name": "粘贴特殊字符",
+      "status": "PASS",
+      "details": "len=46"
+    },
+    {
+      "name": "移动端 375px 汉堡菜单",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "name": "移动端菜单展开",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "name": "移动端表格可见",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "name": "移动端演示可见",
+      "status": "PASS",
+      "details": ""
+    },
+    {
+      "name": "320px 超小尺寸无溢出",
+      "status": "PASS",
+      "details": "scrollW=320"
+    },
+    {
+      "name": "切回桌面端恢复",
+      "status": "PASS",
+      "details": "5 buttons"
+    },
+    {
+      "name": "UI 测试无 pageerror",
+      "status": "PASS",
+      "details": ""
+    }
+  ]
+}

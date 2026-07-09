@@ -3,10 +3,55 @@
 const { firefox } = require('playwright')
 const fs = require('fs')
 const path = require('path')
+const { spawn } = require('child_process')
+const httpModule = require('http')
 
 const BASE_URL = 'http://127.0.0.1:18500'
+const SERVER_BIN = '/tmp/gooffice-server'
+const DATA_DIR = '/tmp/gooffice-pw-edge'
+const SERVER_CWD = '/home/z/my-project/samoffice'
 const SHOTS_DIR = path.join(__dirname, 'screenshots', 'edge')
 fs.mkdirSync(SHOTS_DIR, { recursive: true })
+
+// === 自管理服务器生命周期 ===
+// 修复点: 沙箱环境会清理脱离测试进程的后台服务, 改为 edge.js 自己 spawn 服务器子进程,
+// 生命周期与 node 进程绑定, node 退出时服务器一并退出, 避免中途被清理导致后续用例全部 ECONNREFUSED.
+let serverProc = null
+function startServer() {
+  if (serverProc) return
+  try { fs.rmSync(DATA_DIR, { recursive: true, force: true }) } catch (e) {}
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  serverProc = spawn(SERVER_BIN, ['--addr', '127.0.0.1:18500', '--data', DATA_DIR], {
+    cwd: SERVER_CWD,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  serverProc.stdout.on('data', () => {})
+  serverProc.stderr.on('data', () => {})
+  serverProc.on('exit', (code) => {
+    if (!serverProc || serverProc._intentionalKill) return
+    console.log(`[server] 意外退出 code=${code}`)
+  })
+  process.on('exit', () => {
+    if (serverProc) {
+      serverProc._intentionalKill = true
+      try { serverProc.kill('SIGKILL') } catch (e) {}
+    }
+  })
+}
+
+function stopServer() {
+  if (serverProc) {
+    serverProc._intentionalKill = true
+    try { serverProc.kill('SIGTERM') } catch (e) {}
+    serverProc = null
+  }
+}
+
+function httpGet(url) {
+  return new Promise((resolve) => {
+    httpModule.get(url, (res) => { res.resume(); resolve(true) }).on('error', () => resolve(false))
+  })
+}
 
 const results = []
 function log(name, status, details = '') {
@@ -341,11 +386,18 @@ async function testUIEdge() {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(500)
 
-    // 5.1 快速切换 Tab 10 次
+    // 切换语言到中文, 让后续中文文本选择器 (button:has-text("表格") / text=打开文件 / placeholder*="标题") 可用
+    // 修复点: 前端默认英文, 原测试用中文文本选择器在英文模式下全部找不到元素, 导致 5.1 直接 30s 超时.
+    try {
+      await page.selectOption('select', 'zh')
+      await page.waitForTimeout(300)
+    } catch (e) {}
+
+    // 5.1 快速切换 Tab 10 次 (用 data-testid 替代 has-text, 避免语言耦合)
     for (let i = 0; i < 10; i++) {
-      await page.click('button:has-text("表格")')
-      await page.click('button:has-text("演示")')
-      await page.click('button:has-text("文档")')
+      await page.click('[data-testid="tab-spreadsheet"]')
+      await page.click('[data-testid="tab-slide"]')
+      await page.click('[data-testid="tab-document"]')
     }
     const pmVisible = await page.locator('.ProseMirror').isVisible()
     log('快速切换 Tab 30 次', pmVisible && consoleErrors.length === 0 ? 'PASS' : 'FAIL',
@@ -353,7 +405,6 @@ async function testUIEdge() {
 
     // 5.2 超长文本输入（5000 字符）
     await page.click('.ProseMirror')
-    await page.selectOption('select', 'en')
     const longText = 'hello world '.repeat(500)
     await page.keyboard.type(longText)
     await page.waitForTimeout(1000)
@@ -375,27 +426,27 @@ async function testUIEdge() {
     // 5.4 移动端响应式 - 切换到移动端 viewport
     await page.setViewportSize({ width: 375, height: 667 })
     await page.waitForTimeout(500)
-    const hamburgerVisible = await page.locator('header button').first().isVisible()
+    const hamburgerVisible = await page.locator('[data-testid="hamburger-toggle"]').isVisible()
     log('移动端 375px 汉堡菜单', hamburgerVisible ? 'PASS' : 'FAIL')
 
     // 5.5 移动端汉堡菜单展开
-    await page.locator('header button').first().click()
+    await page.locator('[data-testid="hamburger-toggle"]').click()
     await page.waitForTimeout(300)
-    const menuVisible = await page.locator('text=打开文件').first().isVisible()
+    const menuVisible = await page.locator('text=打开文件').first().isVisible().catch(() => false)
     log('移动端菜单展开', menuVisible ? 'PASS' : 'FAIL')
     await shot(page, 'edge-mobile-menu')
 
     // 5.6 移动端表格
-    await page.click('button:has-text("表格")')
+    await page.click('[data-testid="tab-spreadsheet"]')
     await page.waitForTimeout(500)
     const tableMobileVisible = await page.locator('table').isVisible()
     log('移动端表格可见', tableMobileVisible ? 'PASS' : 'FAIL')
     await shot(page, 'edge-mobile-table')
 
     // 5.7 移动端演示
-    await page.click('button:has-text("演示")')
+    await page.click('[data-testid="tab-slide"]')
     await page.waitForTimeout(500)
-    const slideMobileVisible = await page.locator('input[placeholder*="标题"]').first().isVisible()
+    const slideMobileVisible = await page.locator('input[placeholder*="标题"]').first().isVisible().catch(() => false)
     log('移动端演示可见', slideMobileVisible ? 'PASS' : 'FAIL')
 
     // 5.8 超小尺寸 320px
@@ -480,28 +531,36 @@ async function testExportEdge() {
 }
 
 // === main ===
-// 等待服务就绪
+// 等待服务就绪 (用 http 模块而非 fetch, 避免某些环境下 Node fetch 的连接问题)
 async function waitForServer(maxWait = 60000) {
   const start = Date.now()
   while (Date.now() - start < maxWait) {
-    try {
-      const r = await fetch(`${BASE_URL}/api/health`)
-      if (r.ok) return true
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, 2000))
+    const ok = await httpGet(`${BASE_URL}/api/health`)
+    if (ok) return true
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
   return false
 }
 
 async function main() {
   console.log(`GoOffice 边缘测试套件 → ${BASE_URL}`)
+
+  // 自启动服务器 (沙箱环境后台进程会被清理, 必须由 node 进程 spawn)
+  if (fs.existsSync(SERVER_BIN)) {
+    console.log('启动 gooffice-server...')
+    startServer()
+  } else {
+    console.log(`⚠️  服务器二进制不存在: ${SERVER_BIN}, 假定外部已启动服务`)
+  }
+
   console.log('等待服务就绪...')
   const ready = await waitForServer()
   if (!ready) {
     console.error('服务未就绪，退出')
+    stopServer()
     process.exit(2)
   }
-  console.log('服务就绪，开始测试')
+  console.log('服务就绪，开始测试\n')
 
   // 先跑非 UI 测试（轻量）
   await testAPIEdge()
@@ -527,7 +586,23 @@ async function main() {
       console.log(`  ✗ ${r.name}: ${r.details}`)
     })
   }
+
+  // 输出 JSON 报告
+  try {
+    const report = {
+      total: results.length,
+      pass: passed,
+      fail: failed,
+      rate: (passed / (passed + failed) * 100).toFixed(1) + '%',
+      timestamp: new Date().toISOString(),
+      results,
+    }
+    fs.writeFileSync('/home/z/my-project/download/edge-results.json', JSON.stringify(report, null, 2))
+    console.log('\nJSON 报告: /home/z/my-project/download/edge-results.json')
+  } catch (e) {}
+
+  stopServer()
   process.exit(failed > 0 ? 1 : 0)
 }
 
-main().catch(e => { console.error('fatal:', e); process.exit(2) })
+main().catch(e => { console.error('fatal:', e); stopServer(); process.exit(2) })
