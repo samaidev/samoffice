@@ -1,6 +1,6 @@
 package core
 
-// Document 是 GoOffice 的统一文档模型 (UDM)。
+// Document 是 SamOffice 的统一文档模型 (UDM)。
 // 所有格式 (docx/xlsx/pptx/md) 先解析为 UDM，再渲染或导出。
 //
 // 设计原则：

@@ -1,4 +1,4 @@
-// Package main 是 GoOffice 的独立 HTTP 服务入口
+// Package main 是 SamOffice 的独立 HTTP 服务入口
 // 用于远程部署：gooffice-server --addr 0.0.0.0:8080
 // 浏览器访问 http://host:8080
 package main
@@ -92,7 +92,7 @@ func main() {
         }
 
         // 健康检查与启动
-        fmt.Printf("GoOffice Server starting at http://%s\n", *addr)
+        fmt.Printf("SamOffice Server starting at http://%s\n", *addr)
         fmt.Printf("Data directory: %s\n", *dataDir)
         fmt.Println("Press Ctrl+C to stop")
 

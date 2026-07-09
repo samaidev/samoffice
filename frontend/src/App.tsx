@@ -42,7 +42,7 @@ package main
 import "fmt"
 
 func main() {
-    fmt.Println("Hello, GoOffice!")
+    fmt.Println("Hello, SamOffice!")
 }
 \`\`\`
 

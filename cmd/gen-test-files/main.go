@@ -63,7 +63,7 @@ func genPPTX() {
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
   xmlns:dc="http://purl.org/dc/elements/1.1/">
   <dc:title>Test Presentation</dc:title>
-  <dc:creator>GoOffice Tester</dc:creator>
+  <dc:creator>SamOffice Tester</dc:creator>
 </cp:coreProperties>`)
 
 	addFile(w, "ppt/presentation.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

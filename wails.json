@@ -1,6 +1,6 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "GoOffice",
+  "name": "SamOffice",
   "outputfilename": "gooffice",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
@@ -9,13 +9,13 @@
   "frontend:dir": "frontend",
   "wailsjsdir": "frontend/src/wailsjs",
   "author": {
-    "name": "GoOffice Team",
+    "name": "SamOffice Team",
     "email": "dev@gooffice.io"
   },
   "info": {
-    "productName": "GoOffice",
+    "productName": "SamOffice",
     "productVersion": "0.1.0",
-    "copyright": "Copyright © 2026 GoOffice",
+    "copyright": "Copyright © 2026 SamOffice",
     "comments": "Cross-platform office suite built with Go + Web"
   }
 }

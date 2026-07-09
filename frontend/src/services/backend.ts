@@ -106,9 +106,9 @@ export class LocalBackend implements Backend {
 // 自动选择 backend
 export function createBackend(): Backend {
   if (LocalBackend.isAvailable()) {
-    console.log('[GoOffice] Using LocalBackend (Wails)')
+    console.log('[SamOffice] Using LocalBackend (Wails)')
     return new LocalBackend()
   }
-  console.log('[GoOffice] Using RemoteBackend (HTTP)')
+  console.log('[SamOffice] Using RemoteBackend (HTTP)')
   return new RemoteBackend()
 }

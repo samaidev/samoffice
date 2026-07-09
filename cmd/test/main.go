@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-        fmt.Println("=== GoOffice Module Test ===")
+        fmt.Println("=== SamOffice Module Test ===")
 
         // 1. 词库测试
         testDict()

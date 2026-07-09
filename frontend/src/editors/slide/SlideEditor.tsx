@@ -141,7 +141,7 @@ export function SlideEditor() {
 
   // 艺术字操作
   const addArtText = (preset: any) => {
-    const text = prompt(t('slide.prompt.wordArt'), 'GoOffice')
+    const text = prompt(t('slide.prompt.wordArt'), 'SamOffice')
     if (!text) return
     const newArt: ArtTextItem = {
       text, x: 100, y: 100, w: 400, h: 80,

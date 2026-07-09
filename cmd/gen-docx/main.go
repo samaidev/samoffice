@@ -30,7 +30,7 @@ func main() {
   xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <dc:title>Test Document</dc:title>
-  <dc:creator>GoOffice Tester</dc:creator>
+  <dc:creator>SamOffice Tester</dc:creator>
   <dc:language>en-US</dc:language>
   <dcterms:created xsi:type="dcterms:W3CDTF">2026-07-05T00:00:00Z</dcterms:created>
 </cp:coreProperties>`)
@@ -40,7 +40,7 @@ func main() {
   <w:body>
     <w:p>
       <w:pPr><w:pStyle w:val="Heading1"/><w:jc w:val="center"/></w:pPr>
-      <w:r><w:t>Hello GoOffice</w:t></w:r>
+      <w:r><w:t>Hello SamOffice</w:t></w:r>
     </w:p>
     <w:p>
       <w:r>
