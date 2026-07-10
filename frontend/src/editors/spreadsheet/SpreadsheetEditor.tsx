@@ -7,6 +7,10 @@ interface Cell {
   bold?: boolean; color?: string; bg?: string
   align?: 'left' | 'center' | 'right'
   format?: 'percent' | 'decimal' | 'general'
+  // 合并单元格：mergeRange = { rowSpan, colSpan } 表示此单元格是合并区域的左上角
+  // 被合并覆盖的单元格用 hiddenBy = "r-c" 标记（指向左上角）
+  mergeRange?: { rowSpan: number; colSpan: number }
+  hiddenBy?: string
 }
 interface Props { initialRows?: number; initialCols?: number; title?: string }
 
@@ -31,6 +35,87 @@ function RibbonGroup({ label, children }: any) {
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
   )
+}
+
+// === SVG 图表渲染组件 ===
+const CHART_COLORS = ['#4f46e5', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1']
+function ChartSVG({ type, data, labels }: { type: string; data: number[]; labels: string[] }) {
+  const W = 280, H = 160, pad = 24
+  const max = Math.max(...data, 1)
+  const min = Math.min(...data, 0)
+  const range = max - min || 1
+  const n = data.length
+
+  if (type === 'bar') {
+    const bw = (W - pad * 2) / n * 0.7
+    const gap = (W - pad * 2) / n * 0.3
+    return (
+      <svg width={W} height={H} style={{ display: 'block' }}>
+        {data.map((v, i) => {
+          const bh = ((v - min) / range) * (H - pad * 2)
+          const x = pad + i * (bw + gap) + gap / 2
+          const y = H - pad - bh
+          return <g key={i}>
+            <rect x={x} y={y} width={bw} height={Math.max(bh, 1)} fill={CHART_COLORS[i % CHART_COLORS.length]} rx={2} />
+            <text x={x + bw / 2} y={H - pad + 12} fontSize={9} fill="var(--color-text-muted)" textAnchor="middle">{labels[i]}</text>
+          </g>
+        })}
+        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--color-border)" />
+      </svg>
+    )
+  }
+  if (type === 'line' || type === 'area') {
+    const points = data.map((v, i) => {
+      const x = pad + (i / (n - 1 || 1)) * (W - pad * 2)
+      const y = H - pad - ((v - min) / range) * (H - pad * 2)
+      return `${x},${y}`
+    }).join(' ')
+    return (
+      <svg width={W} height={H} style={{ display: 'block' }}>
+        {type === 'area' && <polygon points={`${pad},${H - pad} ${points} ${W - pad},${H - pad}`} fill={CHART_COLORS[0]} opacity={0.2} />}
+        <polyline points={points} fill="none" stroke={CHART_COLORS[0]} strokeWidth={2} />
+        {data.map((v, i) => {
+          const x = pad + (i / (n - 1 || 1)) * (W - pad * 2)
+          const y = H - pad - ((v - min) / range) * (H - pad * 2)
+          return <circle key={i} cx={x} cy={y} r={3} fill={CHART_COLORS[0]} />
+        })}
+        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--color-border)" />
+      </svg>
+    )
+  }
+  if (type === 'pie' || type === 'doughnut') {
+    const total = data.reduce((a, b) => a + b, 0) || 1
+    const cx = W / 2, cy = H / 2, r = 60, innerR = type === 'doughnut' ? 30 : 0
+    let angle = -Math.PI / 2
+    const slices = data.map((v, i) => {
+      const slice = (v / total) * Math.PI * 2
+      const x1 = cx + Math.cos(angle) * r, y1 = cy + Math.sin(angle) * r
+      const x2 = cx + Math.cos(angle + slice) * r, y2 = cy + Math.sin(angle + slice) * r
+      const ix1 = cx + Math.cos(angle) * innerR, iy1 = cy + Math.sin(angle) * innerR
+      const ix2 = cx + Math.cos(angle + slice) * innerR, iy2 = cy + Math.sin(angle + slice) * innerR
+      const large = slice > Math.PI ? 1 : 0
+      const d = innerR > 0
+        ? `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${innerR} ${innerR} 0 ${large} 0 ${ix1} ${iy1} Z`
+        : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
+      angle += slice
+      return <path key={i} d={d} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="white" strokeWidth={1} />
+    })
+    return <svg width={W} height={H} style={{ display: 'block' }}>{slices}</svg>
+  }
+  if (type === 'scatter') {
+    return (
+      <svg width={W} height={H} style={{ display: 'block' }}>
+        {data.map((v, i) => {
+          const x = pad + (i / (n - 1 || 1)) * (W - pad * 2)
+          const y = H - pad - ((v - min) / range) * (H - pad * 2)
+          return <circle key={i} cx={x} cy={y} r={4} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+        })}
+        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--color-border)" />
+        <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke="var(--color-border)" />
+      </svg>
+    )
+  }
+  return null
 }
 
 export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }: Props) {
@@ -69,6 +154,75 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
     const existing = d[`${r}-${c}`] || { value: '' }
     return { ...d, [`${r}-${c}`]: { ...existing, ...fmt } }
   })
+
+  // === 合并单元格 ===
+  // 合并从 (r1,c1) 到 (r2,c2) 的区域
+  const mergeCells = (r1: number, c1: number, r2: number, c2: number) => {
+    const rowSpan = Math.abs(r2 - r1) + 1
+    const colSpan = Math.abs(c2 - c1) + 1
+    const topR = Math.min(r1, r2), topC = Math.min(c1, c2)
+    if (rowSpan === 1 && colSpan === 1) return  // 单个单元格无需合并
+    setData(d => {
+      const newData = { ...d }
+      // 设置左上角单元格的 mergeRange
+      const topLeft = newData[`${topR}-${topC}`] || { value: '' }
+      newData[`${topR}-${topC}`] = { ...topLeft, mergeRange: { rowSpan, colSpan } }
+      // 标记被覆盖的单元格
+      for (let r = topR; r < topR + rowSpan; r++) {
+        for (let c = topC; c < topC + colSpan; c++) {
+          if (r === topR && c === topC) continue
+          const cell = newData[`${r}-${c}`] || { value: '' }
+          newData[`${r}-${c}`] = { ...cell, hiddenBy: `${topR}-${topC}` }
+        }
+      }
+      return newData
+    })
+  }
+  // 拆分当前合并单元格
+  const splitCell = (r: number, c: number) => {
+    setData(d => {
+      const newData = { ...d }
+      const cell = newData[`${r}-${c}`]
+      if (!cell || !cell.mergeRange) return d
+      const { rowSpan, colSpan } = cell.mergeRange
+      // 清除左上角的 mergeRange
+      newData[`${r}-${c}`] = { ...cell, mergeRange: undefined }
+      // 清除被覆盖单元格的 hiddenBy
+      for (let rr = r; rr < r + rowSpan; rr++) {
+        for (let cc = c; cc < c + colSpan; cc++) {
+          if (rr === r && cc === c) continue
+          const hiddenCell = newData[`${rr}-${cc}`]
+          if (hiddenCell) newData[`${rr}-${cc}`] = { ...hiddenCell, hiddenBy: undefined }
+        }
+      }
+      return newData
+    })
+  }
+  // 检查当前单元格是否在合并区域内
+  const isMerged = (r: number, c: number): boolean => {
+    const cell = getCell(r, c)
+    return !!cell.mergeRange
+  }
+  const isHidden = (r: number, c: number): boolean => {
+    const cell = getCell(r, c)
+    return !!cell.hiddenBy
+  }
+
+  // === 图表 ===
+  const [charts, setCharts] = useState<{ id: number; type: string; data: number[]; labels: string[]; title: string }[]>([])
+  const addChart = (type: string) => {
+    // 从当前列收集数据
+    const values: number[] = []
+    const labels: string[] = []
+    for (let r = 0; r < rows; r++) {
+      const v = parseFloat(getCell(r, active.c).value)
+      if (!isNaN(v)) { values.push(v); labels.push(`${r + 1}`) }
+    }
+    if (values.length === 0) { alert(t('sheet.noData') || 'No numeric data in this column'); return }
+    setCharts(cs => [...cs, { id: Date.now(), type, data: values, labels, title: `${colName(active.c)} - ${type}` }])
+    setShowChartPanel(false)
+  }
+  const removeChart = (id: number) => setCharts(cs => cs.filter(c => c.id !== id))
   const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
   const switchSheet = (id: number) => setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
@@ -127,6 +281,21 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => setCellFmt(active.r, active.c, { align: 'center' })} active={getCell(active.r, active.c).align === 'center'} />
             <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => setCellFmt(active.r, active.c, { align: 'right' })} active={getCell(active.r, active.c).align === 'right'} />
           </RibbonGroup>
+          <RibbonGroup label={t('sheet.merge') || '合并'}>
+            <RibbonButton icon="⊟" label={t('sheet.mergeCenter') || '合并居中'} onClick={() => {
+              const range = prompt(t('sheet.mergePrompt') || '输入合并范围 (如 A1:B2):', `${colName(active.c)}${active.r + 1}:${colName(active.c + 1)}${active.r + 2}`)
+              if (!range) return
+              const m = range.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/)
+              if (m) {
+                const c1 = m[1].length === 1 ? m[1].charCodeAt(0) - 65 : (m[1].charCodeAt(0) - 65) * 26 + (m[1].charCodeAt(1) - 65) - 26
+                const r1 = parseInt(m[2]) - 1
+                const c2 = m[3].length === 1 ? m[3].charCodeAt(0) - 65 : (m[3].charCodeAt(0) - 65) * 26 + (m[3].charCodeAt(1) - 65) - 26
+                const r2 = parseInt(m[4]) - 1
+                mergeCells(r1, c1, r2, c2)
+              }
+            }} title={t('sheet.mergeTitle') || '合并单元格'} />
+            <RibbonButton icon="⊞" label={t('sheet.split') || '拆分'} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={t('sheet.splitTitle') || '拆分单元格'} />
+          </RibbonGroup>
           <RibbonGroup label={t('sheet.number')}>
             <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCellFmt(active.r, active.c, { value: `${parseFloat(v) * 100}%`, format: 'percent' }) }} />
             <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => { const v = getCell(active.r, active.c).value; const n = parseFloat(v); if (!isNaN(n)) setCellFmt(active.r, active.c, { value: n.toFixed(2), format: 'decimal' }) }} />
@@ -151,7 +320,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
                       { type: 'area', icon: '🔻', name: t('sheet.chart.area') },
                       { type: 'doughnut', icon: '🍩', name: t('sheet.chart.donut') },
                     ].map(c => (
-                      <button key={c.type} onClick={() => { alert(t('sheet.chartType') + c.name + '\\n' + t('sheet.dataRange') + colName(active.c) + '1:' + colName(active.c) + rows); setShowChartPanel(false) }}
+                      <button key={c.type} onClick={() => addChart(c.type)}
                         className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 64 }}>
                         <span style={{ fontSize: '20px' }}>{c.icon}</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{c.name}</span>
@@ -289,7 +458,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           {/* MS Office 风格窗口 */}
           <RibbonGroup label={t('sheet.window')}>
             <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} title={t('sheet.freezeTitle')} />
-            <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => alert(t('sheet.split'))} title={t('sheet.splitTitle')} />
+            <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={t('sheet.splitTitle')} />
             <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('sheet.newWindowTitle')} />
             <RibbonButton icon="▦" label={t("sheet.arrange")} onClick={() => alert(t('sheet.arrange'))} title={t('sheet.arrangeTitle')} />
           </RibbonGroup>
@@ -379,17 +548,23 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
                   style={{ background: active.r === r ? 'var(--color-primary-light)' : 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: active.r === r ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>{r + 1}</td>
                 )}
                 {Array.from({ length: cols }).map((_, c) => {
+                  const cell = getCell(r, c)
+                  // 跳过被合并覆盖的单元格
+                  if (cell.hiddenBy) return null
                   const isActive = active.r === r && active.c === c
+                  const mergeRange = cell.mergeRange
                   return (
-                    <td key={c} className="border p-0 relative" style={{ background: isActive ? 'var(--color-primary-light)' : (getCell(r,c).bg || 'var(--color-surface)'), borderColor: 'var(--color-border)', minWidth: '80px' }} onClick={() => setActive({ r, c })}>
+                    <td key={c} className="border p-0 relative" rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
+                      background: isActive ? 'var(--color-primary-light)' : (cell.bg || 'var(--color-surface)'),
+                      borderColor: 'var(--color-border)', minWidth: '80px',
+                    }} onClick={() => setActive({ r, c })}>
                       {isActive && <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 0 2px var(--color-primary)' }}></div>}
                       {(() => {
-                        const cell = getCell(r, c)
                         const v = cell.value
                         if (v && v.startsWith('[img]')) {
                           return <img src={v.slice(5)} alt="" className="w-full h-full object-contain pointer-events-none" />
                         }
-                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent text-sm" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, textAlign: cell.align || 'left' }} />
+                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent text-sm" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, textAlign: cell.align || (mergeRange ? 'center' : 'left') }} />
                       })()}
                     </td>
                   )
@@ -399,6 +574,21 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           </tbody>
         </table>
       </div>
+
+      {/* 图表渲染区 */}
+      {charts.length > 0 && (
+        <div className="flex gap-3 p-3 overflow-x-auto flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)', maxHeight: '240px' }}>
+          {charts.map(chart => (
+            <div key={chart.id} className="relative flex-shrink-0 rounded-lg p-3" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', width: '320px' }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{chart.title}</span>
+                <button onClick={() => removeChart(chart.id)} className="text-xs opacity-50 hover:opacity-100" style={{ color: 'var(--color-text)' }}>✕</button>
+              </div>
+              <ChartSVG type={chart.type} data={chart.data} labels={chart.labels} />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Sheet 标签栏 */}
       <div className="px-2 py-1 flex items-center gap-1 overflow-x-auto flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)' }}>
