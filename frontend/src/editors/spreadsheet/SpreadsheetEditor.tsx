@@ -15,18 +15,18 @@ type RibbonTab = 'home' | 'insert' | 'data' | 'view'
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
-      className="flex flex-col items-center justify-center gap-0.5 px-2.5 py-1 rounded-md transition-colors min-w-[48px] disabled:opacity-40"
+      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[42px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
       onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}>
-      <span style={{ fontSize: '16px', lineHeight: 1 }}>{icon}</span>
-      <span style={{ fontSize: '10px', fontWeight: 500 }}>{label}</span>
+      <span style={{ fontSize: '15px', lineHeight: 1 }}>{icon}</span>
+      <span style={{ fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
     </button>
   )
 }
 function RibbonGroup({ label, children }: any) {
   return (
-    <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
+    <div className="flex flex-col items-center px-1.5 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
       <div className="flex items-center gap-0.5 py-1 flex-1">{children}</div>
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
@@ -113,7 +113,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmt(active.r, active.c, { bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
             <div className="relative group">
               <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => {}} />
-              <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.5rem' }}>
+              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto', padding: '0.5rem' }}>
                 <div className="grid grid-cols-4 gap-1">
                   {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899'].map(c => (
                     <button key={c} onClick={() => setCellFmt(active.r, active.c, { color: c })} className="w-5 h-5 rounded transition-transform hover:scale-110" style={{ background: c }} title={c} />
@@ -141,7 +141,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => setShowChartPanel(!showChartPanel)} />
               {showChartPanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { type: 'bar', icon: '📊', name: t('sheet.chart.bar') },
@@ -166,7 +166,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="▭" label={t('sheet.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="grid grid-cols-4 gap-2">
                     {[{i:'▭',n:t('doc.shape.rect')},{i:'▢',n:t('doc.shape.rounded')},{i:'⬭',n:t('doc.shape.ellipse')},{i:'△',n:t('doc.shape.triangle')},
                      {i:'◇',n:t('doc.shape.diamond')},{i:'→',n:t('doc.shape.arrow')},{i:'★',n:t('doc.shape.star')},{i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -228,7 +228,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => setShowValidPanel(!showValidPanel)} />
               {showValidPanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('sheet.dropdownOptions')}</div>
                   <input type="text" placeholder={t('sheet.dropdownPlaceholder')} value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
                   <button onClick={() => { setShowValidPanel(false); alert(t('sheet.validationSet', { list: validList })) }} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>

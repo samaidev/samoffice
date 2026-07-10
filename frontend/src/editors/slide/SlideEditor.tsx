@@ -70,18 +70,18 @@ type RibbonTab = 'home' | 'insert' | 'design' | 'modern' | 'animations' | 'trans
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
-      className="flex flex-col items-center justify-center gap-0.5 px-2.5 py-1 rounded-md transition-colors min-w-[48px] disabled:opacity-40"
+      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[42px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
       onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}>
-      <span style={{ fontSize: '16px', lineHeight: 1 }}>{icon}</span>
-      <span style={{ fontSize: '10px', fontWeight: 500 }}>{label}</span>
+      <span style={{ fontSize: '15px', lineHeight: 1 }}>{icon}</span>
+      <span style={{ fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
     </button>
   )
 }
 function RibbonGroup({ label, children }: any) {
   return (
-    <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
+    <div className="flex flex-col items-center px-1.5 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
       <div className="flex items-center gap-0.5 py-1 flex-1">{children}</div>
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
@@ -233,7 +233,7 @@ export function SlideEditor() {
             <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontBold: !sh.fontBold }) } else { alert('加粗已应用于选中元素') } }} />
             <div className="relative group">
               <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => { if (!selectedEl) alert('请先选择元素') }} />
-              <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.5rem' }}>
+              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto', padding: '0.5rem' }}>
                 <div className="grid grid-cols-4 gap-1">
                   {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
                     <button key={c} onClick={() => {
@@ -258,7 +258,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="grid grid-cols-4 gap-2">
                     {SHAPES.map(s => (
                       <button key={s.type} onClick={() => addShape(s.type)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 60 }}>
@@ -275,7 +275,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => setShowArtPanel(!showArtPanel)} />
               {showArtPanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="grid grid-cols-3 gap-2">
                     {ART_PRESETS.map(p => (
                       <button key={p.name} onClick={() => addArtText(p)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 80 }}>
@@ -499,7 +499,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="➡" label={t('slide.enter')} onClick={() => setShowAnimPanel(!showAnimPanel)} />
               {showAnimPanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.enter')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {ENTRANCE_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'entrance')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}

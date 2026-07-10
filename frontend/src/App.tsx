@@ -341,7 +341,8 @@ ${t('sample.md.more')}
         className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-x-hidden"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
-          boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)'
+          boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
+          paddingRight: '12px'
         }}
       >
         {/* LOGO + 名称 */}
@@ -361,12 +362,13 @@ ${t('sample.md.more')}
 
         {/* 桌面端 Files 下拉按钮 (合并 打开/另存docx/导出PDF) */}
         {!isMobile && (
-          <div className="relative flex-shrink-0">
+          <div className="relative flex-shrink-0" style={{ zIndex: 50 }}>
             <button
               onClick={() => setFilesOpen(!filesOpen)}
               disabled={loading}
               data-testid="menu-files"
               className="px-3 py-1.5 text-xs rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap font-medium"
+              style={{ position: 'relative', zIndex: 51 }}
             >
               <span>📁</span>
               <span>{t('app.files') || 'Files'}</span>
@@ -374,8 +376,8 @@ ${t('sample.md.more')}
             </button>
             {filesOpen && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setFilesOpen(false)} />
-                <div className="absolute top-full left-0 files-dropdown ribbon-popup_compact min-w-[180px] mt-1">
+                <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setFilesOpen(false)} />
+                <div className="absolute files-dropdown ribbon-popup_compact min-w-[180px] mt-1" style={{ top: '100%', left: 0, zIndex: 50 }}>
                   {fileItems.map((it) => (
                     <button
                       key={it.label}
@@ -478,10 +480,11 @@ ${t('sample.md.more')}
           <button
             onClick={() => setSpellPanelOpen(!spellPanelOpen)}
             className="px-2 py-1 text-xs rounded-full font-semibold flex items-center gap-1 animate-scale-in flex-shrink-0"
-            style={{ background: 'rgba(225, 29, 72, 0.9)' }}
+            style={{ background: 'rgba(225, 29, 72, 0.9)', minWidth: '28px', justifyContent: 'center' }}
+            aria-label={`${spellErrors.length} spelling errors`}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
-            {spellErrors.length}
+            <span>{spellErrors.length}</span>
           </button>
         )}
       </header>
@@ -665,24 +668,24 @@ ${t('sample.md.more')}
       {/* 底部状态栏 */}
       <footer
         className="text-xs px-3 sm:px-5 py-1.5 flex items-center gap-3 flex-shrink-0 overflow-hidden"
-        style={{ background: 'var(--color-text)', color: 'var(--color-surface)' }}
+        style={{ background: 'var(--color-text)', color: 'var(--color-surface)', flexWrap: 'nowrap' }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
           {loading && (
-            <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+            <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0"></span>
           )}
-          <span className="truncate max-w-[150px] sm:max-w-md">
+          <span className="truncate" style={{ maxWidth: '180px' }}>
             {filePath || t('app.ready')}
           </span>
         </div>
-        <div className="flex-1" />
+        <div className="flex-1 min-w-0" />
         {tab === 'document' && (
-          <span className="hidden sm:inline opacity-70">
+          <span className="hidden md:inline opacity-70 flex-shrink-0 whitespace-nowrap">
             {wordCount} {t('app.words')} · {charCount} {t('app.chars')}
           </span>
         )}
         {spellErrors.length > 0 && (
-          <span className="opacity-70 hidden sm:inline">{spellErrors.length} {t('app.spellErrors')}</span>
+          <span className="opacity-70 hidden md:inline flex-shrink-0 whitespace-nowrap">{spellErrors.length} {t('app.spellErrors')}</span>
         )}
         {/* Word 缩放控件 (窗口整体右下角, 仅文档 Tab 显示) */}
         {tab === 'document' && (

@@ -32,19 +32,19 @@ const HL_COLORS = ['#fef08a','#bbf7d0','#bfdbfe','#fbcfe8','#fed7aa','#e9d5ff']
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
-      className="flex flex-col items-center justify-center gap-0.5 px-2.5 py-1 rounded-md transition-colors min-w-[48px] disabled:opacity-40"
+      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[42px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
       onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}>
-      <span style={{ fontSize: '16px', lineHeight: 1 }}>{icon}</span>
-      <span style={{ fontSize: '10px', fontWeight: 500 }}>{label}</span>
+      <span style={{ fontSize: '15px', lineHeight: 1 }}>{icon}</span>
+      <span style={{ fontSize: '10px', fontWeight: 500, whiteSpace: 'nowrap' }}>{label}</span>
     </button>
   )
 }
 
 function RibbonGroup({ label, children }: any) {
   return (
-    <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
+    <div className="flex flex-col items-center px-1.5 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
       <div className="flex items-center gap-0.5 py-1 flex-1">{children}</div>
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
@@ -328,11 +328,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <button onClick={() => exec('subscript')} className={`toolbar-btn ${activeMarks.has('subscript') ? 'active' : ''}`} title={t('doc.subscript')} type="button" style={{ width: 28, height: 26 }}>X₂</button>
                 <div className="relative group">
                   <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
-                  <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block"><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+                  <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto' }}><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
                 </div>
                 <div className="relative group">
                   <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 26, background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }}>H</button>
-                  <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block"><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+                  <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto' }}><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
                 </div>
               </div>
             </div>
@@ -376,7 +376,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <div className="relative">
               <RibbonButton icon="▭" label={t('doc.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
               {showShapePanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="grid grid-cols-4 gap-2">
                     {[{t:'rect',i:'▭',n:t('doc.shape.rect')},{t:'roundRect',i:'▢',n:t('doc.shape.rounded')},{t:'ellipse',i:'⬭',n:t('doc.shape.ellipse')},{t:'triangle',i:'△',n:t('doc.shape.triangle')},
                      {t:'diamond',i:'◇',n:t('doc.shape.diamond')},{t:'rightArrow',i:'→',n:t('doc.shape.arrow')},{t:'star5',i:'★',n:t('doc.shape.star')},{t:'heart',i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -394,7 +394,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <div className="relative">
               <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => setShowArtPanel(!showArtPanel)} />
               {showArtPanel && (
-                <div className="absolute top-full left-0 ribbon-popup">
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { name: t('art.purple'), color: '#4f46e5', grad: '4f46e5,818cf8', shadow: true },
@@ -467,7 +467,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.shading')}>
             <div className="relative group">
               <button className="toolbar-btn" title={t('doc.shading')} type="button" style={{ width: 40, height: 32, background: activeAttrs.shading || 'transparent' }}>▦</button>
-              <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.625rem' }}><div className="grid grid-cols-6 gap-1.5">{['','#f1f5f9','#fef3c7','#dbeafe','#dcfce7','#fce7f3'].map(c => <button key={c} onClick={() => setParaAttr('shading', c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c || 'white', border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto', padding: '0.625rem' }}><div className="grid grid-cols-6 gap-1.5">{['','#f1f5f9','#fef3c7','#dbeafe','#dcfce7','#fce7f3'].map(c => <button key={c} onClick={() => setParaAttr('shading', c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c || 'white', border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('doc.layout')}>
@@ -623,7 +623,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.pageBg')}>
             <div className="relative group">
               <button className="toolbar-btn" title={t('doc.pageBg')} type="button" style={{ width: 40, height: 32, background: bgColor }}>▦</button>
-              <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.625rem' }}>
+              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto', padding: '0.625rem' }}>
                 <div className="grid grid-cols-4 gap-1.5">
                   {[['#ffffff', t('doc.bgWhite')], ['#c7edcc', t('doc.bgEyeGreen')], ['#f5f5dc', t('doc.bgBeige')], ['#faf3e0', t('doc.bgCream')], ['#e8e8e8', t('doc.bgGray')], ['#fff5e6', t('doc.bgWarm')]].map(([c, n]) => (
                     <button key={c} onClick={() => setBgColor(c)} className="flex flex-col items-center gap-0.5 p-1 rounded" title={n as string}>

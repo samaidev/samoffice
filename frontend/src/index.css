@@ -501,14 +501,28 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* === Ribbon 内容区横向滚动规范 ===
- * 桌面端：overflow visible（弹出菜单需要逃出容器边界），但允许横向滚动
- * 移动端：启用横向滚动
- * 关键：用 overflow-x: auto + overflow-y: visible 在标准 CSS 中会冲突
- * （visible 会被强制为 auto），因此桌面端保持 visible，
- * 靠 ribbon-group flex-shrink-0 + 页面 overflow-x:hidden 处理。
+ * 桌面端：默认 overflow visible（弹出菜单需要逃出容器边界），
+ *        当窗口宽度不足以容纳所有 ribbon-group 时，启用横向滚动作为兜底。
+ *        通过 CSS containmnt 限制水平溢出影响外层。
+ * 移动端：始终启用横向滚动。
  */
 .ribbon-scroll {
   overflow: visible;
+  scrollbar-width: thin;
+}
+/* 桌面窄屏兜底：当窗口宽度在 769-1280px 之间时启用横向滚动 */
+@media (min-width: 769px) and (max-width: 1280px) {
+  .ribbon-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  .ribbon-scroll::-webkit-scrollbar {
+    height: 4px;
+  }
+  .ribbon-scroll::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.3);
+    border-radius: 2px;
+  }
 }
 @media (max-width: 768px) {
   .ribbon-scroll {
