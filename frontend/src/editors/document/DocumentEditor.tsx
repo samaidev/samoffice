@@ -32,7 +32,7 @@ const HL_COLORS = ['#fef08a','#bbf7d0','#bfdbfe','#fbcfe8','#fed7aa','#e9d5ff']
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
-      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[42px] disabled:opacity-40"
+      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[44px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
       onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}>
@@ -44,8 +44,8 @@ function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }
 
 function RibbonGroup({ label, children }: any) {
   return (
-    <div className="flex flex-col items-center px-1.5 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
-      <div className="flex items-center gap-0.5 py-1 flex-1">{children}</div>
+    <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="flex items-center gap-1 py-1 flex-1">{children}</div>
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
   )
@@ -677,7 +677,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <div className="toolbar-divider" />
           <div className="relative group">
             <button className="toolbar-btn" title={t('doc.color')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
-            <div className="absolute top-full left-0 ribbon-popup hidden group-hover:block" style={{ padding: '0.5rem' }}><div className="grid grid-cols-6 gap-1">{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="w-5 h-5 rounded" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+            <div className="absolute ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ bottom: '100%', right: 0, left: 'auto', top: 'auto', padding: '0.5rem', marginBottom: '4px' }}><div className="grid grid-cols-6 gap-1">{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="w-5 h-5 rounded" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
           </div>
           <div className="toolbar-divider" />
           <button onClick={() => exec('h1')} className="toolbar-btn" title={t('doc.heading1')} style={{ width: 28, height: 26 }}>H1</button>
@@ -705,18 +705,31 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
-        style={{ background: bgColor, position: 'relative', zIndex: 1 }}
+        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1 }}
       >
         <div
-          ref={editorRef as any}
+          className="max-w-4xl mx-auto animate-fade-in"
           style={{
-            transform: `scale(${zoom / 100})`,
-            transformOrigin: 'top center',
-            width: `${10000 / Math.max(zoom, 1)}%`,
-            maxWidth: `${100 * 100 / Math.max(zoom, 1)}%`,
-            margin: '0 auto',
+            boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)',
+            marginTop: '24px',
+            marginBottom: '24px',
+            borderRadius: '8px',
+            background: bgColor,
+            minHeight: 'calc(100% - 48px)',
+            overflow: 'hidden',
           }}
-        />
+        >
+          <div
+            ref={editorRef as any}
+            style={{
+              transform: `scale(${zoom / 100})`,
+              transformOrigin: 'top center',
+              width: `${10000 / Math.max(zoom, 1)}%`,
+              maxWidth: `${100 * 100 / Math.max(zoom, 1)}%`,
+              margin: '0 auto',
+            }}
+          />
+        </div>
       </div>
 
       {/* MS Office 风格打印对话框 */}

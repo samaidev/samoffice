@@ -518,28 +518,14 @@ ${t('sample.md.more')}
       <main className="flex-1 overflow-hidden min-h-0 flex">
         <div className="flex-1 overflow-hidden min-w-0">
           {tab === 'document' && (
-            <div className="h-full overflow-auto" style={{ background: 'var(--color-bg-alt)' }}>
-              <div
-                className="max-w-4xl mx-auto bg-white min-h-full animate-fade-in"
-                style={{
-                  boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)',
-                  marginTop: '24px',
-                  marginBottom: '24px',
-                  borderRadius: '8px',
-                  background: 'var(--color-surface)',
-                  minHeight: 'calc(100% - 48px)'
-                }}
-              >
-                <DocumentEditor
-                  document={doc}
-                  spellErrors={spellErrors}
-                  onChange={(d) => setDoc(d)}
-                  onSpellCheck={triggerSpellCheck}
-                  zoom={docZoom}
-                  onZoomChange={setDocZoom}
-                />
-              </div>
-            </div>
+            <DocumentEditor
+              document={doc}
+              spellErrors={spellErrors}
+              onChange={(d) => setDoc(d)}
+              onSpellCheck={triggerSpellCheck}
+              zoom={docZoom}
+              onZoomChange={setDocZoom}
+            />
           )}
           {tab === 'spreadsheet' && <SpreadsheetEditor title={t('app.sheet1')} />}
           {tab === 'slide' && <SlideEditor />}

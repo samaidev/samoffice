@@ -510,8 +510,8 @@ input:focus, textarea:focus, select:focus {
   overflow: visible;
   scrollbar-width: thin;
 }
-/* 桌面窄屏兜底：当窗口宽度在 769-1280px 之间时启用横向滚动 */
-@media (min-width: 769px) and (max-width: 1280px) {
+/* 桌面窄屏兜底：当窗口宽度不足以容纳所有 ribbon-group 时启用横向滚动 */
+@media (max-width: 1400px) {
   .ribbon-scroll {
     overflow-x: auto;
     overflow-y: visible;

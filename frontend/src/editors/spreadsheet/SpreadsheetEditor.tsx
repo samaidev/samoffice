@@ -15,7 +15,7 @@ type RibbonTab = 'home' | 'insert' | 'data' | 'view'
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
-      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[42px] disabled:opacity-40"
+      className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[44px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
       onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}>
@@ -26,8 +26,8 @@ function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }
 }
 function RibbonGroup({ label, children }: any) {
   return (
-    <div className="flex flex-col items-center px-1.5 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
-      <div className="flex items-center gap-0.5 py-1 flex-1">{children}</div>
+    <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="flex items-center gap-1 py-1 flex-1">{children}</div>
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
   )
