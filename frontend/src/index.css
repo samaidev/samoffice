@@ -273,7 +273,7 @@ body {
 .ProseMirror {
   outline: none;
   min-height: 500px;
-  padding: 64px 80px;
+  padding: 0 !important;
   font-size: 15px;
   line-height: 1.8;
   color: var(--color-text);

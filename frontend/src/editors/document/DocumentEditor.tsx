@@ -119,6 +119,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [bgColor, setBgColor] = useState('#ffffff')
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
   const [showMarks, setShowMarks] = useState(false)
+  // 文档级设置 (页眉/页脚/页边距/分栏/行号)
+  const [docHeader, setDocHeader] = useState('')
+  const [docFooter, setDocFooter] = useState('')
+  const [docMargins, setDocMargins] = useState({ top: 64, bottom: 64, left: 80, right: 80 })
+  const [docColumns, setDocColumns] = useState(1)
+  const [docLineNumbers, setDocLineNumbers] = useState(false)
 
   useEffect(() => {
     if (!editorRef.current) return
@@ -507,31 +513,34 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             </div>
             <RibbonButton icon="📄" label={t('doc.margins')} onClick={() => {
               const preset = prompt(t('doc.marginsPrompt') + ' (top,bottom,left,right cm)', '2.54,2.54,2.54,2.54')
-              if (preset) setParaAttr('margins', preset)
+              if (preset) {
+                const parts = preset.split(',').map(s => parseFloat(s.trim()))
+                if (parts.length === 4 && parts.every(v => !isNaN(v) && v > 0)) {
+                  // cm → px (1cm ≈ 37.8px)
+                  setDocMargins({ top: Math.round(parts[0] * 37.8), bottom: Math.round(parts[1] * 37.8), left: Math.round(parts[2] * 37.8), right: Math.round(parts[3] * 37.8) })
+                }
+              }
             }} title={t('doc.marginsTitle')} />
             <RibbonButton icon="ǁ" label={t('doc.columns')} onClick={() => {
-              const n = prompt(t('doc.columnsPrompt'), '2')
-              if (n) setParaAttr('columns', parseInt(n) || 1)
+              const n = parseInt(prompt(t('doc.columnsPrompt'), '2') || '1')
+              if (n > 0 && n <= 4) setDocColumns(n)
             }} title={t('doc.columnsTitle')} />
-            <RibbonButton icon="🔢" label={t('doc.lineNumber')} onClick={() => setParaAttr('lineNumber', !activeAttrs.lineNumber)} active={activeAttrs.lineNumber} title={t('doc.lineNumberTitle')} />
+            <RibbonButton icon="🔢" label={t('doc.lineNumber')} onClick={() => setDocLineNumbers(!docLineNumbers)} active={docLineNumbers} title={t('doc.lineNumberTitle')} />
             <RibbonButton icon="📑" label={t('doc.pageBreakInsert')} onClick={() => exec('pageBreak')} title={t('doc.pageBreakInsertTitle')} />
           </RibbonGroup>
           {/* 页眉页脚 */}
           <RibbonGroup label={t('doc.headerFooter')}>
             <RibbonButton icon="📄" label={t('doc.header')} onClick={() => {
-              const h = prompt(t('doc.headerPrompt'), '')
-              if (h !== null) setParaAttr('header', h)
+              const h = prompt(t('doc.headerPrompt'), docHeader)
+              if (h !== null) setDocHeader(h)
             }} title={t('doc.headerTitle')} />
             <RibbonButton icon="📃" label={t('doc.footer')} onClick={() => {
-              const f = prompt(t('doc.footerPrompt'), '')
-              if (f !== null) setParaAttr('footer', f)
+              const f = prompt(t('doc.footerPrompt'), docFooter)
+              if (f !== null) setDocFooter(f)
             }} title={t('doc.footerTitle')} />
             <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => {
-              // 插入页码字段到光标位置 (显示 "第 N 页" 占位)
-              const v = viewRef.current; if (!v) return
-              const text = '〔页码〕'
-              v.dispatch(v.state.tr.insertText(text))
-              v.focus()
+              // 在页脚区域显示页码
+              setDocFooter(docFooter ? `${docFooter} · 第 1 页` : '第 1 页')
             }} title={t('doc.pageNumTitle')} />
           </RibbonGroup>
           <RibbonGroup label="公文 GB/T 9704">
@@ -717,18 +726,75 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             background: bgColor,
             minHeight: 'calc(100% - 48px)',
             overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
-          <div
-            ref={editorRef as any}
-            style={{
-              transform: `scale(${zoom / 100})`,
-              transformOrigin: 'top center',
-              width: `${10000 / Math.max(zoom, 1)}%`,
-              maxWidth: `${100 * 100 / Math.max(zoom, 1)}%`,
-              margin: '0 auto',
-            }}
-          />
+          {/* 页眉 */}
+          {(docHeader || docLineNumbers) && (
+            <div style={{
+              padding: `${Math.round(docMargins.top * 0.3)}px ${docMargins.right}px ${docMargins.top * 0.3}px ${docMargins.left}px`,
+              borderBottom: '1px solid var(--color-border)',
+              fontSize: '12px',
+              color: 'var(--color-text-muted)',
+              textAlign: 'center',
+              minHeight: docHeader ? 'auto' : '0',
+              display: docHeader ? 'block' : 'none',
+            }}>
+              {docHeader}
+            </div>
+          )}
+          {/* 编辑器主体 — 应用页边距 + 分栏 */}
+          <div style={{ position: 'relative', display: 'flex', flex: 1 }}>
+            {/* 行号 */}
+            {docLineNumbers && (
+              <div style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: '40px',
+                borderRight: '1px solid var(--color-border)',
+                padding: `${docMargins.top}px 4px`,
+                fontSize: '11px',
+                color: 'var(--color-text-muted)',
+                textAlign: 'right',
+                lineHeight: '1.8',
+                userSelect: 'none',
+                zIndex: 2,
+              }}>
+                {Array.from({ length: 30 }, (_, i) => (
+                  <div key={i} style={{ minHeight: '1.8em' }}>{i + 1}</div>
+                ))}
+              </div>
+            )}
+            <div
+              ref={editorRef as any}
+              style={{
+                transform: `scale(${zoom / 100})`,
+                transformOrigin: 'top center',
+                width: docLineNumbers ? `calc(${10000 / Math.max(zoom, 1)}% - 40px)` : `${10000 / Math.max(zoom, 1)}%`,
+                maxWidth: `${100 * 100 / Math.max(zoom, 1)}%`,
+                margin: '0 auto',
+                padding: `${docMargins.top}px ${docMargins.right}px ${docMargins.bottom}px ${docMargins.left}px`,
+                columnCount: docColumns > 1 ? docColumns : undefined,
+                columnGap: docColumns > 1 ? '32px' : undefined,
+                columnRule: docColumns > 1 ? '1px solid var(--color-border)' : undefined,
+              }}
+            />
+          </div>
+          {/* 页脚 */}
+          {docFooter && (
+            <div style={{
+              padding: `${Math.round(docMargins.bottom * 0.3)}px ${docMargins.right}px ${Math.round(docMargins.bottom * 0.3)}px ${docMargins.left}px`,
+              borderTop: '1px solid var(--color-border)',
+              fontSize: '12px',
+              color: 'var(--color-text-muted)',
+              textAlign: 'center',
+            }}>
+              {docFooter}
+            </div>
+          )}
         </div>
       </div>
 
