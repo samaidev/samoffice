@@ -645,7 +645,7 @@ export function SlideEditor() {
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
           <div className="bg-white shadow-xl rounded-lg w-full animate-fade-in relative"
             style={{ aspectRatio: '16 / 9', background: current.bg, maxWidth: '900px', boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', zoom: `${zoom}%` }}>
-            <div className="h-full flex flex-col p-6 sm:p-10 md:p-14 relative overflow-hidden" onMouseDown={() => setSelectedEl(null)}>
+            <div className="h-full flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={() => setSelectedEl(null)}>
               {/* 文字内容 */}
               {current.layout === 'title' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10">
@@ -664,13 +664,19 @@ export function SlideEditor() {
                 <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder={t('slide.placeholder.blank')} />
               )}
 
-              {/* 形状渲染层 */}
+              {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
                   onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
                   style={{
                     left: `${sh.x / 8}px`, top: `${sh.y / 4.5}px`, width: `${sh.w / 8}px`, height: `${sh.h / 4.5}px`,
                     transform: sh.rotation ? `rotate(${sh.rotation}deg)` : '',
+                    zIndex: 20,
+                    outline: selectedEl?.type === 'shape' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none',
+                    outlineOffset: '2px',
+                  }}>
+                  {/* 形状内容层 — clip-path 只作用于形状本身，不影响手柄 */}
+                  <div className="absolute inset-0 flex items-center justify-center" style={{
                     background: sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill,
                     backgroundSize: sh.fill.startsWith('url') ? 'cover' : undefined,
                     backgroundRepeat: sh.fill.startsWith('url') ? 'no-repeat' : undefined,
@@ -689,22 +695,21 @@ export function SlideEditor() {
                     boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
                     filter: sh.glow ? `drop-shadow(0 0 8px ${sh.fill})` : 'none',
                     border: sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none',
-                    color: '#ffffff', fontSize: '12px', fontWeight: 600, zIndex: 5,
-                    outline: selectedEl?.type === 'shape' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none',
-                    outlineOffset: '2px',
+                    color: '#ffffff', fontSize: '12px', fontWeight: 600,
                   }}>
-                  {sh.text && <span style={{ pointerEvents: 'none', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>{sh.text}</span>}
+                    {sh.text && <span style={{ pointerEvents: 'none', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>{sh.text}</span>}
+                  </div>
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
-                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)' }} />
-                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
                   </>}
                 </div>
               ))}
 
-              {/* 艺术字渲染层 */}
+              {/* 艺术字渲染层 — zIndex 21 > 文字内容 z-10 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 4.5}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 6, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 4.5}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
                   <span style={{
                     fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700,
                     color: at.color,
