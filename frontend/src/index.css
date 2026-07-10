@@ -490,14 +490,22 @@ input:focus, textarea:focus, select:focus {
   left: auto;
   right: 0;
 }
-/* 智能弹出菜单：通过 JS 检测位置自动选择左/右对齐 */
-.ribbon-popup-auto {
-  /* JS 会动态设置 left/right */
+
+/* === Ribbon Group 防挤压规范 ===
+ * RibbonGroup 必须保持自然宽度，不允许 flex-shrink，
+ * 否则当 group 数量多时按钮会被挤压重叠。
+ * 父容器用 ribbon-scroll 处理溢出。
+ */
+.ribbon-group {
+  flex-shrink: 0;
 }
 
 /* === Ribbon 内容区横向滚动规范 ===
- * 桌面端保持 overflow: visible（弹出菜单需要逃出容器边界）
- * 移动端启用横向滚动（移动端无 hover，弹出菜单不适用）
+ * 桌面端：overflow visible（弹出菜单需要逃出容器边界），但允许横向滚动
+ * 移动端：启用横向滚动
+ * 关键：用 overflow-x: auto + overflow-y: visible 在标准 CSS 中会冲突
+ * （visible 会被强制为 auto），因此桌面端保持 visible，
+ * 靠 ribbon-group flex-shrink-0 + 页面 overflow-x:hidden 处理。
  */
 .ribbon-scroll {
   overflow: visible;
@@ -516,6 +524,31 @@ input:focus, textarea:focus, select:focus {
     background: rgba(100, 116, 139, 0.3);
     border-radius: 2px;
   }
+}
+
+/* === 移动端 header 可滚动 Tab 栏 === */
+.header-tabs-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.header-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* === 顶栏 Files 下拉菜单统一样式 ===
+ * 与 ribbon-popup 保持一致的圆角、阴影、边框
+ */
+.files-dropdown {
+  z-index: 50;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  animation: fade-in 0.2s var(--ease-out);
 }
 
 /* === 移动端 header 可滚动 Tab 栏 === */

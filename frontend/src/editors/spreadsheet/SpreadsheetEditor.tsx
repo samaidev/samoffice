@@ -26,9 +26,9 @@ function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }
 }
 function RibbonGroup({ label, children }: any) {
   return (
-    <div className="flex flex-col items-center px-2 border-r" style={{ borderColor: 'var(--color-border)' }}>
+    <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
       <div className="flex items-center gap-0.5 py-1 flex-1">{children}</div>
-      <div className="text-[10px] font-medium pb-0.5" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
+      <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
   )
 }
@@ -103,7 +103,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
       </div>
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch justify-between px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 30 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
             <RibbonButton icon="📋" label={t('sheet.copy')} onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />

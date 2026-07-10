@@ -118,6 +118,18 @@ ${t('sample.md.more')}
     toastTimer.current = setTimeout(() => setToast(''), 2500)
   }, [])
 
+  // Escape 关闭顶栏弹出菜单（Files 下拉、移动端汉堡菜单）
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (filesOpen) { setFilesOpen(false); e.preventDefault() }
+      else if (menuOpen) { setMenuOpen(false); e.preventDefault() }
+      else if (spellPanelOpen) { setSpellPanelOpen(false); e.preventDefault() }
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [filesOpen, menuOpen, spellPanelOpen])
+
   // 主题应用
   useEffect(() => {
     const applyTheme = () => {
@@ -363,7 +375,7 @@ ${t('sample.md.more')}
             {filesOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setFilesOpen(false)} />
-                <div className="absolute top-full left-0 ribbon-popup ribbon-popup_compact min-w-[180px] mt-1">
+                <div className="absolute top-full left-0 files-dropdown ribbon-popup_compact min-w-[180px] mt-1">
                   {fileItems.map((it) => (
                     <button
                       key={it.label}
