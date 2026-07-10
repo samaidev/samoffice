@@ -504,7 +504,7 @@ input:focus, textarea:focus, select:focus {
  * 桌面端：默认 overflow visible（弹出菜单需要逃出容器边界），
  *        当窗口宽度不足以容纳所有 ribbon-group 时，启用横向滚动作为兜底。
  *        通过 CSS containmnt 限制水平溢出影响外层。
- * 移动端：始终启用横向滚动。
+ * 移动端：始终启用横向滚动，并在两侧加渐变指示器提示可滚动。
  */
 .ribbon-scroll {
   overflow: visible;
@@ -528,15 +528,19 @@ input:focus, textarea:focus, select:focus {
   .ribbon-scroll {
     overflow-x: auto;
     overflow-y: hidden;
-    scrollbar-width: thin;
+    scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
   .ribbon-scroll::-webkit-scrollbar {
-    height: 4px;
+    display: none;
   }
-  .ribbon-scroll::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.3);
-    border-radius: 2px;
+  /* 移动端 ribbon 按钮更紧凑 */
+  .ribbon-scroll .ribbon-group {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .ribbon-scroll button {
+    min-width: 36px !important;
   }
 }
 

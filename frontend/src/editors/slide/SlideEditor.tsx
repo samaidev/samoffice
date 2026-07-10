@@ -499,7 +499,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="➡" label={t('slide.enter')} onClick={() => setShowAnimPanel(!showAnimPanel)} />
               {showAnimPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, top: '100%' }}>
                   <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.enter')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {ENTRANCE_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'entrance')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}
