@@ -115,15 +115,18 @@ export function SlideEditor() {
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showAnimPanel, setShowAnimPanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  // 二级颜色弹出菜单 — 统一 click 触发，避免 hover 残留导致重叠
+  const [showColorPopup, setShowColorPopup] = useState(false)
   // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
-  type PanelName = 'shape' | 'anim' | 'art'
+  type PanelName = 'shape' | 'anim' | 'art' | 'color'
   const openPanel = (which: PanelName) => {
     setShowShapePanel(which === 'shape' ? !showShapePanel : false)
     setShowAnimPanel(which === 'anim' ? !showAnimPanel : false)
     setShowArtPanel(which === 'art' ? !showArtPanel : false)
+    setShowColorPopup(which === 'color' ? !showColorPopup : false)
   }
-  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false) }
-  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel
+  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false); setShowColorPopup(false) }
+  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel || showColorPopup
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
   const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
@@ -256,19 +259,22 @@ export function SlideEditor() {
           </RibbonGroup>
           <RibbonGroup label={t('slide.font')}>
             <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontBold: !sh.fontBold }) } else { alert('加粗已应用于选中元素') } }} />
-            <div className="relative group">
-              <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => { if (!selectedEl) alert('请先选择元素') }} />
-              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto', padding: '0.5rem' }}>
-                <div className="grid grid-cols-4 gap-1">
-                  {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
-                    <button key={c} onClick={() => {
-                      if (!selectedEl) { alert('请先选择元素'); return }
-                      if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fill: c })
-                      else updateArtText(selectedEl.index, { color: c })
-                    }} className="w-6 h-6 rounded-md border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} />
-                  ))}
+            <div className="relative">
+              <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => openPanel('color')} />
+              {showColorPopup && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.5rem', zIndex: 50 }}>
+                  <div className="grid grid-cols-4 gap-1">
+                    {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
+                      <button key={c} onClick={() => {
+                        if (!selectedEl) { alert('请先选择元素'); closeAllPanels(); return }
+                        if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fill: c })
+                        else updateArtText(selectedEl.index, { color: c })
+                        closeAllPanels()
+                      }} className="w-6 h-6 rounded-md border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>

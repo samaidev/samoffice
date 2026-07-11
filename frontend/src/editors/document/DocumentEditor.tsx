@@ -115,12 +115,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  // 二级颜色/底纹/背景弹出菜单 — 统一改为 click 触发，避免 hover 残留导致重叠
+  const [showColorPopup, setShowColorPopup] = useState(false)
+  const [showHighlightPopup, setShowHighlightPopup] = useState(false)
+  const [showShadingPopup, setShowShadingPopup] = useState(false)
+  const [showBgColorPopup, setShowBgColorPopup] = useState(false)
   // 弹出面板互斥：打开任一面板时关闭其他面板，避免多个弹出菜单重叠
-  const openPanel = (which: 'shape' | 'art') => {
-    if (which === 'shape') { setShowArtPanel(false); setShowShapePanel(v => !v) }
-    else { setShowShapePanel(false); setShowArtPanel(v => !v) }
+  type PanelName = 'shape' | 'art' | 'color' | 'highlight' | 'shading' | 'bgColor'
+  const openPanel = (which: PanelName) => {
+    setShowShapePanel(which === 'shape' ? !showShapePanel : false)
+    setShowArtPanel(which === 'art' ? !showArtPanel : false)
+    setShowColorPopup(which === 'color' ? !showColorPopup : false)
+    setShowHighlightPopup(which === 'highlight' ? !showHighlightPopup : false)
+    setShowShadingPopup(which === 'shading' ? !showShadingPopup : false)
+    setShowBgColorPopup(which === 'bgColor' ? !showBgColorPopup : false)
   }
-  const closeAllPanels = () => { setShowShapePanel(false); setShowArtPanel(false) }
+  const closeAllPanels = () => {
+    setShowShapePanel(false); setShowArtPanel(false)
+    setShowColorPopup(false); setShowHighlightPopup(false)
+    setShowShadingPopup(false); setShowBgColorPopup(false)
+  }
+  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
   const [bgColor, setBgColor] = useState('#ffffff')
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
@@ -253,19 +268,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     return () => window.removeEventListener('keydown', onKey)
   }, [zoom])
 
-  // Escape 关闭所有弹出层（右键菜单、mini工具栏、形状/艺术字面板）
+  // Escape 关闭所有弹出层（右键菜单、mini工具栏、形状/艺术字/颜色/底纹/背景面板）
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (showContextMenu) { setShowContextMenu(false); e.preventDefault() }
       else if (showMiniToolbar) { setShowMiniToolbar(false); e.preventDefault() }
-      else if (showShapePanel) { setShowShapePanel(false); e.preventDefault() }
-      else if (showArtPanel) { setShowArtPanel(false); e.preventDefault() }
+      else if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
       else if (searchOpen) { setSearchOpen(false); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [showContextMenu, showMiniToolbar, showShapePanel, showArtPanel, searchOpen])
+  }, [showContextMenu, showMiniToolbar, anyPanelOpen, searchOpen])
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('doc.ribbon.home') }, { id: 'insert', label: t('doc.ribbon.insert') }, { id: 'layout', label: t('doc.ribbon.layout') }, { id: 'review', label: t('doc.ribbon.review') }, { id: 'view', label: t('doc.ribbon.view') },
@@ -301,8 +315,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn flex-shrink-0 ${trackChanges ? 'active' : ''}`} title={t('doc.trackChanges')} type="button">✏️</button>
       </div>
 
-      {/* 点击外部关闭弹出面板的透明遮罩 */}
-      {(showShapePanel || showArtPanel) && (
+      {/* 点击外部关闭弹出面板的透明遮罩 — 覆盖所有二级弹出菜单 */}
+      {anyPanelOpen && (
         <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
       )}
 
@@ -344,13 +358,25 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <button onClick={() => exec('strikethrough')} className={`toolbar-btn ${activeMarks.has('strikethrough') ? 'active' : ''}`} title={t('doc.strikethrough')} type="button" style={{ width: 28, height: 26 }}><s>S</s></button>
                 <button onClick={() => exec('superscript')} className={`toolbar-btn ${activeMarks.has('superscript') ? 'active' : ''}`} title={t('doc.superscript')} type="button" style={{ width: 28, height: 26 }}>X²</button>
                 <button onClick={() => exec('subscript')} className={`toolbar-btn ${activeMarks.has('subscript') ? 'active' : ''}`} title={t('doc.subscript')} type="button" style={{ width: 28, height: 26 }}>X₂</button>
-                <div className="relative group">
-                  <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
-                  <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto' }}><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+                <div className="relative">
+                  <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }} onClick={() => openPanel('color')} />
+                  {showColorPopup && (
+                    <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>
+                        {COLORS.map(c => <button key={c} onClick={() => { setTextColor(c); closeAllPanels() }} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="relative group">
-                  <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 26, background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }}>H</button>
-                  <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto' }}><div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>{HL_COLORS.map(c => <button key={c} onClick={() => setHighlight(c)} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+                <div className="relative">
+                  <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 26, background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }} onClick={() => openPanel('highlight')} />
+                  {showHighlightPopup && (
+                    <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>
+                        {HL_COLORS.map(c => <button key={c} onClick={() => { setHighlight(c); closeAllPanels() }} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -483,9 +509,15 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="▏" label={t('doc.borderLeft')} onClick={() => setParaAttr('border', activeAttrs.border === 'left' ? '' : 'left')} active={activeAttrs.border === 'left'} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.shading')}>
-            <div className="relative group">
-              <button className="toolbar-btn" title={t('doc.shading')} type="button" style={{ width: 40, height: 32, background: activeAttrs.shading || 'transparent' }}>▦</button>
-              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto', padding: '0.625rem' }}><div className="grid grid-cols-6 gap-1.5">{['','#f1f5f9','#fef3c7','#dbeafe','#dcfce7','#fce7f3'].map(c => <button key={c} onClick={() => setParaAttr('shading', c)} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c || 'white', border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+            <div className="relative">
+              <button className="toolbar-btn" title={t('doc.shading')} type="button" style={{ width: 40, height: 32, background: activeAttrs.shading || 'transparent' }} onClick={() => openPanel('shading')} />
+              {showShadingPopup && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.625rem', zIndex: 50 }}>
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {['','#f1f5f9','#fef3c7','#dbeafe','#dcfce7','#fce7f3'].map(c => <button key={c} onClick={() => { setParaAttr('shading', c); closeAllPanels() }} className="w-6 h-6 rounded-md transition-transform hover:scale-110" style={{ background: c || 'white', border: '1px solid var(--color-border)' }} type="button" />)}
+                  </div>
+                </div>
+              )}
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('doc.layout')}>
@@ -642,17 +674,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           {/* 背景色 / 护眼模式 */}
           <RibbonGroup label={t('doc.pageBg')}>
-            <div className="relative group">
-              <button className="toolbar-btn" title={t('doc.pageBg')} type="button" style={{ width: 40, height: 32, background: bgColor }}>▦</button>
-              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto', padding: '0.625rem' }}>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {[['#ffffff', t('doc.bgWhite')], ['#c7edcc', t('doc.bgEyeGreen')], ['#f5f5dc', t('doc.bgBeige')], ['#faf3e0', t('doc.bgCream')], ['#e8e8e8', t('doc.bgGray')], ['#fff5e6', t('doc.bgWarm')]].map(([c, n]) => (
-                    <button key={c} onClick={() => setBgColor(c)} className="flex flex-col items-center gap-0.5 p-1 rounded transition-colors hover:bg-slate-100" title={n as string}>
-                      <span className="w-7 h-7 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} />
-                    </button>
-                  ))}
+            <div className="relative">
+              <button className="toolbar-btn" title={t('doc.pageBg')} type="button" style={{ width: 40, height: 32, background: bgColor }} onClick={() => openPanel('bgColor')} />
+              {showBgColorPopup && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.625rem', zIndex: 50 }}>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[['#ffffff', t('doc.bgWhite')], ['#c7edcc', t('doc.bgEyeGreen')], ['#f5f5dc', t('doc.bgBeige')], ['#faf3e0', t('doc.bgCream')], ['#e8e8e8', t('doc.bgGray')], ['#fff5e6', t('doc.bgWarm')]].map(([c, n]) => (
+                      <button key={c} onClick={() => { setBgColor(c as string); closeAllPanels() }} className="flex flex-col items-center gap-0.5 p-1 rounded transition-colors hover:bg-slate-100" title={n as string}>
+                        <span className="w-7 h-7 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} />
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </RibbonGroup>
           {/* 显示编辑标记 (¶ 段落标记 / 分页符) */}

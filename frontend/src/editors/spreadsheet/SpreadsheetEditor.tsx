@@ -136,20 +136,23 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
   const [showFuncPanel, setShowFuncPanel] = useState(false)
   const [showCondPanel, setShowCondPanel] = useState(false)
   const [showValidPanel, setShowValidPanel] = useState(false)
+  // 二级颜色弹出菜单 — 统一 click 触发，避免 hover 残留导致重叠
+  const [showColorPopup, setShowColorPopup] = useState(false)
   // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
-  type PanelName = 'chart' | 'shape' | 'func' | 'cond' | 'valid'
+  type PanelName = 'chart' | 'shape' | 'func' | 'cond' | 'valid' | 'color'
   const openPanel = (which: PanelName) => {
     setShowChartPanel(which === 'chart' ? !showChartPanel : false)
     setShowShapePanel(which === 'shape' ? !showShapePanel : false)
     setShowFuncPanel(which === 'func' ? !showFuncPanel : false)
     setShowCondPanel(which === 'cond' ? !showCondPanel : false)
     setShowValidPanel(which === 'valid' ? !showValidPanel : false)
+    setShowColorPopup(which === 'color' ? !showColorPopup : false)
   }
   const closeAllPanels = () => {
     setShowChartPanel(false); setShowShapePanel(false); setShowFuncPanel(false)
-    setShowCondPanel(false); setShowValidPanel(false)
+    setShowCondPanel(false); setShowValidPanel(false); setShowColorPopup(false)
   }
-  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel
+  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel || showColorPopup
   const [validList, setValidList] = useState('')
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
@@ -296,15 +299,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           </RibbonGroup>
           <RibbonGroup label={t('sheet.font')}>
             <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmt(active.r, active.c, { bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
-            <div className="relative group">
-              <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => {}} />
-              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto', padding: '0.5rem' }}>
-                <div className="grid grid-cols-4 gap-1">
-                  {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899'].map(c => (
-                    <button key={c} onClick={() => setCellFmt(active.r, active.c, { color: c })} className="w-6 h-6 rounded border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} title={c} />
-                  ))}
+            <div className="relative">
+              <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => openPanel('color')} />
+              {showColorPopup && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.5rem', zIndex: 50 }}>
+                  <div className="grid grid-cols-4 gap-1">
+                    {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899'].map(c => (
+                      <button key={c} onClick={() => { setCellFmt(active.r, active.c, { color: c }); closeAllPanels() }} className="w-6 h-6 rounded border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} title={c} />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.alignment')}>

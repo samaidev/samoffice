@@ -35,3 +35,7 @@ data/
 # Logs
 *.log
 tsconfig.tsbuildinfo
+
+# Playwright test screenshots (generated, not source)
+scripts/e2e/pw-shots*/
+scripts/e2e/menu-audit-results.json
