@@ -115,6 +115,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  // 弹出面板互斥：打开任一面板时关闭其他面板，避免多个弹出菜单重叠
+  const openPanel = (which: 'shape' | 'art') => {
+    if (which === 'shape') { setShowArtPanel(false); setShowShapePanel(v => !v) }
+    else { setShowShapePanel(false); setShowArtPanel(v => !v) }
+  }
+  const closeAllPanels = () => { setShowShapePanel(false); setShowArtPanel(false) }
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
   const [bgColor, setBgColor] = useState('#ffffff')
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
@@ -283,19 +289,25 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </div>
       )}
 
-      {/* Ribbon Tab 栏 */}
-      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 30 }}>
-        {ribbonTabs.map(tab => (
-          <button key={tab.id} onClick={() => setRibbonTab(tab.id)} data-testid={`ribbon-tab-${tab.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
-            style={{ color: ribbonTab === tab.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === tab.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === tab.id ? 'var(--color-primary-50)' : 'transparent' }}>{tab.label}</button>
-        ))}
-        <div className="flex-1" />
-        <button onClick={() => setSearchOpen(!searchOpen)} data-testid="doc-search-toggle" className="toolbar-btn" title={t('doc.find') + ' (Ctrl+F)'} type="button">🔍</button>
-        <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn ${trackChanges ? 'active' : ''}`} title={t('doc.trackChanges')} type="button">✏️</button>
+      {/* Ribbon Tab 栏 — 可横向滚动，右侧操作按钮固定 */}
+      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45 }}>
+        <div className="ribbon-tab-scroll">
+          {ribbonTabs.map(tab => (
+            <button key={tab.id} onClick={() => setRibbonTab(tab.id)} data-testid={`ribbon-tab-${tab.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
+              style={{ color: ribbonTab === tab.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === tab.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === tab.id ? 'var(--color-primary-50)' : 'transparent' }}>{tab.label}</button>
+          ))}
+        </div>
+        <button onClick={() => setSearchOpen(!searchOpen)} data-testid="doc-search-toggle" className="toolbar-btn flex-shrink-0" title={t('doc.find') + ' (Ctrl+F)'} type="button">🔍</button>
+        <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn flex-shrink-0 ${trackChanges ? 'active' : ''}`} title={t('doc.trackChanges')} type="button">✏️</button>
       </div>
 
+      {/* 点击外部关闭弹出面板的透明遮罩 */}
+      {(showShapePanel || showArtPanel) && (
+        <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
+      )}
+
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
@@ -380,9 +392,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           <RibbonGroup label={t('doc.shapes')}>
             <div className="relative">
-              <RibbonButton icon="▭" label={t('doc.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
+              <RibbonButton icon="▭" label={t('doc.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {[{t:'rect',i:'▭',n:t('doc.shape.rect')},{t:'roundRect',i:'▢',n:t('doc.shape.rounded')},{t:'ellipse',i:'⬭',n:t('doc.shape.ellipse')},{t:'triangle',i:'△',n:t('doc.shape.triangle')},
                      {t:'diamond',i:'◇',n:t('doc.shape.diamond')},{t:'rightArrow',i:'→',n:t('doc.shape.arrow')},{t:'star5',i:'★',n:t('doc.shape.star')},{t:'heart',i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -398,9 +410,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           <RibbonGroup label={t('doc.wordArt')}>
             <div className="relative">
-              <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => setShowArtPanel(!showArtPanel)} />
+              <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => openPanel('art')} />
               {showArtPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { name: t('art.purple'), color: '#4f46e5', grad: '4f46e5,818cf8', shadow: true },

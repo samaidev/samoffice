@@ -115,6 +115,15 @@ export function SlideEditor() {
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showAnimPanel, setShowAnimPanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
+  type PanelName = 'shape' | 'anim' | 'art'
+  const openPanel = (which: PanelName) => {
+    setShowShapePanel(which === 'shape' ? !showShapePanel : false)
+    setShowAnimPanel(which === 'anim' ? !showAnimPanel : false)
+    setShowArtPanel(which === 'art' ? !showArtPanel : false)
+  }
+  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false) }
+  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
   const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
@@ -208,18 +217,24 @@ export function SlideEditor() {
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
-      {/* Ribbon Tab 栏 */}
-      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 30 }}>
-        {ribbonTabs.map(t => (
-          <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
-            style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
-        ))}
-        <div className="flex-1" />
-        <span className="text-xs" data-testid="slide-page-indicator" style={{ color: 'var(--color-text-muted)' }}>{active + 1} / {slides.length}</span>
+      {/* Ribbon Tab 栏 — 可横向滚动，右侧页码固定 */}
+      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45 }}>
+        <div className="ribbon-tab-scroll">
+          {ribbonTabs.map(t => (
+            <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
+              style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
+          ))}
+        </div>
+        <span className="text-xs flex-shrink-0 px-2" data-testid="slide-page-indicator" style={{ color: 'var(--color-text-muted)' }}>{active + 1} / {slides.length}</span>
       </div>
 
+      {/* 点击外部关闭弹出面板的透明遮罩 */}
+      {anyPanelOpen && (
+        <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
+      )}
+
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('slide.slides')}>
             <RibbonButton icon="+" label={t('slide.new')} onClick={addSlide} />
@@ -256,9 +271,9 @@ export function SlideEditor() {
         {ribbonTab === 'insert' && (<>
           <RibbonGroup label={t('slide.shapes')}>
             <div className="relative">
-              <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
+              <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {SHAPES.map(s => (
                       <button key={s.type} onClick={() => addShape(s.type)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 60 }}>
@@ -273,9 +288,9 @@ export function SlideEditor() {
           </RibbonGroup>
           <RibbonGroup label={t('slide.wordArt')}>
             <div className="relative">
-              <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => setShowArtPanel(!showArtPanel)} />
+              <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => openPanel('art')} />
               {showArtPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {ART_PRESETS.map(p => (
                       <button key={p.name} onClick={() => addArtText(p)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 80 }}>
@@ -497,9 +512,9 @@ export function SlideEditor() {
         {ribbonTab === 'animations' && (<>
           <RibbonGroup label={t('slide.entranceAnim')}>
             <div className="relative">
-              <RibbonButton icon="➡" label={t('slide.enter')} onClick={() => setShowAnimPanel(!showAnimPanel)} />
+              <RibbonButton icon="➡" label={t('slide.enter')} onClick={() => openPanel('anim')} />
               {showAnimPanel && (
-                <div className="absolute top-full ribbon-popup" style={{ left: 0, top: '100%' }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, top: '100%', zIndex: 50 }}>
                   <div className="text-[10px] font-bold uppercase mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.enter')}</div>
                   <div className="grid grid-cols-3 gap-1">
                     {ENTRANCE_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'entrance')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}

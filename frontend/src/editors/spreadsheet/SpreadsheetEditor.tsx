@@ -136,6 +136,20 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
   const [showFuncPanel, setShowFuncPanel] = useState(false)
   const [showCondPanel, setShowCondPanel] = useState(false)
   const [showValidPanel, setShowValidPanel] = useState(false)
+  // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
+  type PanelName = 'chart' | 'shape' | 'func' | 'cond' | 'valid'
+  const openPanel = (which: PanelName) => {
+    setShowChartPanel(which === 'chart' ? !showChartPanel : false)
+    setShowShapePanel(which === 'shape' ? !showShapePanel : false)
+    setShowFuncPanel(which === 'func' ? !showFuncPanel : false)
+    setShowCondPanel(which === 'cond' ? !showCondPanel : false)
+    setShowValidPanel(which === 'valid' ? !showValidPanel : false)
+  }
+  const closeAllPanels = () => {
+    setShowChartPanel(false); setShowShapePanel(false); setShowFuncPanel(false)
+    setShowCondPanel(false); setShowValidPanel(false)
+  }
+  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel
   const [validList, setValidList] = useState('')
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
@@ -246,18 +260,24 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
-      {/* Ribbon Tab 栏 */}
-      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 30 }}>
-        {ribbonTabs.map(t => (
-          <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-4 py-2 text-sm font-medium transition-colors"
-            style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
-        ))}
-        <div className="flex-1" />
-        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{rows} {t('sheet.rows')} × {cols} {t('sheet.cols')}</span>
+      {/* Ribbon Tab 栏 — 可横向滚动，右侧信息固定 */}
+      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45 }}>
+        <div className="ribbon-tab-scroll">
+          {ribbonTabs.map(t => (
+            <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
+              style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
+          ))}
+        </div>
+        <span className="text-xs flex-shrink-0 px-2" style={{ color: 'var(--color-text-muted)' }}>{rows} {t('sheet.rows')} × {cols} {t('sheet.cols')}</span>
       </div>
 
+      {/* 点击外部关闭弹出面板的透明遮罩 */}
+      {anyPanelOpen && (
+        <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
+      )}
+
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 30 }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
             <RibbonButton icon="📋" label={t('sheet.copy')} onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />
@@ -308,9 +328,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
         {ribbonTab === 'insert' && (<>
           <RibbonGroup label={t('sheet.chart')}>
             <div className="relative">
-              <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => setShowChartPanel(!showChartPanel)} />
+              <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => openPanel('chart')} />
               {showChartPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { type: 'bar', icon: '📊', name: t('sheet.chart.bar') },
@@ -333,9 +353,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           </RibbonGroup>
           <RibbonGroup label={t('sheet.shapes')}>
             <div className="relative">
-              <RibbonButton icon="▭" label={t('sheet.shapes')} onClick={() => setShowShapePanel(!showShapePanel)} />
+              <RibbonButton icon="▭" label={t('sheet.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {[{i:'▭',n:t('doc.shape.rect')},{i:'▢',n:t('doc.shape.rounded')},{i:'⬭',n:t('doc.shape.ellipse')},{i:'△',n:t('doc.shape.triangle')},
                      {i:'◇',n:t('doc.shape.diamond')},{i:'→',n:t('doc.shape.arrow')},{i:'★',n:t('doc.shape.star')},{i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -366,9 +386,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           </RibbonGroup>
           <RibbonGroup label={t('sheet.function')}>
             <div className="relative">
-              <RibbonButton icon="ƒx" label={t('sheet.function')} onClick={() => setShowFuncPanel(!showFuncPanel)} />
+              <RibbonButton icon="ƒx" label={t('sheet.function')} onClick={() => openPanel('func')} />
               {showFuncPanel && (
-                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160 }}>
+                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160, zIndex: 50 }}>
                   <button onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.sum')}</button>
                   <button onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0'); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.average')}</button>
                   <button onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.count')}</button>
@@ -395,9 +415,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           {/* MS Office 风格数据工具 */}
           <RibbonGroup label={t('sheet.dataTools')}>
             <div className="relative">
-              <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => setShowValidPanel(!showValidPanel)} />
+              <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => openPanel('valid')} />
               {showValidPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto' }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('sheet.dropdownOptions')}</div>
                   <input type="text" placeholder={t('sheet.dropdownPlaceholder')} value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
                   <button onClick={() => { setShowValidPanel(false); alert(t('sheet.validationSet', { list: validList })) }} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>
@@ -435,9 +455,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
           </RibbonGroup>
           <RibbonGroup label={t('sheet.conditionalFormat')}>
             <div className="relative">
-              <RibbonButton icon="🎨" label={t('sheet.conditionalFormat')} onClick={() => setShowCondPanel(!showCondPanel)} />
+              <RibbonButton icon="🎨" label={t('sheet.conditionalFormat')} onClick={() => openPanel('cond')} />
               {showCondPanel && (
-                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160 }}>
+                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160, zIndex: 50 }}>
                   <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v > avg) ? { ...cell, bg: '#dcfce7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
                   <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v < avg) ? { ...cell, bg: '#fef3c7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
                   <button onClick={() => { const vals: {r:number;v:number}[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push({r,v}) } vals.sort((a,b)=>b.v-a.v).slice(0,10).forEach(x => setCellFmt(x.r, active.c, { bg: '#dbeafe' })); setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>

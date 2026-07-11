@@ -503,8 +503,7 @@ input:focus, textarea:focus, select:focus {
 /* === Ribbon 内容区横向滚动规范 ===
  * 桌面端：默认 overflow visible（弹出菜单需要逃出容器边界），
  *        当窗口宽度不足以容纳所有 ribbon-group 时，启用横向滚动作为兜底。
- *        通过 CSS containmnt 限制水平溢出影响外层。
- * 移动端：始终启用横向滚动，并在两侧加渐变指示器提示可滚动。
+ * 移动端：横向滚动 + 垂直 visible（让 hover/click 弹出菜单能逃出容器）。
  */
 .ribbon-scroll {
   overflow: visible;
@@ -527,34 +526,18 @@ input:focus, textarea:focus, select:focus {
 @media (max-width: 768px) {
   .ribbon-scroll {
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: visible;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
   .ribbon-scroll::-webkit-scrollbar {
     display: none;
   }
-  /* 移动端 ribbon 按钮更紧凑 */
+  /* 移动端 ribbon 按钮更紧凑 — 不再强制 min-width:36px，避免与 inline width 冲突 */
   .ribbon-scroll .ribbon-group {
     padding-left: 6px;
     padding-right: 6px;
   }
-  .ribbon-scroll button {
-    min-width: 36px !important;
-  }
-}
-
-/* === 移动端 header 可滚动 Tab 栏 === */
-.header-tabs-scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-  flex: 1 1 0;
-  min-width: 0;
-}
-.header-tabs-scroll::-webkit-scrollbar {
-  display: none;
 }
 
 /* === 顶栏 Files 下拉菜单统一样式 ===
@@ -569,17 +552,33 @@ input:focus, textarea:focus, select:focus {
   animation: fade-in 0.2s var(--ease-out);
 }
 
-/* === 移动端 header 可滚动 Tab 栏 === */
-.header-tabs-scroll {
+/* === Ribbon Tab 栏横向滚动（移动端/窄屏）===
+ * 解决：5 个 Ribbon Tab (开始/插入/布局/审阅/视图) + 右侧按钮在窄屏下拥挤重叠。
+ * 让 tab 栏可横向滚动，右侧操作按钮固定不被滚走。
+ */
+.ribbon-tab-scroll {
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   flex: 1 1 0;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
-.header-tabs-scroll::-webkit-scrollbar {
+.ribbon-tab-scroll::-webkit-scrollbar {
   display: none;
+}
+.ribbon-tab-scroll > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+@media (min-width: 769px) {
+  /* 桌面端不需要滚动，让 spacer flex-1 推右侧按钮 */
+  .ribbon-tab-scroll {
+    overflow-x: visible;
+  }
 }
 
 /* === 骨架屏 === */
@@ -658,19 +657,22 @@ table td, table th {
 }
 [data-tooltip]:hover::after { opacity: 1; }
 
-/* === 触摸友好 === */
+/* === 触摸友好 ===
+ * 移动端按钮最小尺寸 36px，但 ribbon 内部的紧凑按钮（B/I/U 等）
+ * 通过 .toolbar-btn-compact 豁免，保持 28-32px 避免工具栏过宽。
+ */
 @media (max-width: 768px) {
   button { min-height: 36px; min-width: 36px; }
   .toolbar-btn { width: 36px; height: 36px; }
-}
-
-/* === 工具栏分隔符 === */
-.toolbar-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--color-border);
-  margin: 0 4px;
-  flex-shrink: 0;
+  /* 紧凑工具栏按钮豁免：B/I/U/S/X²/X₂/A/H 等格式按钮 */
+  .toolbar-btn.toolbar-btn-compact,
+  .ribbon-scroll .toolbar-btn[style*="width: 28"],
+  .ribbon-scroll .toolbar-btn[style*="width:28"] {
+    min-width: 30px !important;
+    min-height: 30px !important;
+    width: 30px !important;
+    height: 28px !important;
+  }
 }
 
 /* === 空状态 === */
