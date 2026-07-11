@@ -258,14 +258,14 @@ export function SlideEditor() {
             <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontBold: !sh.fontBold }) } else { alert('加粗已应用于选中元素') } }} />
             <div className="relative group">
               <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => { if (!selectedEl) alert('请先选择元素') }} />
-              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ right: 0, left: 'auto', padding: '0.5rem' }}>
+              <div className="absolute top-full ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ left: 0, right: 'auto', padding: '0.5rem' }}>
                 <div className="grid grid-cols-4 gap-1">
                   {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
                     <button key={c} onClick={() => {
                       if (!selectedEl) { alert('请先选择元素'); return }
                       if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fill: c })
                       else updateArtText(selectedEl.index, { color: c })
-                    }} className="w-6 h-6 rounded-md border" style={{ background: c, borderColor: 'var(--color-border)' }} />
+                    }} className="w-6 h-6 rounded-md border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} />
                   ))}
                 </div>
               </div>
@@ -283,7 +283,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {SHAPES.map(s => (
                       <button key={s.type} onClick={() => addShape(s.type)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 60 }}>
@@ -300,7 +300,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => openPanel('art')} />
               {showArtPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ right: 0, left: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {ART_PRESETS.map(p => (
                       <button key={p.name} onClick={() => addArtText(p)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 80 }}>

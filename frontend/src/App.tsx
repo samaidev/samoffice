@@ -390,10 +390,8 @@ ${t('sample.md.more')}
                       onClick={() => { it.onClick(); setFilesOpen(false) }}
                       disabled={loading}
                       data-testid={`menu-${it.label.replace(/\s+/g, '-').toLowerCase()}`}
-                      className="flex w-full items-center gap-2.5 px-3 py-2 text-xs disabled:opacity-50 transition-colors text-left"
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-xs disabled:opacity-50 transition-colors text-left hover:bg-[var(--color-bg-alt)]"
                       style={{ color: 'var(--color-text)' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <span style={{ fontSize: '14px' }}>{it.icon}</span>
                       <span className="flex-1">{it.label}</span>
@@ -514,10 +512,8 @@ ${t('sample.md.more')}
               onClick={it.onClick}
               disabled={loading}
               data-testid={`mobile-menu-item-${idx}`}
-              className="block w-full text-left px-4 py-3 text-sm border-b disabled:opacity-50 flex items-center gap-3 transition-colors"
+              className="block w-full text-left px-4 py-3 text-sm border-b disabled:opacity-50 flex items-center gap-3 transition-colors hover:bg-[var(--color-bg-alt)]"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
             >
               <span className="text-base">{it.icon}</span>
               <span>{it.label}</span>
