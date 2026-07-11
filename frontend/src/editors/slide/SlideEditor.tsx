@@ -215,6 +215,16 @@ export function SlideEditor() {
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [dragInfo, selectedEl, active])
 
+  // Escape 关闭所有弹出面板
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [anyPanelOpen])
+
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
       {/* Ribbon Tab 栏 — 可横向滚动，右侧页码固定 */}

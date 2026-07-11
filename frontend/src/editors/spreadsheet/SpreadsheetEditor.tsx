@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 
@@ -155,6 +155,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
   const [showGrid, setShowGrid] = useState(true)
   const [showHeadings, setShowHeadings] = useState(true)
   const [showFormulaBar, setShowFormulaBar] = useState(true)
+
+  // Escape 关闭所有弹出面板
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [anyPanelOpen])
+
   const colName = (c: number) => {
     if (c < 26) return String.fromCharCode(65 + c)
     return String.fromCharCode(65 + Math.floor(c / 26) - 1) + String.fromCharCode(65 + (c % 26))

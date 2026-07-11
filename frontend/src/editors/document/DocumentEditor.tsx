@@ -316,7 +316,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.font')}>
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-1">
-                <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 110, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>{FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}</select>
+                <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded-md px-2 ribbon-input" style={{ width: 110, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}>{FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}</select>
                 <input
                   type="text"
                   value={activeFontSize.replace(/px$/, '')}
@@ -329,8 +329,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   }}
                   onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
                   list="font-size-list"
-                  className="text-xs rounded-md px-2 py-1"
-                  style={{ width: 56, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                  className="text-xs rounded-md px-2 ribbon-input"
+                  style={{ width: 56, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
                   title={t('doc.fontSize')}
                 />
                 <datalist id="font-size-list">

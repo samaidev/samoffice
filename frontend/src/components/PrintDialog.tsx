@@ -90,6 +90,16 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
   const [activeTab, setActiveTab] = useState<'general' | 'layout' | 'advanced'>('general')
   const previewRef = useRef<HTMLDivElement>(null)
 
+  // Escape 关闭对话框
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
+    }
+    window.addEventListener('keydown', onKey, true) // capture 阶段优先
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open, onClose])
+
   const update = <K extends keyof PrintSettings>(key: K, value: PrintSettings[K]) => {
     setSettings(s => ({ ...s, [key]: value }))
   }
@@ -142,8 +152,8 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
   const previewH = settings.orientation === 'landscape' ? paper.w : paper.h
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in" style={{ background: 'rgba(15,23,42,0.7)' }}>
-      <div className="bg-white rounded-xl shadow-2xl flex flex-col" style={{ width: '1100px', maxWidth: '95vw', maxHeight: '92vh' }} data-testid="print-dialog">
+    <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in" style={{ background: 'rgba(15,23,42,0.7)' }} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-xl shadow-2xl flex flex-col" style={{ width: '1100px', maxWidth: '95vw', maxHeight: '92vh' }} data-testid="print-dialog" onClick={(e) => e.stopPropagation()}>
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-6 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
           <h2 className="text-lg font-semibold flex items-center gap-2" style={{ color: 'var(--color-text)' }}>

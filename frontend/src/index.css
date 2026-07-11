@@ -552,8 +552,22 @@ input:focus, textarea:focus, select:focus {
   animation: fade-in 0.2s var(--ease-out);
 }
 
+/* === Ribbon 内输入控件统一对齐 ===
+ * 解决：select 和 input 默认高度/行高不一致，导致字体选择器与字号输入框底部不对齐。
+ * 统一为 height: 26px + line-height: 1.2 + box-sizing: border-box。
+ */
+.ribbon-input {
+  height: 26px !important;
+  line-height: 1.2;
+  box-sizing: border-box;
+  vertical-align: middle;
+  padding: 0 6px !important;
+}
+.ribbon-input[type="text"] {
+  padding: 0 6px !important;
+}
+
 /* === Ribbon Tab 栏横向滚动（移动端/窄屏）===
- * 解决：5 个 Ribbon Tab (开始/插入/布局/审阅/视图) + 右侧按钮在窄屏下拥挤重叠。
  * 让 tab 栏可横向滚动，右侧操作按钮固定不被滚走。
  */
 .ribbon-tab-scroll {
