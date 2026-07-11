@@ -424,6 +424,11 @@ const dict: Record<string, { en: string; zh: string }> = {
   'sheet.refreshTitle': { en: 'Refresh data', zh: '刷新数据' },
 
   // === Excel 视图 (MS Office 对标) ===
+  'sheet.merge': { en: 'Merge', zh: '合并' },
+  'sheet.mergeCenter': { en: 'Merge & Center', zh: '合并居中' },
+  'sheet.mergePrompt': { en: 'Enter merge range (e.g. A1:B2):', zh: '输入合并范围 (如 A1:B2):' },
+  'sheet.mergeTitle': { en: 'Merge cells', zh: '合并单元格' },
+  'sheet.noData': { en: 'No numeric data in this column', zh: '该列无数值数据' },
   'sheet.freezeTitle': { en: 'Freeze panes', zh: '冻结窗格' },
   'sheet.split': { en: 'Split', zh: '拆分' },
   'sheet.splitTitle': { en: 'Split window', zh: '拆分窗口' },
@@ -704,16 +709,31 @@ interface I18nContextType {
   lang: Lang
   setLang: (l: Lang) => void
   t: (key: string, params?: Record<string, string | number>) => string
+  /** 当 key 缺失时返回 fallback 而非 key 字符串本身。避免 `t('x') || 'default'` 永远不触发的陷阱。 */
+  tf: (key: string, fallback: string, params?: Record<string, string | number>) => string
+  /** 判断 key 是否存在于字典中 */
+  has: (key: string) => boolean
 }
 
 const I18nContext = createContext<I18nContextType>({
   lang: 'en',
   setLang: () => {},
   t: (key) => key,
+  tf: (_key, fallback) => fallback,
+  has: () => false,
 })
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLang] = useState<Lang>('en')
+
+  const applyParams = (text: string, params?: Record<string, string | number>) => {
+    if (!params) return text
+    let out = text
+    for (const [k, v] of Object.entries(params)) {
+      out = out.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v))
+    }
+    return out
+  }
 
   const t = useCallback((key: string, params?: Record<string, string | number>) => {
     const entry = dict[key]
@@ -724,16 +744,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } else {
       text = lang === 'zh' ? entry.zh : entry.en
     }
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v))
-      }
-    }
-    return text
+    return applyParams(text, params)
   }, [lang])
 
+  const has = useCallback((key: string) => Boolean(dict[key]), [])
+
+  const tf = useCallback((key: string, fallback: string, params?: Record<string, string | number>) => {
+    if (!dict[key]) return applyParams(fallback, params)
+    return t(key, params)
+  }, [t])
+
   return (
-    <I18nContext.Provider value={{ lang, setLang, t }}>
+    <I18nContext.Provider value={{ lang, setLang, t, tf, has }}>
       {children}
     </I18nContext.Provider>
   )

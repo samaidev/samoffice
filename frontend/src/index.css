@@ -504,29 +504,32 @@ input:focus, textarea:focus, select:focus {
  * 桌面端：默认 overflow visible（弹出菜单需要逃出容器边界），
  *        当窗口宽度不足以容纳所有 ribbon-group 时，启用横向滚动作为兜底。
  * 移动端：横向滚动 + 垂直 visible（让 hover/click 弹出菜单能逃出容器）。
+ *
+ * ⚠️ 关键 CSS 知识：当 `overflow-x: auto/hidden/scroll` 而 `overflow-y: visible` 时，
+ *    浏览器会把 `overflow-y` 强制计算为 `auto`，导致垂直方向弹出菜单被裁剪。
+ *    （参见 CSS Overflow Module Level 3 规范）
+ *    所以 ribbon-scroll 必须保持 `overflow: visible`，不能在桌面端启用横向滚动。
+ *    窄屏兜底改为 `overflow-x: clip`（不触发 overflow-y 强制计算）+ `overflow-y: visible`。
+ *    但 clip 不支持滚动，所以极端窄屏下用 `flex-wrap` 让 ribbon 自然换行。
  */
 .ribbon-scroll {
   overflow: visible;
   scrollbar-width: thin;
 }
-/* 桌面窄屏兜底：当窗口宽度不足以容纳所有 ribbon-group 时启用横向滚动 */
-@media (max-width: 1400px) {
+/* 窄屏兜底：用 flex-wrap 让 ribbon 自然换行，避免横向滚动裁剪弹出菜单 */
+@media (max-width: 900px) {
   .ribbon-scroll {
-    overflow-x: auto;
-    overflow-y: visible;
+    overflow: visible;
+    flex-wrap: wrap;
   }
   .ribbon-scroll::-webkit-scrollbar {
-    height: 4px;
-  }
-  .ribbon-scroll::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.3);
-    border-radius: 2px;
+    display: none;
   }
 }
 @media (max-width: 768px) {
   .ribbon-scroll {
-    overflow-x: auto;
-    overflow-y: visible;
+    overflow: visible;
+    flex-wrap: wrap;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }

@@ -119,7 +119,7 @@ function ChartSVG({ type, data, labels }: { type: string; data: number[]; labels
 }
 
 export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }: Props) {
-  const { t } = useI18n()
+  const { t, tf } = useI18n()
   const [rows, setRows] = useState(initialRows)
   const [cols, setCols] = useState(initialCols)
   const [data, setData] = useState<Record<string, Cell>>({})
@@ -243,7 +243,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
       const v = parseFloat(getCell(r, active.c).value)
       if (!isNaN(v)) { values.push(v); labels.push(`${r + 1}`) }
     }
-    if (values.length === 0) { alert(t('sheet.noData') || 'No numeric data in this column'); return }
+    if (values.length === 0) { alert(tf('sheet.noData', 'No numeric data in this column')); return }
     setCharts(cs => [...cs, { id: Date.now(), type, data: values, labels, title: `${colName(active.c)} - ${type}` }])
     setShowChartPanel(false)
   }
@@ -312,9 +312,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => setCellFmt(active.r, active.c, { align: 'center' })} active={getCell(active.r, active.c).align === 'center'} />
             <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => setCellFmt(active.r, active.c, { align: 'right' })} active={getCell(active.r, active.c).align === 'right'} />
           </RibbonGroup>
-          <RibbonGroup label={t('sheet.merge') || '合并'}>
-            <RibbonButton icon="⊟" label={t('sheet.mergeCenter') || '合并居中'} onClick={() => {
-              const range = prompt(t('sheet.mergePrompt') || '输入合并范围 (如 A1:B2):', `${colName(active.c)}${active.r + 1}:${colName(active.c + 1)}${active.r + 2}`)
+          <RibbonGroup label={tf('sheet.merge', '合并')}>
+            <RibbonButton icon="⊟" label={tf('sheet.mergeCenter', '合并居中')} onClick={() => {
+              const range = prompt(tf('sheet.mergePrompt', '输入合并范围 (如 A1:B2):'), `${colName(active.c)}${active.r + 1}:${colName(active.c + 1)}${active.r + 2}`)
               if (!range) return
               const m = range.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/)
               if (m) {
@@ -324,8 +324,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
                 const r2 = parseInt(m[4]) - 1
                 mergeCells(r1, c1, r2, c2)
               }
-            }} title={t('sheet.mergeTitle') || '合并单元格'} />
-            <RibbonButton icon="⊞" label={t('sheet.split') || '拆分'} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={t('sheet.splitTitle') || '拆分单元格'} />
+            }} title={tf('sheet.mergeTitle', '合并单元格')} />
+            <RibbonButton icon="⊞" label={tf('sheet.split', '拆分')} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={tf('sheet.splitTitle', '拆分单元格')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.number')}>
             <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCellFmt(active.r, active.c, { value: `${parseFloat(v) * 100}%`, format: 'percent' }) }} />

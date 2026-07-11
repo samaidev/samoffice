@@ -337,12 +337,18 @@ ${t('sample.md.more')}
   return (
     <div className="flex flex-col h-screen overflow-x-hidden" style={{ background: 'var(--color-bg)' }}>
       {/* 合并后的顶部栏: LOGO + 菜单按钮 + Tab + 主题/语言 */}
+      {/* 注意: header 不能用 overflow-x-hidden, 因为 CSS 规范规定 overflow-x:hidden 会把
+          overflow-y 强制为 auto, 从而裁剪 Files 下拉菜单 (top:100% 垂直超出 header)。
+          改用 overflow-visible, 子元素 flex-shrink-0 + whitespace-nowrap 已能避免横向溢出,
+          最外层 div 的 overflow-x-hidden 兜底防止页面横向滚动。 */}
       <header
-        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-x-hidden"
+        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
-          paddingRight: '12px'
+          paddingRight: '12px',
+          position: 'relative',
+          zIndex: 30,
         }}
       >
         {/* LOGO + 名称 */}
@@ -489,11 +495,18 @@ ${t('sample.md.more')}
         )}
       </header>
 
-      {/* 移动端下拉菜单 */}
+      {/* 移动端下拉菜单 — 复用 files-dropdown 样式保持视觉统一 */}
       {isMobile && menuOpen && (
         <div
-          className="shadow-lg flex-shrink-0 border-b animate-fade-in"
-          style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+          className="files-dropdown border-b animate-fade-in flex-shrink-0"
+          style={{
+            background: 'var(--color-surface)',
+            borderColor: 'var(--color-border)',
+            borderRadius: 0,
+            boxShadow: 'none',
+            position: 'relative',
+            zIndex: 50,
+          }}
         >
           {fileItems.map((it, idx) => (
             <button
