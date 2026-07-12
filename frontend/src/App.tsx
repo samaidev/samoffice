@@ -8,12 +8,15 @@ import { MarkdownHtmlEditor } from './editors/markdown/MarkdownHtmlEditor'
 import { PdfViewer } from './editors/pdf/PdfViewer'
 import { AboutPage } from './components/AboutPage'
 import { useI18n } from './i18n'
+import { usePopupAutoFlip } from './hooks/usePopupAutoFlip'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
 
 function App() {
   const { t, lang, setLang } = useI18n()
+  // 全局 popup 自动定位：检测越界并翻转对齐
+  usePopupAutoFlip()
 
   const emptyDoc = useMemo<Document>(() => ({
     meta: { title: t('app.untitled') },
@@ -347,6 +350,8 @@ ${t('sample.md.more')}
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
           paddingRight: '12px',
           position: 'relative',
+          // zIndex: 60 — 必须高于 popup overlay (z-40) 和 ribbon-popup (z-50)
+          // 否则 popup 打开时透明遮罩会盖住顶栏，导致 Tab 切换失效
           zIndex: 60,
         }}
       >
@@ -436,8 +441,10 @@ ${t('sample.md.more')}
               data-testid={`tab-${tt.id}`}
               className="px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex items-center gap-1 rounded-md flex-shrink-0"
               style={{
-                background: tab === tt.id ? 'rgba(255,255,255,0.2)' : 'transparent',
-                color: tab === tt.id ? '#ffffff' : 'rgba(255,255,255,0.75)'
+                // 统一 Tab 选中态：半透明白底 + 底部高亮条，与 ribbon tab 视觉语言一致
+                background: tab === tt.id ? 'rgba(255,255,255,0.22)' : 'transparent',
+                color: tab === tt.id ? '#ffffff' : 'rgba(255,255,255,0.75)',
+                boxShadow: tab === tt.id ? 'inset 0 -2px 0 0 rgba(255,255,255,0.9)' : 'none',
               }}
             >
               <span>{tt.icon}</span>

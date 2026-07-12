@@ -465,19 +465,14 @@ input:focus, textarea:focus, select:focus {
 .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
 .animate-spin { animation: spin 0.8s linear infinite; }
 
-/* === Ribbon 弹出菜单统一规范 ===
+/* === Ribbon 弹出菜单统一规范 v2 ===
  * 解决问题：
- *  1) 不同编辑器弹出菜单 z-index 不一致（z-20/z-30/z-50 混用）
- *  2) padding/shadow/rounded 各异
- *  3) 右侧按钮的弹出菜单向右越界被 overflow-hidden 裁剪
- *  4) hover 触发的 popup 残留导致多个 popup 重叠（已统一改为 click 触发）
- * 用法：在 .relative 容器内的弹出层加 className="ribbon-popup"
- *       默认左对齐（left:0），向右下方展开
- *       右侧按钮需向左展开时加 className="ribbon-popup ribbon-popup-align-right"
- *
- * ⚠️ 重要：所有二级弹出菜单必须用 click 触发 + 互斥状态管理，
- *    不要用 group-hover:block（hover 残留会导致多个 popup 重叠）。
- *    详见各编辑器的 openPanel/closeAllPanels/anyPanelOpen 实现。
+ *  1) z-index 不一致 → 统一 z-50
+ *  2) padding/shadow/rounded 各异 → 统一规范
+ *  3) 右侧按钮弹出菜单越界 → usePopupAutoFlip hook 自动翻转 + max-width 兑底
+ *  4) hover popup 残留重叠 → 统一 click 触发 + 互斥状态
+ *  5) popup 与按钮间缺少视觉关联 → 添加顶部细线连接器
+ *  6) popup margin-top 过大导致视觉脱节 → 减小到 0.5rem
  */
 .ribbon-popup {
   z-index: 50;
@@ -490,14 +485,29 @@ input:focus, textarea:focus, select:focus {
   /* 让 popup 宽度等于内容最大宽度，避免内部 grid 按钮因 minWidth 溢出 popup 边界 */
   width: max-content;
   max-width: calc(100vw - 16px);
+  /* 防止内部内容过宽 */
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
 }
-/* RibbonGroup 内的弹出菜单：必须留出 group label 的高度（约 24-28px），
- * 否则 popup 的 top:100% 会覆盖 ribbon 底部的 group label 文字。
- * mini toolbar 的 popup 不在 ribbon-group 内，不受此规则影响。
- * 2rem (32px) = button row py-1 (4px) + group label (~14px) + ribbon py-1 (4px) + 安全间距 (10px)
- */
+/* RibbonGroup 内的弹出菜单：留出 group label 的高度
+ * 0.5rem (8px) = 安全间距，让 popup 与按钮紧密连接但不重叠
+ * 原值 2rem (32px) 造成 popup 视觉脱节，像是浮在空中 */
 .ribbon-group .ribbon-popup {
-  margin-top: 2rem;
+  margin-top: 0.5rem;
+}
+/* popup 与按钮间的视觉连接器：顶部细线，表明 popup 属于哪个按钮 */
+.ribbon-group .ribbon-popup::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 12px;
+  width: 8px;
+  height: 8px;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  transform: rotate(45deg);
+  z-index: -1;
 }
 .ribbon-popup_compact {
   padding: 0.375rem 0;
@@ -594,6 +604,17 @@ input:focus, textarea:focus, select:focus {
 }
 .ribbon-input[type="text"] {
   padding: 0 6px !important;
+}
+
+/* === Ribbon Tab 栏样式统一 ===
+ * ribbon-tab 选中态：底部 2px 主色高亮条 + 轻微背景
+ * 与 header tab 的视觉语言一致（都是底部高亮条） */
+.ribbon-tab-btn {
+  position: relative;
+  transition: all 0.15s var(--ease-out);
+}
+.ribbon-tab-btn:hover {
+  background: var(--color-bg-alt);
 }
 
 /* === Ribbon Tab 栏横向滚动（移动端/窄屏）===
@@ -699,6 +720,24 @@ table td, table th {
   z-index: 1000;
 }
 [data-tooltip]:hover::after { opacity: 1; }
+
+/* === 移动端响应式优化 ===
+ * 移动端 ribbon 按钮紧凑布局，避免与顶栏/状态栏重叠
+ */
+@media (max-width: 768px) {
+  /* 移动端 popup 位置微调：避免被软键盘遮挡 */
+  .ribbon-popup {
+    max-width: calc(100vw - 32px);
+    max-height: 60vh;
+  }
+  .ribbon-group .ribbon-popup {
+    margin-top: 0.25rem;
+  }
+  /* 移动端 popup 连接器隐藏（空间太小） */
+  .ribbon-group .ribbon-popup::before {
+    display: none;
+  }
+}
 
 /* === 触摸友好 ===
  * 移动端按钮最小尺寸 36px，但 ribbon 内部的紧凑按钮（B/I/U 等）

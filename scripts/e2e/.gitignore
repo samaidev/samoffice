@@ -1,0 +1,8 @@
+click-shots/
+quick-shots/
+fast-shots/
+verify-shots/
+pw-shots-comprehensive/
+pw-shots-overlap/
+*.json
+!features.js
