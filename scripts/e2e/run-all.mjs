@@ -200,6 +200,12 @@ console.log('--- 模块 1: Shell ---');
   });
 
   await safe('S8', 'Toast 提示', async () => {
+    // 先打开 Files 下拉（saveBtn 在下拉菜单内）
+    const filesBtn = page.locator('[data-testid="menu-files"]');
+    if (await filesBtn.count()) {
+      await filesBtn.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+    }
     // 触发存为 docx → 期待 toast
     const saveBtn = page.locator('button:has-text("docx"), button:has-text("DOCX"), button:has-text("Word")').first();
     if (await saveBtn.count()) {

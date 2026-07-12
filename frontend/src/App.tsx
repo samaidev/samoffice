@@ -321,18 +321,17 @@ ${t('sample.md.more')}
   // Excel 表格不显示 docx 按钮 (不该存成 docx); 演示/MD/HTML 各自合适
   // 顶栏 Files 下拉菜单项 (合并 打开/另存docx/导出PDF 为一个 Files 按钮)
   // 插入图片不放在顶栏 — 每个编辑器内部有自己的插入图片按钮
-  const fileItems = useMemo(() => {
-    const items: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
-      { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
-    ]
-    if (tab === 'document') {
-      items.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' })
-    }
-    if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
-      items.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' })
-    }
-    return items
-  }, [tab, t, loading])
+  // 注意: 不用 useMemo — 否则 fileItems 闭包捕获的 handleSave 会捕获到 backend=null 的初始版本，
+  // 后续 backend 初始化后 fileItems 不会重建，导致 it.onClick 调用的是 stale handleSave。
+  const fileItems: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
+    { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
+  ]
+  if (tab === 'document') {
+    fileItems.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' })
+  }
+  if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
+    fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' })
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-x-hidden" style={{ background: 'var(--color-bg)' }}>
@@ -348,7 +347,7 @@ ${t('sample.md.more')}
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
           paddingRight: '12px',
           position: 'relative',
-          zIndex: 30,
+          zIndex: 60,
         }}
       >
         {/* LOGO + 名称 */}
@@ -368,13 +367,13 @@ ${t('sample.md.more')}
 
         {/* 桌面端 Files 下拉按钮 (合并 打开/另存docx/导出PDF) */}
         {!isMobile && (
-          <div className="relative flex-shrink-0" style={{ zIndex: 50 }}>
+          <div className="relative flex-shrink-0" style={{ zIndex: 62 }}>
             <button
               onClick={() => setFilesOpen(!filesOpen)}
               disabled={loading}
               data-testid="menu-files"
               className="px-3 py-1.5 text-xs rounded-md transition-all hover:bg-white/15 disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap font-medium"
-              style={{ position: 'relative', zIndex: 51 }}
+              style={{ position: 'relative', zIndex: 63 }}
             >
               <span>📁</span>
               <span>{t('app.files') || 'Files'}</span>
@@ -382,8 +381,8 @@ ${t('sample.md.more')}
             </button>
             {filesOpen && (
               <>
-                <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setFilesOpen(false)} />
-                <div className="absolute files-dropdown ribbon-popup_compact min-w-[180px] mt-1" style={{ top: '100%', left: 0, zIndex: 50 }}>
+                <div className="fixed inset-0" style={{ zIndex: 55 }} onClick={() => setFilesOpen(false)} />
+                <div className="absolute files-dropdown ribbon-popup_compact min-w-[180px] mt-1" style={{ top: '100%', left: 0, zIndex: 60 }}>
                   {fileItems.map((it) => (
                     <button
                       key={it.label}

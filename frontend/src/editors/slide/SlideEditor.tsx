@@ -230,21 +230,22 @@ export function SlideEditor() {
   }, [anyPanelOpen, presenting])
 
   return (
-    <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
+    <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)', position: 'relative' }}>
       {/* Ribbon Tab 栏 — 可横向滚动，右侧页码固定 */}
       <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45 }}>
         <div className="ribbon-tab-scroll">
           {ribbonTabs.map(t => (
-            <button key={t.id} onClick={() => setRibbonTab(t.id)} data-testid={`ribbon-tab-${t.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
+            <button key={t.id} onClick={() => { closeAllPanels(); setRibbonTab(t.id) }} data-testid={`ribbon-tab-${t.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
               style={{ color: ribbonTab === t.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === t.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === t.id ? 'var(--color-primary-50)' : 'transparent' }}>{t.label}</button>
           ))}
         </div>
         <span className="text-xs flex-shrink-0 px-2" data-testid="slide-page-indicator" style={{ color: 'var(--color-text-muted)' }}>{active + 1} / {slides.length}</span>
       </div>
 
-      {/* 点击外部关闭弹出面板的透明遮罩 */}
+      {/* 点击外部关闭弹出面板的透明遮罩 — absolute 限制在编辑器根容器内，
+          避免覆盖 header 的 tab 切换栏和 Files 菜单 */}
       {anyPanelOpen && (
-        <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
+        <div className="absolute inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
       )}
 
       {/* Ribbon 内容区 */}

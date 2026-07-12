@@ -310,7 +310,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45 }}>
         <div className="ribbon-tab-scroll">
           {ribbonTabs.map(tab => (
-            <button key={tab.id} onClick={() => setRibbonTab(tab.id)} data-testid={`ribbon-tab-${tab.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
+            <button key={tab.id} onClick={() => { closeAllPanels(); setRibbonTab(tab.id) }} data-testid={`ribbon-tab-${tab.id}`} className="px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
               style={{ color: ribbonTab === tab.id ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: ribbonTab === tab.id ? '2px solid var(--color-primary)' : '2px solid transparent', background: ribbonTab === tab.id ? 'var(--color-primary-50)' : 'transparent' }}>{tab.label}</button>
           ))}
         </div>
@@ -318,9 +318,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn flex-shrink-0 ${trackChanges ? 'active' : ''}`} title={t('doc.trackChanges')} type="button">✏️</button>
       </div>
 
-      {/* 点击外部关闭弹出面板的透明遮罩 — 覆盖所有二级弹出菜单 */}
+      {/* 点击外部关闭弹出面板的透明遮罩 — absolute 限制在编辑器根容器内，
+          避免覆盖 header 的 tab 切换栏和 Files 菜单（fixed inset-0 会拦截 header 点击） */}
       {anyPanelOpen && (
-        <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
+        <div className="absolute inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
       )}
 
       {/* Ribbon 内容区 */}
