@@ -289,7 +289,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="▭" label={t('slide.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {SHAPES.map(s => (
                       <button key={s.type} onClick={() => addShape(s.type)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 60 }}>
@@ -306,7 +306,7 @@ export function SlideEditor() {
             <div className="relative">
               <RibbonButton icon="🎨" label={t('slide.wordArt')} onClick={() => openPanel('art')} />
               {showArtPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {ART_PRESETS.map(p => (
                       <button key={p.name} onClick={() => addArtText(p)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 80 }}>

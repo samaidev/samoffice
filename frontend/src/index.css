@@ -545,8 +545,9 @@ input:focus, textarea:focus, select:focus {
 }
 @media (max-width: 768px) {
   .ribbon-scroll {
-    overflow: visible;
-    flex-wrap: wrap;
+    overflow-x: auto;
+    overflow-y: visible;
+    flex-wrap: nowrap;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }

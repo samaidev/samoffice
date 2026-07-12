@@ -346,7 +346,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => openPanel('chart')} />
               {showChartPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { type: 'bar', icon: '📊', name: t('sheet.chart.bar') },
@@ -371,7 +371,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="▭" label={t('sheet.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {[{i:'▭',n:t('doc.shape.rect')},{i:'▢',n:t('doc.shape.rounded')},{i:'⬭',n:t('doc.shape.ellipse')},{i:'△',n:t('doc.shape.triangle')},
                      {i:'◇',n:t('doc.shape.diamond')},{i:'→',n:t('doc.shape.arrow')},{i:'★',n:t('doc.shape.star')},{i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -433,7 +433,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
             <div className="relative">
               <RibbonButton icon="✓" label={t('sheet.dataValidation')} onClick={() => openPanel('valid')} />
               {showValidPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('sheet.dropdownOptions')}</div>
                   <input type="text" placeholder={t('sheet.dropdownPlaceholder')} value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
                   <button onClick={() => { setShowValidPanel(false); alert(t('sheet.validationSet', { list: validList })) }} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>

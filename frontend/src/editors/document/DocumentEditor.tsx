@@ -120,6 +120,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [showHighlightPopup, setShowHighlightPopup] = useState(false)
   const [showShadingPopup, setShowShadingPopup] = useState(false)
   const [showBgColorPopup, setShowBgColorPopup] = useState(false)
+  // 迷你工具栏颜色弹出菜单 (统一改为 click 触发，与主 ribbon 保持一致)
+  const [showMiniColorPopup, setShowMiniColorPopup] = useState(false)
   // 弹出面板互斥：打开任一面板时关闭其他面板，避免多个弹出菜单重叠
   type PanelName = 'shape' | 'art' | 'color' | 'highlight' | 'shading' | 'bgColor'
   const openPanel = (which: PanelName) => {
@@ -236,7 +238,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'dropCap': setParaAttr('dropCap', !activeAttrs.dropCap); break
       case 'toggleRTL': setParaAttr('rtl', !activeAttrs.rtl); break
     }
-    v.focus(); setShowMiniToolbar(false); setShowContextMenu(false)
+    v.focus(); setShowMiniToolbar(false); setShowMiniColorPopup(false); setShowContextMenu(false)
   }
 
   const setParaAttr = (attr: string, value: any) => { const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; if ($from.parent.type.name !== 'paragraph') return; v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [attr]: value })); v.focus() }
@@ -273,13 +275,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (showContextMenu) { setShowContextMenu(false); e.preventDefault() }
+      else if (showMiniColorPopup) { setShowMiniColorPopup(false); e.preventDefault() }
       else if (showMiniToolbar) { setShowMiniToolbar(false); e.preventDefault() }
       else if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
       else if (searchOpen) { setSearchOpen(false); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [showContextMenu, showMiniToolbar, anyPanelOpen, searchOpen])
+  }, [showContextMenu, showMiniColorPopup, showMiniToolbar, anyPanelOpen, searchOpen])
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('doc.ribbon.home') }, { id: 'insert', label: t('doc.ribbon.insert') }, { id: 'layout', label: t('doc.ribbon.layout') }, { id: 'review', label: t('doc.ribbon.review') }, { id: 'view', label: t('doc.ribbon.view') },
@@ -420,7 +423,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <div className="relative">
               <RibbonButton icon="▭" label={t('doc.shapes')} onClick={() => openPanel('shape')} />
               {showShapePanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-4 gap-2">
                     {[{t:'rect',i:'▭',n:t('doc.shape.rect')},{t:'roundRect',i:'▢',n:t('doc.shape.rounded')},{t:'ellipse',i:'⬭',n:t('doc.shape.ellipse')},{t:'triangle',i:'△',n:t('doc.shape.triangle')},
                      {t:'diamond',i:'◇',n:t('doc.shape.diamond')},{t:'rightArrow',i:'→',n:t('doc.shape.arrow')},{t:'star5',i:'★',n:t('doc.shape.star')},{t:'heart',i:'♥',n:t('doc.shape.heart')}].map(s => (
@@ -438,7 +441,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <div className="relative">
               <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => openPanel('art')} />
               {showArtPanel && (
-                <div className="absolute top-full ribbon-popup ribbon-popup-right" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       { name: t('art.purple'), color: '#4f46e5', grad: '4f46e5,818cf8', shadow: true },
@@ -723,28 +726,52 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </div>
       )}
 
-      {/* Mini 浮动工具栏 */}
-      {showMiniToolbar && (
-        <div className="fixed z-50 flex items-center gap-0.5 px-2 py-1 rounded-lg shadow-xl animate-fade-in" style={{ left: miniToolbarPos.x, top: miniToolbarPos.y, background: 'var(--color-surface)', border: '1px solid var(--color-border)' }} onMouseDown={e => e.preventDefault()}>
-          <button onClick={() => exec('bold')} className={`toolbar-btn ${activeMarks.has('bold') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><b>B</b></button>
-          <button onClick={() => exec('italic')} className={`toolbar-btn ${activeMarks.has('italic') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><i>I</i></button>
-          <button onClick={() => exec('underline')} className={`toolbar-btn ${activeMarks.has('underline') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><u>U</u></button>
-          <div className="toolbar-divider" />
-          <div className="relative group">
-            <button className="toolbar-btn" title={t('doc.color')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }}>A</button>
-            <div className="absolute ribbon-popup hidden group-hover:block ribbon-popup-right" style={{ bottom: '100%', left: 0, right: 'auto', top: 'auto', padding: '0.5rem', marginBottom: '4px' }}><div className="grid grid-cols-6 gap-1">{COLORS.map(c => <button key={c} onClick={() => setTextColor(c)} className="w-5 h-5 rounded" style={{ background: c, border: '1px solid var(--color-border)' }} type="button" />)}</div></div>
+      {/* Mini 浮动工具栏 — 边界检测 + click 触发颜色弹出菜单（与主 ribbon 统一） */}
+      {showMiniToolbar && (() => {
+        const TOOLBAR_W = 300, TOOLBAR_H = 40
+        const POPUP_W = 200, POPUP_H = 80
+        const vw = window.innerWidth, vh = window.innerHeight
+        let mx = miniToolbarPos.x, my = miniToolbarPos.y
+        if (mx + TOOLBAR_W > vw - 8) mx = Math.max(8, vw - TOOLBAR_W - 8)
+        if (my < 8) my = 8
+        if (my + TOOLBAR_H + POPUP_H > vh - 8) my = Math.max(8, vh - TOOLBAR_H - POPUP_H - 8)
+        return (
+        <>
+          {showMiniColorPopup && <div className="fixed inset-0 z-40" onClick={() => setShowMiniColorPopup(false)} />}
+          <div className="fixed z-50 flex items-center gap-0.5 px-2 py-1 rounded-lg shadow-xl animate-fade-in" style={{ left: mx, top: my, background: 'var(--color-surface)', border: '1px solid var(--color-border)' }} onMouseDown={e => e.preventDefault()}>
+            <button onClick={() => exec('bold')} className={`toolbar-btn ${activeMarks.has('bold') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><b>B</b></button>
+            <button onClick={() => exec('italic')} className={`toolbar-btn ${activeMarks.has('italic') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><i>I</i></button>
+            <button onClick={() => exec('underline')} className={`toolbar-btn ${activeMarks.has('underline') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><u>U</u></button>
+            <div className="toolbar-divider" />
+            <div className="relative">
+              <button className="toolbar-btn" title={t('doc.color')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }} onClick={() => setShowMiniColorPopup(!showMiniColorPopup)} />
+              {showMiniColorPopup && (
+                <div className="absolute ribbon-popup" style={{ bottom: '100%', left: 0, right: 'auto', top: 'auto', padding: '0.5rem', marginBottom: '4px', zIndex: 51 }}>
+                  <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(6, 20px)' }}>
+                    {COLORS.map(c => <button key={c} onClick={() => { setTextColor(c); setShowMiniColorPopup(false) }} className="rounded transition-transform hover:scale-110" style={{ width: 20, height: 20, background: c, border: '1px solid var(--color-border)' }} type="button" />)}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="toolbar-divider" />
+            <button onClick={() => exec('h1')} className="toolbar-btn" title={t('doc.heading1')} style={{ width: 28, height: 26 }}>H1</button>
+            <button onClick={() => exec('h2')} className="toolbar-btn" title={t('doc.heading2')} style={{ width: 28, height: 26 }}>H2</button>
           </div>
-          <div className="toolbar-divider" />
-          <button onClick={() => exec('h1')} className="toolbar-btn" title={t('doc.heading1')} style={{ width: 28, height: 26 }}>H1</button>
-          <button onClick={() => exec('h2')} className="toolbar-btn" title={t('doc.heading2')} style={{ width: 28, height: 26 }}>H2</button>
-        </div>
-      )}
+        </>
+        )
+      })()}
 
-      {/* 右键菜单 */}
-      {showContextMenu && (
+      {/* 右键菜单 — 边界检测防止越界 */}
+      {showContextMenu && (() => {
+        const MENU_W = 180, MENU_H = 230
+        const vw = window.innerWidth, vh = window.innerHeight
+        let cx = contextMenuPos.x, cy = contextMenuPos.y
+        if (cx + MENU_W > vw - 8) cx = Math.max(8, vw - MENU_W - 8)
+        if (cy + MENU_H > vh - 8) cy = Math.max(8, vh - MENU_H - 8)
+        return (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowContextMenu(false)} />
-          <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: contextMenuPos.x, top: contextMenuPos.y, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}>
+          <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: cx, top: cy, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}>
             <button onClick={() => exec('bold')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><b>B</b> {t('doc.bold')}</button>
             <button onClick={() => exec('italic')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><i>I</i> {t('doc.italic')}</button>
             <button onClick={() => exec('underline')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><u>U</u> {t('doc.underline')}</button>
@@ -754,7 +781,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <button onClick={() => { setRibbonTab('insert'); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📊 {t('doc.insertTable')}</button>
           </div>
         </>
-      )}
+        )
+      })()}
 
       {watermark && (<div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)', fontSize: '72px', color: 'rgba(0,0,0,0.08)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap' }}>{watermark}</div>)}
 
