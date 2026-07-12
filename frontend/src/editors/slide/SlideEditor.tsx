@@ -218,15 +218,16 @@ export function SlideEditor() {
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [dragInfo, selectedEl, active])
 
-  // Escape 关闭所有弹出面板
+  // Escape 关闭所有弹出面板 或 退出放映模式
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (presenting) { setPresenting(false); e.preventDefault(); return }
       if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [anyPanelOpen])
+  }, [anyPanelOpen, presenting])
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>

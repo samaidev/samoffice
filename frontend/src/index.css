@@ -491,6 +491,14 @@ input:focus, textarea:focus, select:focus {
   width: max-content;
   max-width: calc(100vw - 16px);
 }
+/* RibbonGroup 内的弹出菜单：必须留出 group label 的高度（约 24-28px），
+ * 否则 popup 的 top:100% 会覆盖 ribbon 底部的 group label 文字。
+ * mini toolbar 的 popup 不在 ribbon-group 内，不受此规则影响。
+ * 2rem (32px) = button row py-1 (4px) + group label (~14px) + ribbon py-1 (4px) + 安全间距 (10px)
+ */
+.ribbon-group .ribbon-popup {
+  margin-top: 2rem;
+}
 .ribbon-popup_compact {
   padding: 0.375rem 0;
 }
