@@ -9,7 +9,7 @@ import (
         "strings"
 
         "github.com/signintech/gopdf"
-        "github.com/zai/gooffice/internal/core"
+        "github.com/zai/samoffice/internal/core"
 )
 
 //go:embed fonts/NotoSerifSC-Regular.ttf

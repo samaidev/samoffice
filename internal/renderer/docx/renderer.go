@@ -20,7 +20,7 @@ import (
         "strings"
         "time"
 
-        "github.com/zai/gooffice/internal/core"
+        "github.com/zai/samoffice/internal/core"
 )
 
 type Renderer struct{}

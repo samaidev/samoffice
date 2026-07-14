@@ -1,4 +1,4 @@
-module github.com/zai/gooffice
+module github.com/zai/samoffice
 
 go 1.25.0
 

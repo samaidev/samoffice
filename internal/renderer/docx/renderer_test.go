@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zai/gooffice/internal/core"
+	"github.com/zai/samoffice/internal/core"
 )
 
 func TestRenderBasic(t *testing.T) {

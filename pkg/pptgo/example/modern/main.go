@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/zai/gooffice/pkg/pptgo"
+	"github.com/zai/samoffice/pkg/pptgo"
 )
 
 // Aurora Indigo 主题常量

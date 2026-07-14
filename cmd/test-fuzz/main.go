@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zai/gooffice/internal/parser"
+	"github.com/zai/samoffice/internal/parser"
 )
 
 func main() {

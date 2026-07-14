@@ -7,11 +7,11 @@ import (
         "path/filepath"
 
         "github.com/gin-gonic/gin"
-        "github.com/zai/gooffice/internal/core"
-        "github.com/zai/gooffice/internal/dict"
-        "github.com/zai/gooffice/internal/parser"
-        "github.com/zai/gooffice/internal/renderer/docx"
-        "github.com/zai/gooffice/internal/renderer/pdf"
+        "github.com/zai/samoffice/internal/core"
+        "github.com/zai/samoffice/internal/dict"
+        "github.com/zai/samoffice/internal/parser"
+        "github.com/zai/samoffice/internal/renderer/docx"
+        "github.com/zai/samoffice/internal/renderer/pdf"
 )
 
 // alias for clarity

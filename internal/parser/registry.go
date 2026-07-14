@@ -7,11 +7,11 @@ import (
         "strings"
         "sync"
 
-        "github.com/zai/gooffice/internal/core"
-        "github.com/zai/gooffice/internal/parser/docx"
-        "github.com/zai/gooffice/internal/parser/markdown"
-        "github.com/zai/gooffice/internal/parser/pptx"
-        "github.com/zai/gooffice/internal/parser/xlsx"
+        "github.com/zai/samoffice/internal/core"
+        "github.com/zai/samoffice/internal/parser/docx"
+        "github.com/zai/samoffice/internal/parser/markdown"
+        "github.com/zai/samoffice/internal/parser/pptx"
+        "github.com/zai/samoffice/internal/parser/xlsx"
 )
 
 // Parser 接口：所有格式解析器实现此接口

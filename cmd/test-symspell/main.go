@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/zai/gooffice/internal/dict/hunspell"
-	"github.com/zai/gooffice/internal/dict/symspell"
+	"github.com/zai/samoffice/internal/dict/hunspell"
+	"github.com/zai/samoffice/internal/dict/symspell"
 )
 
 func main() {

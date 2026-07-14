@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/zai/gooffice/pkg/xlsgo"
+	"github.com/zai/samoffice/pkg/xlsgo"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/zai/gooffice/pkg/docgo"
+	"github.com/zai/samoffice/pkg/docgo"
 )
 
 func main() {

@@ -1,5 +1,5 @@
 // Package main 是 SamOffice 的独立 HTTP 服务入口
-// 用于远程部署：gooffice-server --addr 0.0.0.0:8080
+// 用于远程部署：samoffice-server --addr 0.0.0.0:8080
 // 浏览器访问 http://host:8080
 package main
 
@@ -13,18 +13,18 @@ import (
         "strings"
 
         "github.com/gin-gonic/gin"
-        "github.com/zai/gooffice/internal/dict"
-        "github.com/zai/gooffice/internal/dict/hunspell"
-        "github.com/zai/gooffice/internal/dict/userdict"
-        "github.com/zai/gooffice/internal/officelib"
-        "github.com/zai/gooffice/internal/parser"
-        "github.com/zai/gooffice/internal/server/api"
+        "github.com/zai/samoffice/internal/dict"
+        "github.com/zai/samoffice/internal/dict/hunspell"
+        "github.com/zai/samoffice/internal/dict/userdict"
+        "github.com/zai/samoffice/internal/officelib"
+        "github.com/zai/samoffice/internal/parser"
+        "github.com/zai/samoffice/internal/server/api"
         "go.uber.org/zap"
 )
 
 func main() {
         addr := flag.String("addr", "0.0.0.0:8080", "HTTP server listen address")
-        dataDir := flag.String("data", "./gooffice-data", "Data directory for user dict and docs")
+        dataDir := flag.String("data", "./samoffice-data", "Data directory for user dict and docs")
         flag.Parse()
 
         // 日志

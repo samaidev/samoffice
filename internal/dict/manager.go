@@ -6,9 +6,9 @@ import (
         "strings"
         "sync"
 
-        "github.com/zai/gooffice/internal/dict/chinese"
-        "github.com/zai/gooffice/internal/dict/symspell"
-        "github.com/zai/gooffice/internal/dict/userdict"
+        "github.com/zai/samoffice/internal/dict/chinese"
+        "github.com/zai/samoffice/internal/dict/symspell"
+        "github.com/zai/samoffice/internal/dict/userdict"
 )
 
 // Manager 是词库系统的统一入口，负责：

@@ -4,10 +4,10 @@ import (
         "fmt"
         "os"
 
-        "github.com/zai/gooffice/internal/core"
-        "github.com/zai/gooffice/internal/dict"
-        "github.com/zai/gooffice/internal/dict/userdict"
-        "github.com/zai/gooffice/internal/parser"
+        "github.com/zai/samoffice/internal/core"
+        "github.com/zai/samoffice/internal/dict"
+        "github.com/zai/samoffice/internal/dict/userdict"
+        "github.com/zai/samoffice/internal/parser"
 )
 
 func main() {
