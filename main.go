@@ -18,11 +18,11 @@ import (
         "github.com/wailsapp/wails/v2"
         "github.com/wailsapp/wails/v2/pkg/options"
         "github.com/wailsapp/wails/v2/pkg/options/assetserver"
-        "github.com/zai/gooffice/internal/dict"
-        "github.com/zai/gooffice/internal/dict/hunspell"
-        "github.com/zai/gooffice/internal/dict/userdict"
-        "github.com/zai/gooffice/internal/parser"
-        "github.com/zai/gooffice/internal/server/api"
+        "github.com/zai/samoffice/internal/dict"
+        "github.com/zai/samoffice/internal/dict/hunspell"
+        "github.com/zai/samoffice/internal/dict/userdict"
+        "github.com/zai/samoffice/internal/parser"
+        "github.com/zai/samoffice/internal/server/api"
         "go.uber.org/zap"
 )
 
@@ -43,7 +43,7 @@ func NewApp() *App {
         logger, _ := zap.NewProduction()
 
         home, _ := os.UserHomeDir()
-        dataDir := filepath.Join(home, ".gooffice")
+        dataDir := filepath.Join(home, ".samoffice")
         os.MkdirAll(dataDir, 0755)
 
         userStore, err := userdict.Open(filepath.Join(dataDir, "userdict.sqlite"))

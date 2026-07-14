@@ -16,10 +16,10 @@ import (
         "strconv"
 
         "github.com/gin-gonic/gin"
-        "github.com/zai/gooffice/pkg/docgo"
-        "github.com/zai/gooffice/pkg/pdfgo"
-        "github.com/zai/gooffice/pkg/pptgo"
-        "github.com/zai/gooffice/pkg/xlsgo"
+        "github.com/zai/samoffice/pkg/docgo"
+        "github.com/zai/samoffice/pkg/pdfgo"
+        "github.com/zai/samoffice/pkg/pptgo"
+        "github.com/zai/samoffice/pkg/xlsgo"
 )
 
 // Register 注册所有 officelib 路由

@@ -33,14 +33,14 @@
 **远程模式**（浏览器访问）：
 
 ```bash
-./bin/gooffice-server --addr 0.0.0.0:8080 --data ./data
+./bin/samoffice-server --addr 0.0.0.0:8080 --data ./data
 # 浏览器访问 http://localhost:8080
 ```
 
 **本地模式**（Wails 原生窗口）：
 
 ```bash
-./bin/gooffice
+./bin/samoffice
 # 自动启动原生窗口 + 内嵌 HTTP 服务
 ```
 
@@ -62,10 +62,10 @@
 ## 项目结构
 
 ```
-gooffice/
+samoffice/
 ├── main.go                     # Wails 桌面入口
 ├── cmd/
-│   ├── gooffice-server/        # 独立 HTTP 服务入口
+│   ├── samoffice-server/        # 独立 HTTP 服务入口
 │   ├── test/                   # 模块集成测试
 │   ├── test-symspell/          # SymSpell 算法测试
 │   └── gen-docx/               # 生成测试 docx

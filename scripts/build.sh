@@ -11,9 +11,9 @@ cd "$ROOT"
 TARGET="${1:-all}"
 
 build_server() {
-    echo "==> Building gooffice-server..."
-    go build -o bin/gooffice-server ./cmd/gooffice-server
-    echo "    Output: bin/gooffice-server"
+    echo "==> Building samoffice-server..."
+    go build -o bin/samoffice-server ./cmd/samoffice-server
+    echo "    Output: bin/samoffice-server"
 }
 
 build_frontend() {
@@ -25,10 +25,10 @@ build_frontend() {
 }
 
 build_wails() {
-    echo "==> Building gooffice (Wails desktop)..."
+    echo "==> Building samoffice (Wails desktop)..."
     build_frontend
-    go build -o bin/gooffice .
-    echo "    Output: bin/gooffice"
+    go build -o bin/samoffice .
+    echo "    Output: bin/samoffice"
 }
 
 build_all() {

@@ -17,7 +17,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/zai/gooffice/internal/core"
+	"github.com/zai/samoffice/internal/core"
 )
 
 type Parser struct{}

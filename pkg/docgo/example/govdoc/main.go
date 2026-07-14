@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/zai/gooffice/pkg/docgo"
+	"github.com/zai/samoffice/pkg/docgo"
 )
 
 // 政府公文字体字号常量 (GB/T 9704-2012)
