@@ -43,7 +43,7 @@ echo.
 echo [3/4] Build Go binaries...
 set GOOS=windows
 set GOARCH=amd64
-go build -ldflags="-s -w -H windowsgui" -o %STAGE%\samoffice.exe .
+go build -tags desktop,production -ldflags="-s -w -H windowsgui" -o %STAGE%\samoffice.exe .
 if errorlevel 1 (
     echo [FAIL] samoffice.exe build failed
     exit /b 1
