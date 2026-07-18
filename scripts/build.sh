@@ -12,7 +12,7 @@ TARGET="${1:-all}"
 
 build_server() {
     echo "==> Building samoffice-server..."
-    go build -o bin/samoffice-server ./cmd/samoffice-server
+    go build -ldflags="-s -w" -o bin/samoffice-server ./cmd/samoffice-server
     echo "    Output: bin/samoffice-server"
 }
 
@@ -27,7 +27,7 @@ build_frontend() {
 build_wails() {
     echo "==> Building samoffice (Wails desktop)..."
     build_frontend
-    go build -o bin/samoffice .
+    go build -tags desktop,production -ldflags="-s -w -H windowsgui" -o bin/samoffice .
     echo "    Output: bin/samoffice"
 }
 
