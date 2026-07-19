@@ -199,12 +199,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       state,
       nodeViews: {
         image: (node: any, view: any, getPos: any) => {
-          const dom = document.createElement('div')
+          const dom = window.document.createElement('div')
           dom.style.display = 'inline-block'
           dom.style.position = 'relative'
           dom.style.margin = '4px'
           dom.style.maxWidth = '100%'
-          const img = document.createElement('img')
+          const img = window.document.createElement('img')
           img.src = node.attrs.src
           img.alt = node.attrs.alt || ''
           img.style.maxWidth = '100%'
@@ -214,7 +214,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           img.style.width = w + 'px'
           dom.appendChild(img)
           // Resize handle
-          const handle = document.createElement('div')
+          const handle = window.document.createElement('div')
           handle.style.position = 'absolute'
           handle.style.bottom = '-4px'
           handle.style.right = '-4px'
@@ -241,21 +241,21 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           }
           // Drag to resize
           let resizing = false, startX = 0, startW = 0
-          handle.addEventListener('mousedown', (e) => {
+          handle.addEventListener('mousedown', (e: MouseEvent) => {
             e.preventDefault()
             e.stopPropagation()
             resizing = true
             startX = e.clientX
             startW = w
           })
-          document.addEventListener('mousemove', (e) => {
+          window.document.addEventListener('mousemove', (e: MouseEvent) => {
             if (!resizing) return
             const diff = e.clientX - startX
             const newW = Math.max(50, startW + diff)
             img.style.width = newW + 'px'
             w = newW
           })
-          document.addEventListener('mouseup', () => {
+          window.document.addEventListener('mouseup', () => {
             if (!resizing) return
             resizing = false
             // Commit the new width to the document
@@ -266,7 +266,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             }
           })
           // Click to select
-          dom.addEventListener('click', (e) => {
+          dom.addEventListener('click', (e: MouseEvent) => {
             const pos = getPos()
             if (pos != null) {
               view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
@@ -458,7 +458,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
-  const insertImage = () => { const input = window.window.document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { const f = input.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src: r.result as string }))); v.focus() }; r.readAsDataURL(f) }; input.click() }
+  const insertImage = () => { const input = window.window.window.document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { const f = input.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src: r.result as string }))); v.focus() }; r.readAsDataURL(f) }; input.click() }
   const insertLink = () => { const url = prompt('URL:'); if (url) { const v = viewRef.current; if (!v) return; const sel = v.state.selection; if (!sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.link.create({ href: url }))) } }
 
   useEffect(() => { if (viewRef.current) { const v = viewRef.current; v.dispatch(setSpellErrors(v.state.tr, spellErrors)); v.updateState(v.state); setTick(t => t + 1) } }, [spellErrors])
@@ -1047,7 +1047,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           {/* 窗口 */}
           <RibbonGroup label={t('doc.window')}>
-            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(window.document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
+            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(window.window.document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
             <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindow(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>

@@ -64,6 +64,12 @@ func (a *App) IsWindowMaximized() bool {
         return runtime.WindowIsMaximised(a.ctx)
 }
 
+// WindowStartDrag makes the window draggable (for frameless mode)
+func (a *App) WindowStartDrag() {
+        if a.ctx == nil { return }
+        runtime.WindowDrag(a.ctx)
+}
+
 func NewApp() *App {
         logger, _ := zap.NewProduction()
 
