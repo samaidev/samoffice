@@ -218,6 +218,13 @@ ${t('sample.md.more')}
         const result = await backend.uploadFile(file)
         setDoc(result.document)
         setFilePath(file.name)
+        // Save to recent files
+        try {
+          const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
+          const filtered = recent.filter(r => r.name !== file.name)
+          filtered.unshift({ name: file.name, path: file.name })
+          localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
+        } catch {}
         showToast(t('app.opened', { name: file.name }))
         triggerSpellCheck(JSON.stringify(result.document.blocks))
       } catch (e: any) {
@@ -229,16 +236,26 @@ ${t('sample.md.more')}
     input.click()
   }
 
-  const handleSave = async (format: 'docx' | 'pdf') => {
+  const handleSave = async (format: 'docx' | 'pdf' | 'doc' | 'wps') => {
     if (!backend) return
     setMenuOpen(false)
     setLoading(true)
     showToast(t('app.exporting', { format: format.toUpperCase() }))
     try {
-      const endpoint = format === 'docx' ? '/api/doc/save' : '/api/doc/export-pdf'
-      const mime = format === 'docx'
-        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        : 'application/pdf'
+      const endpointMap: Record<string, string> = {
+        docx: '/api/doc/save',
+        doc: '/api/doc/save-doc',
+        wps: '/api/doc/save-wps',
+        pdf: '/api/doc/export-pdf',
+      }
+      const mimeMap: Record<string, string> = {
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        doc: 'application/msword',
+        wps: 'application/vnd.ms-works',
+        pdf: 'application/pdf',
+      }
+      const endpoint = endpointMap[format] || '/api/doc/save'
+      const mime = mimeMap[format] || 'application/octet-stream'
       const safeDoc: Document = {
         meta: doc.meta || { title: t('app.untitled') },
         blocks: (doc.blocks || []).map((b: any) => {
@@ -258,7 +275,7 @@ ${t('sample.md.more')}
       if (resp.ok) {
         const blob = await resp.blob()
         const ct = resp.headers.get('content-type') || ''
-        if (!ct.includes(format === 'docx' ? 'wordprocessingml' : 'pdf') && !ct.includes('octet-stream') && blob.size < 2000) {
+        if (!ct.includes(mime.split('/')[1] || '') && !ct.includes('octet-stream') && blob.size < 2000) {
           const txt = await blob.text()
           showToast(t('app.exportFailed', { msg: txt.slice(0, 150) }))
           return
@@ -330,7 +347,17 @@ ${t('sample.md.more')}
     { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
   ]
   if (tab === 'document') {
-    fileItems.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' })
+    fileItems.push({ icon: '📄', label: t('app.saveDocx') || 'Save as DOCX', onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' })
+    fileItems.push({ icon: '📃', label: t('app.saveDoc') || 'Save as DOC', onClick: () => handleSave('doc') })
+    fileItems.push({ icon: '📋', label: t('app.saveWps') || 'Save as WPS', onClick: () => handleSave('wps') })
+  }
+  // Recent files
+  const recentFiles: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
+  if (recentFiles.length > 0) {
+    fileItems.push({ icon: '🕐', label: t('app.recentFiles') || 'Recent Files', onClick: () => {}, shortcut: '' })
+    recentFiles.slice(0, 5).forEach((f, i) => {
+      fileItems.push({ icon: '  ' + (i+1) + '.', label: f.name, onClick: () => { /* reopen file */ } })
+    })
   }
   if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
     fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' })
@@ -497,6 +524,31 @@ ${t('sample.md.more')}
             <span>{spellErrors.length}</span>
           </button>
         )}
+
+        {/* 窗口控制按钮 (最小化/最大化/关闭) — 整合到标题栏 */}
+        <div className="flex items-center gap-0.5 ml-2 flex-shrink-0">
+          <button
+            onClick={() => { try { (window as any).go.main.App.WindowMinimize() } catch {} }}
+            className="w-8 h-8 rounded-md hover:bg-white/20 transition-all flex items-center justify-center"
+            title={t('app.minimize') || 'Minimize'}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="2" fill="white" /></svg>
+          </button>
+          <button
+            onClick={() => { try { (window as any).go.main.App.WindowMaximize() } catch {} }}
+            className="w-8 h-8 rounded-md hover:bg-white/20 transition-all flex items-center justify-center"
+            title={t('app.maximize') || 'Maximize'}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" fill="none" stroke="white" strokeWidth="1.5" /></svg>
+          </button>
+          <button
+            onClick={() => { try { (window as any).go.main.App.WindowClose() } catch {} }}
+            className="w-8 h-8 rounded-md hover:bg-red-500 transition-all flex items-center justify-center"
+            title={t('app.close') || 'Close'}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1 L11 11 M11 1 L1 11" stroke="white" strokeWidth="1.5" /></svg>
+          </button>
+        </div>
       </header>
 
       {/* 移动端下拉菜单 — 复用 files-dropdown 样式保持视觉统一 */}

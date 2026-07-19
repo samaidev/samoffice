@@ -120,6 +120,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  const [showFormulaPanel, setShowFormulaPanel] = useState(false)
+  const [showSymbolPanel, setShowSymbolPanel] = useState(false)
+  const [symbolCategory, setSymbolCategory] = useState<'greek' | 'latin' | 'circled' | 'roman' | 'math' | 'arrows'>('greek')
   // 二级颜色/底纹/背景弹出菜单 — 统一改为 click 触发，避免 hover 残留导致重叠
   const [showColorPopup, setShowColorPopup] = useState(false)
   const [showHighlightPopup, setShowHighlightPopup] = useState(false)
@@ -136,13 +139,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     setShowHighlightPopup(which === 'highlight' ? !showHighlightPopup : false)
     setShowShadingPopup(which === 'shading' ? !showShadingPopup : false)
     setShowBgColorPopup(which === 'bgColor' ? !showBgColorPopup : false)
+    setShowFormulaPanel(false)
+    setShowSymbolPanel(false)
+  }
+  const openPanel2 = (which: 'formula' | 'symbol') => {
+    setShowFormulaPanel(which === 'formula' ? !showFormulaPanel : false)
+    setShowSymbolPanel(which === 'symbol' ? !showSymbolPanel : false)
+    setShowShapePanel(false); setShowArtPanel(false)
+    setShowColorPopup(false); setShowHighlightPopup(false)
+    setShowShadingPopup(false); setShowBgColorPopup(false)
   }
   const closeAllPanels = () => {
     setShowShapePanel(false); setShowArtPanel(false)
     setShowColorPopup(false); setShowHighlightPopup(false)
     setShowShadingPopup(false); setShowBgColorPopup(false)
+    setShowFormulaPanel(false); setShowSymbolPanel(false)
   }
-  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup
+  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup || showFormulaPanel || showSymbolPanel
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
   const [bgColor, setBgColor] = useState('#ffffff')
   // View 标签页: 标尺 / 网格线 / 导航窗口 / 拆分窗口 / 护眼模式
@@ -285,7 +298,31 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'tableAlignLeft': { alignTable(v, 'left'); break }
       case 'tableAlignCenter': { alignTable(v, 'center'); break }
       case 'tableAlignRight': { alignTable(v, 'right'); break }
-      case 'footnote': { const text = prompt(t('doc.prompt.footnote')); if (text) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text }))); break }
+      case 'footnote': {
+        const text = prompt(t('doc.prompt.footnote')); if (!text) break
+        // Count existing footnotes for numbering
+        let footnoteCount = 0
+        v.state.doc.descendants(node => { if (node.type.name === 'footnote') footnoteCount++ })
+        const num = footnoteCount + 1
+        // Insert footnote reference at cursor
+        v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text, num })))
+        // Add footnote item at end of document (or create footnote section if none exists)
+        const docEnd = v.state.doc.content.size
+        let tr2 = v.state.tr
+        const lastNode = v.state.doc.lastChild
+        if (lastNode && lastNode.type.name === 'footnote_section') {
+          // Append to existing section
+          const sectionEnd = docEnd - 1
+          tr2 = tr2.insert(sectionEnd, schema.nodes.footnote_item.create({ num }, schema.text(text)))
+        } else {
+          // Create new section at end
+          const item = schema.nodes.footnote_item.create({ num }, schema.text(text))
+          const section = schema.nodes.footnote_section.create(null, item)
+          tr2 = tr2.insert(docEnd, section)
+        }
+        v.dispatch(tr2)
+        break
+      }
       case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
       case 'comment': { const text = prompt(t('doc.prompt.comment')); if (text && !sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.comment_mark.create({ id: Date.now().toString(), author: 'User', text }))); break }
       case 'insertTable': { const rows = parseInt(prompt(t('doc.prompt.rows'), '3') || '3'); const cols = parseInt(prompt(t('doc.prompt.cols'), '3') || '3'); if (rows > 0 && cols > 0) { const tr = []; for (let r = 0; r < rows; r++) { const cells = []; for (let c = 0; c < cols; c++) { const headerText = r === 0 ? `列${c+1}` : ''; const content = headerText ? schema.text(headerText) : null; cells.push(schema.nodes.table_cell.create({ isHeader: r === 0 }, schema.nodes.paragraph.create(null, content))) } tr.push(schema.nodes.table_row.create(null, cells)) } v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.table.create(null, tr))) } break }
@@ -320,7 +357,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const handleReplace = () => { const v = viewRef.current; if (!v) return; doReplace(v, searchQuery, replaceQuery, false) }
   const handleReplaceAll = () => { const v = viewRef.current; if (!v) return; doReplaceAll(v, searchQuery, replaceQuery, false) }
   const handlePrint = () => { setPrintPreview(false); setTimeout(() => window.print(), 100) }
-  const insertFormula = () => { const formula = prompt(t('doc.prompt.latex')); if (formula) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(`⟨formula:${formula}⟩`)))); v.focus() } }
+  const insertFormula = () => { openPanel2('formula') }
+  const insertSymbol = (sym: string) => {
+    const v = viewRef.current; if (!v) return
+    v.dispatch(v.state.tr.replaceSelectionWith(schema.text(sym)))
+    v.focus()
+  }
+  const insertLatexFormula = (latex: string) => {
+    const v = viewRef.current; if (!v) return
+    v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(`⟨formula:${latex}⟩`))))
+    v.focus()
+    setShowFormulaPanel(false)
+  }
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
   const insertImage = () => { const input = window.window.document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { const f = input.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src: r.result as string }))); v.focus() }; r.readAsDataURL(f) }; input.click() }
@@ -518,23 +566,22 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-2">
                     {[
-                      { name: t('art.purple'), color: '#4f46e5', grad: '4f46e5,818cf8', shadow: true },
-                      { name: t('art.blue'), color: '#3b82f6', outline: true },
-                      { name: t('art.green'), color: '#10b981', grad: '10b981,34d399', glow: true },
-                      { name: t('art.orange'), color: '#f59e0b', grad: 'f59e0b,fbbf24', shadow: true },
-                      { name: t('art.red'), color: '#ef4444', shadow: true },
-                      { name: t('art.black'), color: '#000000', shadow: true },
+                      { name: t('art.shadow') || '阴影', style: 'shadow', color: '#4f46e5', preview: 'text-shadow: 2px 2px 4px rgba(0,0,0,0.4)' },
+                      { name: t('art.gradient') || '渐变', style: 'gradient', color: '#667eea', preview: 'background: linear-gradient(135deg,#667eea,#764ba2); -webkit-background-clip:text; -webkit-text-fill-color:transparent' },
+                      { name: t('art.glow') || '发光', style: 'glow', color: '#10b981', preview: 'text-shadow: 0 0 10px rgba(16,185,129,0.6)' },
+                      { name: t('art.outline') || '描边', style: 'outline', color: '#3b82f6', preview: '-webkit-text-stroke: 1px #3b82f6; -webkit-text-fill-color:transparent' },
+                      { name: t('art.3d') || '3D', style: '3d', color: '#f59e0b', preview: 'text-shadow: 1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 6px rgba(0,0,0,0.3)' },
+                      { name: t('art.red') || '红字', style: 'shadow', color: '#ef4444', preview: 'color:#ef4444; text-shadow:2px 2px 4px rgba(0,0,0,0.3)' },
                     ].map(p => (
                       <button key={p.name} onClick={() => {
                         const text = prompt(t('doc.prompt.wordArt')); if (!text) return
                         const v = viewRef.current; if (!v) return
-                        const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '32px' })]
-                        if (p.grad) marks.push(schema.marks.textColor.create({ color: p.color }))
-                        else marks.push(schema.marks.textColor.create({ color: p.color }))
+                        const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.wordArt.create({ style: p.style })]
+                        if (p.style !== 'gradient' && p.style !== 'outline') marks.push(schema.marks.textColor.create({ color: p.color }))
                         v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, marks))))
                         v.focus(); setShowArtPanel(false)
                       }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 72 }}>
-                        <span style={{ fontSize: '18px', fontWeight: 700, color: p.color, textShadow: p.shadow ? '2px 2px 4px rgba(0,0,0,0.3)' : 'none' }}>Aa</span>
+                        <span style={{ fontSize: '18px', fontWeight: 700, ...(() => { try { return Object.fromEntries(p.preview.split(';').filter(s=>s.trim()).map(s => { const [k,v] = s.split(':').map(x=>x.trim()); return [k.replace('-webkit-','').replace('text-stroke','WebkitTextStroke').replace('text-fill-color','WebkitTextFillColor').replace('background-clip','WebkitBackgroundClip'), v] }) } catch { return {} } })() } }}>{p.name.charAt(0)}a</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{p.name}</span>
                       </button>
                     ))}
@@ -562,11 +609,126 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           <RibbonGroup label={t('doc.text')}>
             <RibbonButton icon="📦" label={t('doc.textBox')} onClick={() => exec('textBox')} />
-            <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} />
+            <div className="relative">
+              <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} />
+              {showFormulaPanel && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, padding: '12px', minWidth: 320 }}>
+                  <div className="text-xs font-medium mb-2">{t('doc.commonFormulas') || '常用公式'}</div>
+                  <div className="grid grid-cols-4 gap-1 mb-3">
+                    {[
+                      { l: 'a²+b²=c²', v: 'a^2+b^2=c^2' },
+                      { l: '½', v: '\\frac{1}{2}' },
+                      { l: '√x', v: '\\sqrt{x}' },
+                      { l: 'x²', v: 'x^2' },
+                      { l: 'xₙ', v: 'x_n' },
+                      { l: '∑', v: '\\sum_{i=1}^{n}' },
+                      { l: '∫', v: '\\int_0^1' },
+                      { l: '∞', v: '\\infty' },
+                      { l: '≠', v: '\\neq' },
+                      { l: '≤', v: '\\leq' },
+                      { l: '≥', v: '\\geq' },
+                      { l: '±', v: '\\pm' },
+                    ].map(f => (
+                      <button key={f.l} onClick={() => insertLatexFormula(f.v)} className="p-2 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 48 }}>{f.l}</button>
+                    ))}
+                  </div>
+                  <div className="text-xs font-medium mb-2">{t('doc.customFormula') || '自定义 LaTeX'}</div>
+                  <div className="flex gap-2">
+                    <input type="text" placeholder="x = (-b ± √(b²-4ac)) / 2a" id="formula-input" className="flex-1 text-xs rounded px-2 py-1" style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} onKeyDown={e => { if (e.key === 'Enter') { const v = (e.target as HTMLInputElement).value; if (v) insertLatexFormula(v) } }} />
+                    <button onClick={() => { const inp = window.document.getElementById('formula-input') as HTMLInputElement; if (inp && inp.value) insertLatexFormula(inp.value) }} className="btn btn-primary btn-sm">OK</button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="relative">
+              <RibbonButton icon="Ω" label={t('doc.symbols') || '符号'} onClick={() => openPanel2('symbol')} />
+              {showSymbolPanel && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, padding: '12px', minWidth: 360 }}>
+                  <div className="flex gap-1 mb-2 flex-wrap">
+                    {[
+                      { k: 'greek', l: t('sym.greek') || '希腊' },
+                      { k: 'latin', l: t('sym.latin') || '拉丁' },
+                      { k: 'circled', l: t('sym.circled') || '圈号' },
+                      { k: 'roman', l: t('sym.roman') || '罗马' },
+                      { k: 'math', l: t('sym.math') || '数学' },
+                      { k: 'arrows', l: t('sym.arrows') || '箭头' },
+                    ].map(c => (
+                      <button key={c.k} onClick={() => setSymbolCategory(c.k as any)} className="text-xs px-2 py-1 rounded" style={{ background: symbolCategory === c.k ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: symbolCategory === c.k ? 'white' : 'var(--color-text)' }}>{c.l}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-8 gap-1" style={{ maxHeight: 200, overflowY: 'auto' }}>
+                    {symbolCategory === 'greek' && 'αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ'.split('').map((s, i) => (
+                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                    ))}
+                    {symbolCategory === 'latin' && 'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ'.split('').map((s, i) => (
+                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                    ))}
+                    {symbolCategory === 'circled' && '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⓪ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙ'.split('').map((s, i) => (
+                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                    ))}
+                    {symbolCategory === 'roman' && 'ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹⅺⅻ'.split('').map((s, i) => (
+                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                    ))}
+                    {symbolCategory === 'math' && '±×÷·∗∘∝∞∠∡∇∂√∫∮∑∏⊕⊗⊥∥≡≅≈≠≤≥≪≫∈∉∩∪⊂⊃⊆⊇∅∀∃¬∧∨⇒⇔'.split('').map((s, i) => (
+                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                    ))}
+                    {symbolCategory === 'arrows' && '←↑→↓↔↕↖↗↘↙⇄⇅⇒⇐⇔⇑⇓⇕⟶⟵⟷'.split('').map((s, i) => (
+                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </RibbonGroup>
           <RibbonGroup label={t('doc.link')}>
             <RibbonButton icon="⚓" label={t('doc.bookmark')} onClick={() => exec('bookmark')} />
             <RibbonButton icon="🔗" label={t('doc.hyperlink')} onClick={insertLink} />
+          </RibbonGroup>
+          <RibbonGroup label={t('doc.toc') || '目录'}>
+            <RibbonButton icon="📑" label={t('doc.autoToc') || '自动目录'} onClick={() => {
+              const v = viewRef.current; if (!v) return
+              // Scan document for headings and build a TOC
+              const headings: { level: number; text: string; pos: number }[] = []
+              v.state.doc.descendants((node, pos) => {
+                if (node.type.name === 'heading') {
+                  headings.push({ level: node.attrs.level, text: node.textContent, pos })
+                }
+              })
+              if (headings.length === 0) { alert(t('doc.noHeadingsForToc') || '没有标题，无法生成目录'); return }
+              // Build TOC paragraphs
+              const tocNodes: any[] = []
+              tocNodes.push(schema.nodes.paragraph.create({ align: 'center' }, schema.text(t('doc.tocTitle') || '目录', [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])))
+              headings.forEach(h => {
+                const indent = '  '.repeat(h.level - 1)
+                const dotLeader = ' ' + '·'.repeat(Math.max(3, 40 - h.text.length - indent.length))
+                tocNodes.push(schema.nodes.paragraph.create({ indent: h.level - 1 }, schema.text(indent + h.text + dotLeader)))
+              })
+              // Insert at cursor position
+              const tr = v.state.tr
+              let pos = v.state.selection.from
+              tocNodes.forEach(node => {
+                tr.insert(pos, node)
+                pos += node.nodeSize
+              })
+              v.dispatch(tr)
+              v.focus()
+            }} title={t('doc.autoTocTitle') || '从标题自动生成目录'} />
+            <RibbonButton icon="📋" label={t('doc.manualToc') || '手动目录'} onClick={() => {
+              const v = viewRef.current; if (!v) return
+              const text = prompt(t('doc.prompt.tocEntry') || '输入目录条目（每行一个）')
+              if (!text) return
+              const lines = text.split('\n').filter(l => l.trim())
+              const tocNodes: any[] = [schema.nodes.paragraph.create({ align: 'center' }, schema.text(t('doc.tocTitle') || '目录', [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })]))]
+              lines.forEach(line => {
+                const level = line.startsWith('  ') ? 2 : 1
+                tocNodes.push(schema.nodes.paragraph.create({ indent: level - 1 }, schema.text(line.trim())))
+              })
+              const tr = v.state.tr
+              let pos = v.state.selection.from
+              tocNodes.forEach(node => { tr.insert(pos, node); pos += node.nodeSize })
+              v.dispatch(tr)
+              v.focus()
+            }} title={t('doc.manualTocTitle') || '手动输入目录条目'} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.annotation')}>
             <RibbonButton icon="📝" label={t('doc.footnote')} onClick={() => exec('footnote')} />

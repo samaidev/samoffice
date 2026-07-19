@@ -268,9 +268,26 @@ export const schema = new Schema({
       inline: true,
       group: 'inline',
       atom: true,
-      attrs: { content: { default: '' } },
-      toDOM: (node) => ['sup', { class: 'footnote-ref', title: node.attrs.content, style: 'color: #4f46e5; cursor: pointer' }, '[注]'],
-      parseDOM: [{ tag: 'sup.footnote-ref' }],
+      attrs: { content: { default: '' }, num: { default: 1 } },
+      toDOM: (node) => ['sup', { class: 'footnote-ref', title: node.attrs.content, 'data-footnote-num': node.attrs.num, style: 'color: #4f46e5; cursor: pointer; font-size: 0.7em; vertical-align: super' }, `[${node.attrs.num}]`],
+      parseDOM: [{ tag: 'sup.footnote-ref', getAttrs: (dom: HTMLElement) => ({ content: dom.getAttribute('title') || '', num: parseInt(dom.getAttribute('data-footnote-num') || '1') }) }],
+    },
+
+    // === 脚注区域（文档底部） ===
+    footnote_section: {
+      content: 'footnote_item+',
+      group: 'block',
+      atom: true,
+      defining: true,
+      toDOM: () => ['div', { class: 'footnote-section', style: 'border-top: 1px solid #ccc; margin-top: 32px; padding-top: 8px; font-size: 0.8em; color: #666' }, 0],
+      parseDOM: [{ tag: 'div.footnote-section' }],
+    },
+    footnote_item: {
+      content: 'inline*',
+      atom: false,
+      toDOM: (node) => ['div', { class: 'footnote-item', style: 'margin: 2px 0' }, ['sup', { style: 'color: #4f46e5; margin-right: 4px' }, `${node.attrs.num}.`], 0],
+      parseDOM: [{ tag: 'div.footnote-item' }],
+      attrs: { num: { default: 1 } },
     },
 
     // === 书签（P1） ===
@@ -342,6 +359,23 @@ export const schema = new Schema({
       inclusive: false,
       toDOM: (mark) => ['a', { href: mark.attrs.href, target: '_blank', rel: 'noopener' }, 0],
       parseDOM: [{ tag: 'a[href]', getAttrs: (d: HTMLElement) => ({ href: d.getAttribute('href') || '' }) }]
+    },
+
+    // === 艺术字效果（P2） ===
+    wordArt: {
+      attrs: { style: { default: 'shadow' } }, // shadow | gradient | glow | outline | 3d
+      toDOM: (mark) => {
+        const s = mark.attrs.style
+        const styles: Record<string, string> = {
+          shadow: 'text-shadow: 2px 2px 4px rgba(0,0,0,0.4)',
+          gradient: 'background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text',
+          glow: 'text-shadow: 0 0 10px rgba(79,70,229,0.6), 0 0 20px rgba(79,70,229,0.4)',
+          outline: '-webkit-text-stroke: 2px #4f46e5; -webkit-text-fill-color: transparent',
+          '3d': 'text-shadow: 1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 0 #aaa, 4px 4px 6px rgba(0,0,0,0.3)',
+        }
+        return ['span', { class: 'word-art', style: styles[s] || styles.shadow }, 0]
+      },
+      parseDOM: [{ tag: 'span.word-art', getAttrs: (d: HTMLElement) => ({ style: d.className.split(' ').find(c => c.startsWith('art-'))?.replace('art-','') || 'shadow' }) }]
     },
 
     // === 修订追踪（P1） ===
