@@ -72,8 +72,24 @@ export const schema = new Schema({
       content: 'table_row+',
       group: 'block',
       tableRole: 'table',
-      toDOM: () => ['table', { class: 'pm-table', style: 'border-collapse: collapse; width: 100%; margin: 8px 0' }, 0],
-      parseDOM: [{ tag: 'table' }]
+      attrs: {
+        align: { default: '' },  // '' | 'left' | 'center' | 'right'
+      },
+      toDOM: (node) => {
+        const align = node.attrs.align
+        let style = 'border-collapse: collapse; margin: 8px 0'
+        let className = 'pm-table'
+        if (align === 'center') { style += '; margin-left: auto; margin-right: auto' }
+        else if (align === 'right') { style += '; margin-left: auto' }
+        else if (align === 'left') { style += '; margin-right: auto' }
+        return ['table', { class: className, style, 'data-align': align || 'left' }, 0]
+      },
+      parseDOM: [{
+        tag: 'table',
+        getAttrs: (dom: HTMLElement) => ({
+          align: dom.getAttribute('data-align') || (dom.style.marginLeft === 'auto' && dom.style.marginRight === 'auto' ? 'center' : ''),
+        })
+      }]
     },
     table_row: {
       content: 'table_cell+',

@@ -843,14 +843,47 @@ table td, table th {
   pointer-events: none;
 }
 
-/* === Image resize + selection === */
+/* === Image resize + selection + drag === */
 .ProseMirror img {
   max-width: 100%;
-  cursor: pointer;
+  cursor: move; /* indicate draggable */
 }
 .ProseMirror img.ProseMirror-selectednode {
   outline: 3px solid var(--color-primary, #4f46e5);
   outline-offset: 2px;
+  resize: both;
+  overflow: auto;
+  display: inline-block;
+}
+.ProseMirror img.ProseMirror-selectednode::after {
+  content: '';
+}
+
+/* === 标尺 (ruler) === */
+.show-ruler::before {
+  content: '';
+  display: block;
+  height: 20px;
+  background: repeating-linear-gradient(90deg, #e2e8f0 0, #e2e8f0 1px, transparent 1px, transparent 40px);
+  border-bottom: 1px solid #cbd5e1;
+  margin: -20px 0 8px 0;
+}
+
+/* === 网格线 (gridlines) === */
+.show-gridlines .ProseMirror {
+  background-image:
+    linear-gradient(rgba(99, 102, 241, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 102, 241, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* === 护眼模式 (eye care) === */
+.eye-care-mode .ProseMirror {
+  background-color: #c7edcc !important;
+  filter: sepia(0.1) brightness(0.97);
+}
+.eye-care-mode {
+  background-color: #c7edcc;
 }
 
 /* === Text box / Shape resize + selection === */

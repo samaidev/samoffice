@@ -86,8 +86,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
   const onSpellCheckRef = useRef(onSpellCheck)
+  const trackChangesRef = useRef(false)
   onChangeRef.current = onChange
   onSpellCheckRef.current = onSpellCheck
+  trackChangesRef.current = trackChanges
 
   const [activeMarks, setActiveMarks] = useState<Set<string>>(new Set())
   const [activeAttrs, setActiveAttrs] = useState<any>({})
@@ -143,6 +145,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
   const [bgColor, setBgColor] = useState('#ffffff')
+  // View 标签页: 标尺 / 网格线 / 导航窗口 / 拆分窗口 / 护眼模式
+  const [showRuler, setShowRuler] = useState(false)
+  const [showGridlines, setShowGridlines] = useState(false)
+  const [showNavPane, setShowNavPane] = useState(false)
+  const [splitWindow, setSplitWindow] = useState(false)
+  const [eyeCareMode, setEyeCareMode] = useState(false)
+  // 页码计数器（避免每次点击都追加）
+  const [pageNumInserted, setPageNumInserted] = useState(false)
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
   const [showMarks, setShowMarks] = useState(false)
   // 文档级设置 (页眉/页脚/页边距/分栏/行号)
@@ -175,6 +185,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const view = new EditorView(editorRef.current, {
       state,
       dispatchTransaction(tr) {
+        // Track changes: if enabled and this is a text insertion/deletion, add track marks
+        if (trackChangesRef.current && tr.docChanged) {
+          tr.steps.forEach((step: any) => {
+            if (step.from !== undefined && step.to !== undefined) {
+              const inserted = (step as any).slice?.openStart !== undefined
+              if (inserted) {
+                tr.addMark(step.from, step.to || step.from, schema.marks.insert_track.create({ author: 'User' }))
+              }
+            }
+          })
+        }
         const ns = view.state.apply(tr); view.updateState(ns)
         if (onChangeRef.current) onChangeRef.current(proseMirrorToUDM(ns.doc))
         if (onSpellCheckRef.current) onSpellCheckRef.current(ns.doc.textContent)
@@ -261,6 +282,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'imgToggleWrap': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, wrap: !selNode.attrs.wrap })); break }
       case 'shapeFloatLeft': { if (selNode && selNode.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'left' })); break }
       case 'shapeFloatRight': { if (selNode && selNode.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'right' })); break }
+      case 'tableAlignLeft': { alignTable(v, 'left'); break }
+      case 'tableAlignCenter': { alignTable(v, 'center'); break }
+      case 'tableAlignRight': { alignTable(v, 'right'); break }
       case 'footnote': { const text = prompt(t('doc.prompt.footnote')); if (text) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text }))); break }
       case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
       case 'comment': { const text = prompt(t('doc.prompt.comment')); if (text && !sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.comment_mark.create({ id: Date.now().toString(), author: 'User', text }))); break }
@@ -272,6 +296,22 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
 
   const setParaAttr = (attr: string, value: any) => { const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; if ($from.parent.type.name !== 'paragraph') return; v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [attr]: value })); v.focus() }
+  // Align the entire table that contains the cursor
+  const alignTable = (v: EditorView, align: 'left' | 'center' | 'right') => {
+    const { $from } = v.state.selection
+    let tablePos = -1, tableNode: any = null
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d)
+      if (node.type.name === 'table') { tablePos = $from.before(d); tableNode = node; break }
+    }
+    if (tableNode) {
+      // Wrap table in a paragraph with align, or set margin auto for center
+      const tr = v.state.tr
+      // Set table alignment via attribute on the table node
+      v.dispatch(tr.setNodeMarkup(tablePos, undefined, { ...tableNode.attrs, align }))
+      v.focus()
+    }
+  }
   const setFont = (font: string) => { const v = viewRef.current; if (!v) return; if (font) toggleMark(schema.marks.fontFamily, { font })(v.state, v.dispatch); else v.dispatch(v.state.tr.removeMark(v.state.selection.from, v.state.selection.to, schema.marks.fontFamily)); v.focus() }
   const setFontSize = (size: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.fontSize, { size })(v.state, v.dispatch); v.focus() }
   const setTextColor = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.textColor, { color })(v.state, v.dispatch); v.focus() }
@@ -620,8 +660,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               if (f !== null) setDocFooter(f)
             }} title={t('doc.footerTitle')} />
             <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => {
-              // 在页脚区域显示页码
-              setDocFooter(docFooter ? `${docFooter} · 第 1 页` : '第 1 页')
+              // Toggle page number in footer — only insert once, not append every click
+              if (pageNumInserted) {
+                // Remove page number from footer
+                const cleaned = docFooter.replace(/\s*·\s*第 \d+ 页\s*$/, '').replace(/^第 \d+ 页\s*·\s*/, '')
+                setDocFooter(cleaned)
+                setPageNumInserted(false)
+              } else {
+                // Insert page number
+                const pn = '第 1 页'
+                setDocFooter(docFooter ? `${docFooter} · ${pn}` : pn)
+                setPageNumInserted(true)
+              }
             }} title={t('doc.pageNumTitle')} />
           </RibbonGroup>
           <RibbonGroup label="公文 GB/T 9704">
@@ -729,7 +779,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.625rem', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-1.5">
                     {[['#ffffff', t('doc.bgWhite')], ['#c7edcc', t('doc.bgEyeGreen')], ['#f5f5dc', t('doc.bgBeige')], ['#faf3e0', t('doc.bgCream')], ['#e8e8e8', t('doc.bgGray')], ['#fff5e6', t('doc.bgWarm')]].map(([c, n]) => (
-                      <button key={c} onClick={() => { setBgColor(c as string); closeAllPanels() }} className="flex flex-col items-center gap-0.5 p-1 rounded transition-colors hover:bg-slate-100" title={n as string}>
+                      <button key={c} onClick={() => { setBgColor(c as string); setEyeCareMode(c === '#c7edcc'); closeAllPanels() }} className="flex flex-col items-center gap-0.5 p-1 rounded transition-colors hover:bg-slate-100" title={n as string}>
                         <span className="w-7 h-7 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} />
                       </button>
                     ))}
@@ -737,18 +787,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 </div>
               )}
             </div>
+            <RibbonButton icon="👁" label={t('doc.eyeCare')} onClick={() => { const ec = !eyeCareMode; setEyeCareMode(ec); setBgColor(ec ? '#c7edcc' : '#ffffff') }} active={eyeCareMode} title={t('doc.eyeCareTitle')} />
           </RibbonGroup>
           {/* 显示编辑标记 (¶ 段落标记 / 分页符) */}
           <RibbonGroup label={t('doc.show')}>
             <RibbonButton icon="¶" label={t('doc.showMarks')} onClick={() => setShowMarks(!showMarks)} active={showMarks} title={t('doc.showMarksTitle')} />
-            <RibbonButton icon="📏" label={t('doc.ruler')} onClick={() => setParaAttr('ruler', !activeAttrs.ruler)} active={activeAttrs.ruler} title={t('doc.rulerTitle')} />
-            <RibbonButton icon="📐" label={t('doc.gridlines')} onClick={() => setParaAttr('gridlines', !activeAttrs.gridlines)} active={activeAttrs.gridlines} title={t('doc.gridlinesTitle')} />
-            <RibbonButton icon="🗂" label={t('doc.navPane')} onClick={() => setParaAttr('navPane', !activeAttrs.navPane)} active={activeAttrs.navPane} title={t('doc.navPaneTitle')} />
+            <RibbonButton icon="📏" label={t('doc.ruler')} onClick={() => setShowRuler(!showRuler)} active={showRuler} title={t('doc.rulerTitle')} />
+            <RibbonButton icon="📐" label={t('doc.gridlines')} onClick={() => setShowGridlines(!showGridlines)} active={showGridlines} title={t('doc.gridlinesTitle')} />
+            <RibbonButton icon="🗂" label={t('doc.navPane')} onClick={() => setShowNavPane(!showNavPane)} active={showNavPane} title={t('doc.navPaneTitle')} />
           </RibbonGroup>
           {/* 窗口 */}
           <RibbonGroup label={t('doc.window')}>
-            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('doc.newWindowTitle')} />
-            <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setParaAttr('split', !activeAttrs.split)} active={activeAttrs.split} title={t('doc.windowSplitTitle')} />
+            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
+            <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindow(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
         </>)}
@@ -769,6 +820,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'left')} className="toolbar-btn" title={t('doc.alignLeft')} type="button">⬅</button>
           <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'center')} className="toolbar-btn" title={t('doc.alignCenter')} type="button">⬌</button>
           <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'right')} className="toolbar-btn" title={t('doc.alignRight')} type="button">➡</button>
+          <div className="toolbar-divider" />
+          <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.tableAlign') || '表格对齐'}:</span>
+          <button onClick={() => exec('tableAlignLeft')} className="toolbar-btn" title={t('doc.tableAlignLeft') || '表格左对齐'} type="button">⟸</button>
+          <button onClick={() => exec('tableAlignCenter')} className="toolbar-btn" title={t('doc.tableAlignCenter') || '表格居中'} type="button">⟺</button>
+          <button onClick={() => exec('tableAlignRight')} className="toolbar-btn" title={t('doc.tableAlignRight') || '表格右对齐'} type="button">⟹</button>
         </div>
       )}
 
@@ -832,8 +888,30 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       {watermark && (<div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)', fontSize: '72px', color: 'rgba(0,0,0,0.08)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap' }}>{watermark}</div>)}
 
+      {/* 导航窗口 (Navigation Pane) */}
+      {showNavPane && (
+        <div className="flex-shrink-0 overflow-auto animate-fade-in" style={{ width: 200, background: 'var(--color-surface)', borderRight: '1px solid var(--color-border)', padding: '8px 12px' }}>
+          <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('doc.navPane') || '导航'}</div>
+          {viewRef.current?.state.doc.content.firstChild ? (() => {
+            const headings: { level: number; text: string; pos: number }[] = []
+            viewRef.current.state.doc.descendants((node, pos) => {
+              if (node.type.name === 'heading') {
+                headings.push({ level: node.attrs.level, text: node.textContent, pos })
+              }
+            })
+            if (headings.length === 0) return <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.noHeadings') || '无标题'}</div>
+            return headings.map((h, i) => (
+              <div key={i} className="text-xs cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5" style={{ marginLeft: (h.level - 1) * 12, color: 'var(--color-text-secondary)' }}
+                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(h.pos)) as any)); v.focus() } }}>
+                {h.text || `(H${h.level})`}
+              </div>
+            ))
+          })() : null}
+        </div>
+      )}
+
       <div
-        className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
+        className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${splitWindow ? 'flex' : ''}`}
         style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1 }}
       >
         <div
@@ -900,7 +978,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 columnCount: docColumns > 1 ? docColumns : undefined,
                 columnGap: docColumns > 1 ? '32px' : undefined,
                 columnRule: docColumns > 1 ? '1px solid var(--color-border)' : undefined,
+                background: bgColor,
+                minHeight: '100%',
+                position: 'relative',
               }}
+              className={`${showRuler ? 'show-ruler' : ''} ${showGridlines ? 'show-gridlines' : ''} ${eyeCareMode ? 'eye-care-mode' : ''}`}
             />
           </div>
           {/* 页脚 */}
