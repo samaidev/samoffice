@@ -409,8 +409,8 @@ ${t('sample.md.more')}
           zIndex: 60,
           cursor: 'default',
           userSelect: 'none',
-          WebkitAppRegion: 'drag' as any, // Makes the header draggable in Wails frameless mode
-        }}
+          '--wails-draggable': 'drag' as any, // Wails frameless 窗口 CSS 拖动 (官方方案, WebkitAppRegion 仅 Electron 有效)
+        } as any}
         onMouseDown={(e) => {
           // Only start drag if clicking on the header itself (not buttons/inputs)
           const target = e.target as HTMLElement
@@ -435,7 +435,7 @@ ${t('sample.md.more')}
 
         {/* 桌面端 Files 下拉按钮 (合并 打开/另存docx/导出PDF) */}
         {!isMobile && (
-          <div className="relative flex-shrink-0" style={{ zIndex: 62, WebkitAppRegion: 'no-drag' as any }}>
+          <div className="relative flex-shrink-0" style={{ zIndex: 62, '--wails-draggable': 'no-drag' as any } as any}>
             <button
               onClick={() => setFilesOpen(!filesOpen)}
               disabled={loading}
@@ -488,7 +488,7 @@ ${t('sample.md.more')}
         <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
 
         {/* Tab 切换 (可滚动容器，避免移动端越界) */}
-        <div className="header-tabs-scroll flex items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' as any }}>
+        <div className="header-tabs-scroll flex items-center gap-0.5" style={{ '--wails-draggable': 'no-drag' as any } as any}>
           {([
             { id: 'document', icon: '📄', label: t('tab.document') },
             { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
@@ -522,7 +522,7 @@ ${t('sample.md.more')}
           data-tooltip={`${t('app.theme')}: ${themeLabel}`}
           data-testid="theme-toggle"
           aria-label={t('app.theme')}
-          className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0" style={{ WebkitAppRegion: 'no-drag' as any }}
+          className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0" style={{ '--wails-draggable': 'no-drag' as any } as any}
         >
           <span className="text-sm">{themeIcon}</span>
         </button>
@@ -531,8 +531,8 @@ ${t('sample.md.more')}
         <select
           value={lang}
           onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-          className="text-xs rounded-md px-1 py-1 flex-shrink-0" style={{ WebkitAppRegion: 'no-drag' as any }}
-          style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)' }}
+          className="text-xs rounded-md px-1 py-1 flex-shrink-0"
+          style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', '--wails-draggable': 'no-drag' as any } as any}
         >
           <option value="zh" style={{ color: '#000' }}>中文</option>
           <option value="en" style={{ color: '#000' }}>EN</option>
@@ -562,7 +562,7 @@ ${t('sample.md.more')}
         )}
 
         {/* 窗口控制按钮 (最小化/最大化/关闭) — 右对齐到右上角 */}
-        <div className="flex items-center gap-0.5 flex-shrink-0" style={{ marginLeft: 'auto', WebkitAppRegion: 'no-drag' as any }}>
+        <div className="flex items-center gap-0.5 flex-shrink-0" style={{ marginLeft: 'auto', '--wails-draggable': 'no-drag' as any } as any}>
           <button
             onClick={() => { try { (window as any).go.main.App.WindowMinimize() } catch {} }}
             className="w-8 h-8 rounded-md hover:bg-white/20 transition-all flex items-center justify-center"

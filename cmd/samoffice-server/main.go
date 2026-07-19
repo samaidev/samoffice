@@ -54,6 +54,7 @@ func main() {
         // HTTP 服务
         gin.SetMode(gin.ReleaseMode)
         r := gin.Default()
+        r.Use(api.CORSMiddleware()) // 放行浏览器跨域请求，修复导出/另存为预检失败
 
         // API
         h := api.New(registry, dictMgr)

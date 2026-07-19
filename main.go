@@ -64,10 +64,11 @@ func (a *App) IsWindowMaximized() bool {
         return runtime.WindowIsMaximised(a.ctx)
 }
 
-// WindowStartDrag makes the window draggable (for frameless mode)
+// WindowStartDrag is a no-op in Wails v2.12.0 (该版本 runtime 无 WindowDrag API)。
+// frameless 窗口拖动改由前端 CSS `--wails-draggable: drag` 实现 (Wails 官方方案)。
+// 保留方法签名以兼容前端已有的调用 (App.tsx header 的 onMouseDown fallback)。
 func (a *App) WindowStartDrag() {
-        if a.ctx == nil { return }
-        runtime.WindowDrag(a.ctx)
+        // no-op: CSS --wails-draggable handles dragging in v2.12.0
 }
 
 func NewApp() *App {
@@ -136,6 +137,7 @@ func (a *App) startHTTPServer() {
         gin.SetMode(gin.ReleaseMode)
         r := gin.New()
         r.Use(gin.Recovery())
+        r.Use(api.CORSMiddleware()) // 放行 Wails WebView 跨域请求，修复导出/另存为预检失败
         h := api.New(a.registry, a.dictMgr)
         h.Register(r)
         r.GET("/api/doc/local", h.LocalFileOpen)

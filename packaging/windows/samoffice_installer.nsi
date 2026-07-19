@@ -1,4 +1,4 @@
-; samoffice_installer.nsi - NSIS installer script for SamOffice
+﻿; samoffice_installer.nsi - NSIS installer script for SamOffice
 ; Build: makensis samoffice_installer.nsi
 ; Output: samoffice-setup-0.1.0.exe
 ; Requires: NSIS 3.x (https://nsis.sourceforge.io/)

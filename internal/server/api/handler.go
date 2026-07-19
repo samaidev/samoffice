@@ -139,38 +139,83 @@ func (h *Handler) saveDocumentWps(c *gin.Context) {
 func generateRTF(doc *core.Document) string {
         var sb strings.Builder
         sb.WriteString("{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Times New Roman;}}")
-        if doc.Meta != nil && doc.Meta.Title != "" {
+        if doc.Meta.Title != "" {
                 sb.WriteString("{\\info {\\title " + doc.Meta.Title + "}}")
         }
         for _, block := range doc.Blocks {
                 if block == nil {
                         continue
                 }
-                for _, inline := range block.Inline {
+                // Block 是 interface，需类型断言取 Inline (Paragraph/Heading)
+                var inlines []core.Inline
+                switch b := block.(type) {
+                case *core.Paragraph:
+                        inlines = b.Inline
+                case core.Paragraph:
+                        inlines = b.Inline
+                case *core.Heading:
+                        inlines = b.Inline
+                case core.Heading:
+                        inlines = b.Inline
+                default:
+                        // 其他块类型 (BulletList/Table/CodeBlock/Image) 跳过
+                        sb.WriteString("\\par\n")
+                        continue
+                }
+                for _, inline := range inlines {
                         if inline == nil {
                                 continue
                         }
-                        if inline.Bold {
+                        // Inline 是 interface，需类型断言取文本属性 (Text.Under 非 Underline)
+                        text, bold, italic, under := "", false, false, false
+                        switch in := inline.(type) {
+                        case *core.Text:
+                                text, bold, italic, under = in.Content, in.Bold, in.Italic, in.Under
+                        case core.Text:
+                                text, bold, italic, under = in.Content, in.Bold, in.Italic, in.Under
+                        case *core.Hyperlink:
+                                for _, ti := range in.Text {
+                                        if t, ok := ti.(*core.Text); ok {
+                                                text += t.Content
+                                        } else if t, ok := ti.(core.Text); ok {
+                                                text += t.Content
+                                        }
+                                }
+                        case core.Hyperlink:
+                                for _, ti := range in.Text {
+                                        if t, ok := ti.(*core.Text); ok {
+                                                text += t.Content
+                                        } else if t, ok := ti.(core.Text); ok {
+                                                text += t.Content
+                                        }
+                                }
+                        default:
+                                continue
+                        }
+                        if text == "" {
+                                continue
+                        }
+                        if bold {
                                 sb.WriteString("{\\b ")
                         }
-                        if inline.Italic {
+                        if italic {
                                 sb.WriteString("{\\i ")
                         }
-                        if inline.Underline {
+                        if under {
                                 sb.WriteString("{\\ul ")
                         }
                         // Escape RTF special chars
-                        text := strings.ReplaceAll(inline.Content, "\\", "\\\\")
-                        text = strings.ReplaceAll(text, "{", "\\{")
-                        text = strings.ReplaceAll(text, "}", "\\}")
-                        sb.WriteString(text)
-                        if inline.Underline {
+                        esc := strings.ReplaceAll(text, "\\", "\\\\")
+                        esc = strings.ReplaceAll(esc, "{", "\\{")
+                        esc = strings.ReplaceAll(esc, "}", "\\}")
+                        sb.WriteString(esc)
+                        if under {
                                 sb.WriteString("}")
                         }
-                        if inline.Italic {
+                        if italic {
                                 sb.WriteString("}")
                         }
-                        if inline.Bold {
+                        if bold {
                                 sb.WriteString("}")
                         }
                 }

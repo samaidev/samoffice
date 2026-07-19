@@ -512,7 +512,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       )}
 
       {/* Ribbon Tab 栏 — 可横向滚动，右侧操作按钮固定 */}
-      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45 }}>
+      <div className="flex items-center px-2 flex-shrink-0 border-b" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', position: 'relative', zIndex: 45, '--wails-draggable': 'drag' as any } as any}>
         <div className="ribbon-tab-scroll">
           {ribbonTabs.map(tab => (
             <button key={tab.id} onClick={() => { closeAllPanels(); setRibbonTab(tab.id) }} data-testid={`ribbon-tab-${tab.id}`} className="ribbon-tab-btn px-2 sm:px-4 py-2 text-sm font-medium transition-colors"
@@ -530,7 +530,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       )}
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 45 }}>
+      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 45, '--wails-draggable': 'drag' as any } as any}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
