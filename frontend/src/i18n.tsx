@@ -83,6 +83,8 @@ const dict: Record<string, { en: string; zh: string }> = {
   'print.cancel': { en: 'Cancel', zh: '取消' },
   'print.print': { en: 'Print', zh: '打印' },
   'app.saveDocx': { en: 'Save as docx', zh: '存为 docx' },
+  'app.saveDoc': { en: 'Save as doc', zh: '存为 doc' },
+  'app.saveWps': { en: 'Save as wps', zh: '存为 wps' },
   'app.exportPdf': { en: 'Export PDF', zh: '导出 PDF' },
   'app.insertImage': { en: 'Insert Image', zh: '插入图片' },
   'app.menu': { en: 'Menu', zh: '菜单' },

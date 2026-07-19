@@ -197,6 +197,93 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     })
     const view = new EditorView(editorRef.current, {
       state,
+      nodeViews: {
+        image: (node: any, view: any, getPos: any) => {
+          const dom = document.createElement('div')
+          dom.style.display = 'inline-block'
+          dom.style.position = 'relative'
+          dom.style.margin = '4px'
+          dom.style.maxWidth = '100%'
+          const img = document.createElement('img')
+          img.src = node.attrs.src
+          img.alt = node.attrs.alt || ''
+          img.style.maxWidth = '100%'
+          img.style.display = 'block'
+          img.style.cursor = 'pointer'
+          let w = node.attrs.width || 300
+          img.style.width = w + 'px'
+          dom.appendChild(img)
+          // Resize handle
+          const handle = document.createElement('div')
+          handle.style.position = 'absolute'
+          handle.style.bottom = '-4px'
+          handle.style.right = '-4px'
+          handle.style.width = '12px'
+          handle.style.height = '12px'
+          handle.style.background = '#4f46e5'
+          handle.style.border = '2px solid white'
+          handle.style.borderRadius = '2px'
+          handle.style.cursor = 'nwse-resize'
+          handle.style.zIndex = '100'
+          handle.style.display = 'none'
+          dom.appendChild(handle)
+          // Show handle when selected
+          const checkSelected = () => {
+            const sel = view.state.selection
+            if (sel instanceof NodeSelection && sel.from === getPos()) {
+              handle.style.display = 'block'
+              dom.style.outline = '2px solid #4f46e5'
+              dom.style.outlineOffset = '2px'
+            } else {
+              handle.style.display = 'none'
+              dom.style.outline = 'none'
+            }
+          }
+          // Drag to resize
+          let resizing = false, startX = 0, startW = 0
+          handle.addEventListener('mousedown', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            resizing = true
+            startX = e.clientX
+            startW = w
+          })
+          document.addEventListener('mousemove', (e) => {
+            if (!resizing) return
+            const diff = e.clientX - startX
+            const newW = Math.max(50, startW + diff)
+            img.style.width = newW + 'px'
+            w = newW
+          })
+          document.addEventListener('mouseup', () => {
+            if (!resizing) return
+            resizing = false
+            // Commit the new width to the document
+            const pos = getPos()
+            if (pos != null) {
+              const tr = view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, width: w })
+              view.dispatch(tr)
+            }
+          })
+          // Click to select
+          dom.addEventListener('click', (e) => {
+            const pos = getPos()
+            if (pos != null) {
+              view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
+              view.focus()
+            }
+          })
+          // Listen for selection changes
+          view.someProp('handleDOMEvents', () => {}) // ensure view is valid
+          const origDispatch = view.dispatch.bind(view)
+          const wrappedDispatch = (tr: any) => {
+            origDispatch(tr)
+            setTimeout(checkSelected, 0)
+          }
+          view.dispatch = wrappedDispatch
+          return { dom }
+        }
+      },
       dispatchTransaction(tr) {
         // Track changes: if enabled and this is a text insertion/deletion, add track marks
         if (trackChangesRef.current && tr.docChanged) {
