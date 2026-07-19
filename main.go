@@ -18,6 +18,7 @@ import (
         "github.com/wailsapp/wails/v2"
         "github.com/wailsapp/wails/v2/pkg/options"
         "github.com/wailsapp/wails/v2/pkg/options/assetserver"
+        "github.com/wailsapp/wails/v2/pkg/runtime"
         "github.com/zai/samoffice/internal/dict"
         "github.com/zai/samoffice/internal/dict/hunspell"
         "github.com/zai/samoffice/internal/dict/userdict"
@@ -37,6 +38,30 @@ type App struct {
         userStore *userdict.Store
         httpPort  int
         logger    *zap.Logger
+}
+
+// WindowMinimize minimizes the window
+func (a *App) WindowMinimize() {
+        if a.ctx == nil { return }
+        runtime.WindowMinimise(a.ctx)
+}
+
+// WindowMaximize toggles maximize
+func (a *App) WindowMaximize() {
+        if a.ctx == nil { return }
+        runtime.WindowToggleMaximise(a.ctx)
+}
+
+// WindowClose closes the app
+func (a *App) WindowClose() {
+        if a.ctx == nil { return }
+        runtime.Quit(a.ctx)
+}
+
+// IsWindowMaximized returns whether the window is currently maximized
+func (a *App) IsWindowMaximized() bool {
+        if a.ctx == nil { return false }
+        return runtime.WindowIsMaximised(a.ctx)
 }
 
 func NewApp() *App {
@@ -135,11 +160,12 @@ func main() {
         fmt.Printf("SamOffice starting...\n  Local HTTP: http://127.0.0.1:%d\n", app.httpPort)
 
         err = wails.Run(&options.App{
-                Title:     "SamOffice - Cross-platform Office Suite",
+                Title:     "SamOffice",
                 Width:     1280,
                 Height:    800,
                 MinWidth:  800,
                 MinHeight: 600,
+                Frameless: true, // 无系统标题栏，由前端自绘窗口控制按钮
                 AssetServer: &assetserver.Options{
                         Assets: dist,
                 },

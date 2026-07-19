@@ -5,6 +5,7 @@ import (
         "net/http"
         "os"
         "path/filepath"
+        "strings"
 
         "github.com/gin-gonic/gin"
         "github.com/zai/samoffice/internal/core"
@@ -33,6 +34,8 @@ func (h *Handler) Register(r *gin.Engine) {
         r.GET("/api/health", h.health)
         r.POST("/api/doc/open", h.openDocument)
         r.POST("/api/doc/save", h.saveDocument)
+        r.POST("/api/doc/save-doc", h.saveDocumentDoc) // .doc format
+        r.POST("/api/doc/save-wps", h.saveDocumentWps) // .wps format
         r.POST("/api/doc/export-pdf", h.exportPDF)
         r.GET("/api/dict/check", h.spellCheck)
         r.POST("/api/dict/learn", h.learnWord)
@@ -89,6 +92,92 @@ func (h *Handler) saveDocument(c *gin.Context) {
         }
         c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
         c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
+}
+
+// saveDocumentDoc saves as .doc (legacy Word format).
+// .doc is a binary OLE format. We generate a minimal RTF wrapper that Word
+// and WPS can both open when saved with .doc extension.
+func (h *Handler) saveDocumentDoc(c *gin.Context) {
+        var doc core.Document
+        if err := c.ShouldBindJSON(&doc); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        // Generate RTF (Rich Text Format) — opens in Word/WPS as .doc
+        rtf := generateRTF(&doc)
+        filename := doc.Meta.Title
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.doc"`, filename))
+        c.Data(http.StatusOK, "application/msword", []byte(rtf))
+}
+
+// saveDocumentWps saves as .wps format (WPS Office native).
+// WPS can open .docx, so we reuse the docx renderer with .wps extension.
+func (h *Handler) saveDocumentWps(c *gin.Context) {
+        var doc core.Document
+        if err := c.ShouldBindJSON(&doc); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        r := docx.New()
+        data, err := r.Render(&doc)
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
+        filename := doc.Meta.Title
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.wps"`, filename))
+        c.Data(http.StatusOK, "application/vnd.ms-works", data)
+}
+
+// generateRTF converts UDM to a minimal RTF string that Word/WPS can open
+func generateRTF(doc *core.Document) string {
+        var sb strings.Builder
+        sb.WriteString("{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Times New Roman;}}")
+        if doc.Meta != nil && doc.Meta.Title != "" {
+                sb.WriteString("{\\info {\\title " + doc.Meta.Title + "}}")
+        }
+        for _, block := range doc.Blocks {
+                if block == nil {
+                        continue
+                }
+                for _, inline := range block.Inline {
+                        if inline == nil {
+                                continue
+                        }
+                        if inline.Bold {
+                                sb.WriteString("{\\b ")
+                        }
+                        if inline.Italic {
+                                sb.WriteString("{\\i ")
+                        }
+                        if inline.Underline {
+                                sb.WriteString("{\\ul ")
+                        }
+                        // Escape RTF special chars
+                        text := strings.ReplaceAll(inline.Content, "\\", "\\\\")
+                        text = strings.ReplaceAll(text, "{", "\\{")
+                        text = strings.ReplaceAll(text, "}", "\\}")
+                        sb.WriteString(text)
+                        if inline.Underline {
+                                sb.WriteString("}")
+                        }
+                        if inline.Italic {
+                                sb.WriteString("}")
+                        }
+                        if inline.Bold {
+                                sb.WriteString("}")
+                        }
+                }
+                sb.WriteString("\\par\n")
+        }
+        sb.WriteString("}")
+        return sb.String()
 }
 
 // exportPDF 接收 UDM JSON 导出为 PDF 文件
