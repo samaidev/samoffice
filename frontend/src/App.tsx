@@ -157,22 +157,32 @@ ${t('sample.md.more')}
 
   const [apiBaseUrl, setApiBaseUrl] = useState('')
 
-  useEffect(() => {
-    // In Wails desktop mode, get the HTTP port from Go backend
+  // Get API base URL — called on every save/open in case port wasn't ready on init
+  const getApiBase = async (): Promise<string> => {
+    if (apiBaseUrl) return apiBaseUrl
     const wailsApp = (window as any).go?.main?.App
-    if (wailsApp) {
-      // LocalBackend mode — need to get HTTP port for API calls
-      if (typeof wailsApp.HTTPPort === 'function') {
-        Promise.resolve(wailsApp.HTTPPort()).then((port: number) => {
-          if (port > 0) setApiBaseUrl(`http://127.0.0.1:${port}`)
-        }).catch(() => {})
-      }
+    if (wailsApp && typeof wailsApp.HTTPPort === 'function') {
+      try {
+        const port = await wailsApp.HTTPPort()
+        if (port > 0) {
+          const url = `http://127.0.0.1:${port}`
+          setApiBaseUrl(url)
+          return url
+        }
+      } catch {}
     }
+    return ''
+  }
+
+  useEffect(() => {
+    // Try to get port immediately, then retry after 1s if not ready
+    getApiBase()
+    const timer = setTimeout(() => getApiBase(), 1000)
     setBackend(createBackend())
     const checkMobile = () => setIsMobile(window.innerWidth <= 768)
     checkMobile()
     window.addEventListener('resize', checkMobile)
-    return () => window.removeEventListener('resize', checkMobile)
+    return () => { clearTimeout(timer); window.removeEventListener('resize', checkMobile) }
   }, [])
 
   // 字数统计
@@ -228,9 +238,10 @@ ${t('sample.md.more')}
       showToast(t('app.opening', { name: file.name }))
       try {
         // Use HTTP API directly (works in both local and remote mode)
+        const base = await getApiBase()
         const form = new FormData()
         form.append('file', file)
-        const r = await fetch(`${apiBaseUrl}/api/doc/open`, { method: 'POST', body: form })
+        const r = await fetch(`${base}/api/doc/open`, { method: 'POST', body: form })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const result = await r.json()
         setDoc(result.document)
@@ -284,7 +295,8 @@ ${t('sample.md.more')}
           return { inline: [{ content: '' }] }
         })
       }
-      const resp = await fetch(`${apiBaseUrl}${endpoint}`, {
+      const base = await getApiBase()
+      const resp = await fetch(`${base}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(safeDoc)
@@ -394,9 +406,16 @@ ${t('sample.md.more')}
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
           paddingRight: '12px',
           position: 'relative',
-          // zIndex: 60 — 必须高于 popup overlay (z-40) 和 ribbon-popup (z-50)
-          // 否则 popup 打开时透明遮罩会盖住顶栏，导致 Tab 切换失效
           zIndex: 60,
+          cursor: 'default',
+          userSelect: 'none',
+          WebkitAppRegion: 'drag' as any, // Makes the header draggable in Wails frameless mode
+        }}
+        onMouseDown={(e) => {
+          // Only start drag if clicking on the header itself (not buttons/inputs)
+          const target = e.target as HTMLElement
+          if (target.tagName === 'BUTTON' || target.tagName === 'SELECT' || target.tagName === 'INPUT' || target.closest('button') || target.closest('select')) return
+          try { (window as any).go?.main?.App?.WindowStartDrag() } catch {}
         }}
       >
         {/* LOGO + 名称 */}
@@ -416,7 +435,7 @@ ${t('sample.md.more')}
 
         {/* 桌面端 Files 下拉按钮 (合并 打开/另存docx/导出PDF) */}
         {!isMobile && (
-          <div className="relative flex-shrink-0" style={{ zIndex: 62 }}>
+          <div className="relative flex-shrink-0" style={{ zIndex: 62, WebkitAppRegion: 'no-drag' as any }}>
             <button
               onClick={() => setFilesOpen(!filesOpen)}
               disabled={loading}
@@ -469,7 +488,7 @@ ${t('sample.md.more')}
         <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
 
         {/* Tab 切换 (可滚动容器，避免移动端越界) */}
-        <div className="header-tabs-scroll flex items-center gap-0.5">
+        <div className="header-tabs-scroll flex items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' as any }}>
           {([
             { id: 'document', icon: '📄', label: t('tab.document') },
             { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
@@ -503,7 +522,7 @@ ${t('sample.md.more')}
           data-tooltip={`${t('app.theme')}: ${themeLabel}`}
           data-testid="theme-toggle"
           aria-label={t('app.theme')}
-          className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0"
+          className="p-2 rounded-md hover:bg-white/15 transition-all flex-shrink-0" style={{ WebkitAppRegion: 'no-drag' as any }}
         >
           <span className="text-sm">{themeIcon}</span>
         </button>
@@ -512,7 +531,7 @@ ${t('sample.md.more')}
         <select
           value={lang}
           onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-          className="text-xs rounded-md px-1 py-1 flex-shrink-0"
+          className="text-xs rounded-md px-1 py-1 flex-shrink-0" style={{ WebkitAppRegion: 'no-drag' as any }}
           style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)' }}
         >
           <option value="zh" style={{ color: '#000' }}>中文</option>
@@ -543,7 +562,7 @@ ${t('sample.md.more')}
         )}
 
         {/* 窗口控制按钮 (最小化/最大化/关闭) — 右对齐到右上角 */}
-        <div className="flex items-center gap-0.5 flex-shrink-0" style={{ marginLeft: 'auto' }}>
+        <div className="flex items-center gap-0.5 flex-shrink-0" style={{ marginLeft: 'auto', WebkitAppRegion: 'no-drag' as any }}>
           <button
             onClick={() => { try { (window as any).go.main.App.WindowMinimize() } catch {} }}
             className="w-8 h-8 rounded-md hover:bg-white/20 transition-all flex items-center justify-center"
