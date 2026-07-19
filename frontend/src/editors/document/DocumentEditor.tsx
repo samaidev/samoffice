@@ -10,6 +10,7 @@ import { udmToProseMirror, proseMirrorToUDM } from './convert'
 import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign } from './tableCommands'
+import { columnResizing, tableEditing, CellSelection } from 'prosemirror-tables'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 import type { Document, SpellError } from '../../types/udm'
@@ -93,6 +94,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [activeFont, setActiveFont] = useState('')
   const [activeFontSize, setActiveFontSize] = useState('')
   const [activeColor, setActiveColor] = useState('')
+  const [activeIsImage, setActiveIsImage] = useState(false)
+  const [activeIsShape, setActiveIsShape] = useState(false)
   const [, setTick] = useState(0)
   const [focused, setFocused] = useState(false)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
@@ -166,7 +169,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
-        spellCheckPlugin(), searchPlugin(),
+        columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
       ]
     })
     const view = new EditorView(editorRef.current, {
@@ -205,7 +208,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if ($from.parent.type.name === 'heading') marks.add(`heading-${$from.parent.attrs.level}`)
     let isInTable = false
     for (let d = $from.depth; d > 0; d--) { if ($from.node(d).type.name === 'table') { isInTable = true; break } }
-    setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c); setTick(t => t + 1)
+    setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c)
+    // Track if cursor is on an image or shape node (for float/wrap buttons)
+    const selNode = state.selection.node
+    setActiveIsImage(!!selNode && selNode.type.name === 'image')
+    setActiveIsShape(!!selNode && selNode.type.name === 'text_box')
+    setTick(t => t + 1)
   }
 
   const exec = (cmd: string) => {
@@ -231,6 +239,26 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'pageBreak': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create())); break
       case 'horizontalRule': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.horizontal_rule.create())); break
       case 'textBox': { const cell = schema.nodes.paragraph.create(null, schema.text(t('doc.textBoxDefault'))); v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.text_box.create(null, cell))); break }
+      case 'shape:rect':
+      case 'shape:roundRect':
+      case 'shape:ellipse':
+      case 'shape:triangle':
+      case 'shape:diamond':
+      case 'shape:rightArrow':
+      case 'shape:star5':
+      case 'shape:heart': {
+        const shapeType = cmd.split(':')[1]
+        const cell = schema.nodes.paragraph.create(null, schema.text(t('doc.textBoxDefault')))
+        v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.text_box.create({ shape: shapeType }, cell)))
+        break
+      }
+      case 'imgFloatLeft': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'left' })); break }
+      case 'imgFloatRight': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'right' })); break }
+      case 'imgFloatCenter': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'center' })); break }
+      case 'imgFloatNone': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: '' })); break }
+      case 'imgToggleWrap': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, wrap: !node.attrs.wrap })); break }
+      case 'shapeFloatLeft': { const node = sel.node; if (node && node.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'left' })); break }
+      case 'shapeFloatRight': { const node = sel.node; if (node && node.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'right' })); break }
       case 'footnote': { const text = prompt(t('doc.prompt.footnote')); if (text) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text }))); break }
       case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
       case 'comment': { const text = prompt(t('doc.prompt.comment')); if (text && !sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.comment_mark.create({ id: Date.now().toString(), author: 'User', text }))); break }
@@ -417,6 +445,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.table')}><RibbonButton icon="📊" label={t('doc.table')} onClick={() => exec('insertTable')} /></RibbonGroup>
           <RibbonGroup label={t('doc.image')}>
             <RibbonButton icon="🖼" label={t('doc.image')} onClick={insertImage} />
+            <RibbonButton icon="⬅" label={t('doc.imgFloatLeft')} onClick={() => exec('imgFloatLeft')} disabled={!activeIsImage} title={t('doc.imgFloatLeftTitle')} />
+            <RibbonButton icon="➡" label={t('doc.imgFloatRight')} onClick={() => exec('imgFloatRight')} disabled={!activeIsImage} title={t('doc.imgFloatRightTitle')} />
+            <RibbonButton icon="⏹" label={t('doc.imgFloatNone')} onClick={() => exec('imgFloatNone')} disabled={!activeIsImage} title={t('doc.imgFloatNoneTitle')} />
             <RibbonButton icon="—" label={t('doc.horizontalRule')} onClick={() => exec('horizontalRule')} />
             <RibbonButton icon="⏎" label={t('doc.pageBreak')} onClick={() => exec('pageBreak')} />
           </RibbonGroup>
@@ -428,7 +459,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   <div className="grid grid-cols-4 gap-2">
                     {[{t:'rect',i:'▭',n:t('doc.shape.rect')},{t:'roundRect',i:'▢',n:t('doc.shape.rounded')},{t:'ellipse',i:'⬭',n:t('doc.shape.ellipse')},{t:'triangle',i:'△',n:t('doc.shape.triangle')},
                      {t:'diamond',i:'◇',n:t('doc.shape.diamond')},{t:'rightArrow',i:'→',n:t('doc.shape.arrow')},{t:'star5',i:'★',n:t('doc.shape.star')},{t:'heart',i:'♥',n:t('doc.shape.heart')}].map(s => (
-                      <button key={s.t} onClick={() => { exec('textBox'); setShowShapePanel(false) }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
+                      <button key={s.t} onClick={() => { exec('shape:' + s.t); setShowShapePanel(false) }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
                         <span style={{ fontSize: '20px' }}>{s.i}</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{s.n}</span>
                       </button>
@@ -604,7 +635,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         {ribbonTab === 'review' && (<>
           <RibbonGroup label={t('doc.proofing')}>
             <RibbonButton icon="🔍" label={t('doc.findReplace')} onClick={() => setSearchOpen(!searchOpen)} />
-            <RibbonButton icon={spellErrors.length > 0 ? '❗' : '✓'} label={spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {}} />
+            <RibbonButton icon={spellErrors.length > 0 ? '❗' : '✓'} label={spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {
+              if (spellErrors.length > 0) {
+                // Jump to first spell error
+                const v = viewRef.current; if (!v) return
+                const ss = getSearchState(v)
+                if (ss && ss.matches.length > 0) { nextMatch(v) }
+                else { alert(t('doc.spellNoErrors') || 'No spelling errors') }
+              } else {
+                // Trigger spell check
+                const v = viewRef.current; if (!v) return
+                if (onSpellCheckRef.current) onSpellCheckRef.current(v.doc.textContent)
+              }
+            }} title={spellErrors.length > 0 ? (t('doc.spellJumpTitle') || 'Jump to next spelling error') : (t('doc.spellRunTitle') || 'Run spell check')} />
             <RibbonButton icon="🌐" label={t('doc.translate')} onClick={() => {
               const text = viewRef.current?.state.doc.textContent || ''
               if (text) window.open(`https://translate.google.com/?text=${encodeURIComponent(text.slice(0, 500))}`, '_blank')
