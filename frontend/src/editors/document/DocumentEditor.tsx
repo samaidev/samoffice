@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { EditorState, NodeSelection } from 'prosemirror-state'
+import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
 import { schema } from './schema'
 import { keymap } from 'prosemirror-keymap'
@@ -89,7 +89,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const trackChangesRef = useRef(false)
   onChangeRef.current = onChange
   onSpellCheckRef.current = onSpellCheck
-  trackChangesRef.current = trackChanges
 
   const [activeMarks, setActiveMarks] = useState<Set<string>>(new Set())
   const [activeAttrs, setActiveAttrs] = useState<any>({})
@@ -110,6 +109,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const zoom = zoomProp ?? zoomInternal
   const setZoom = (z: number) => { const v = Math.max(50, Math.min(300, z)); setZoomInternal(v); if (onZoomChange) onZoomChange(v) }
   const [trackChanges, setTrackChanges] = useState(false)
+  trackChangesRef.current = trackChanges
   const [printPreview, setPrintPreview] = useState(false)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [inTable, setInTable] = useState(false)
@@ -323,7 +323,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const insertFormula = () => { const formula = prompt(t('doc.prompt.latex')); if (formula) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(`⟨formula:${formula}⟩`)))); v.focus() } }
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
-  const insertImage = () => { const input = window.document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { const f = input.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src: r.result as string }))); v.focus() }; r.readAsDataURL(f) }; input.click() }
+  const insertImage = () => { const input = window.window.document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { const f = input.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src: r.result as string }))); v.focus() }; r.readAsDataURL(f) }; input.click() }
   const insertLink = () => { const url = prompt('URL:'); if (url) { const v = viewRef.current; if (!v) return; const sel = v.state.selection; if (!sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.link.create({ href: url }))) } }
 
   useEffect(() => { if (viewRef.current) { const v = viewRef.current; v.dispatch(setSpellErrors(v.state.tr, spellErrors)); v.updateState(v.state); setTick(t => t + 1) } }, [spellErrors])
@@ -798,7 +798,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           {/* 窗口 */}
           <RibbonGroup label={t('doc.window')}>
-            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
+            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(window.document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
             <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindow(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
@@ -902,7 +902,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             if (headings.length === 0) return <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.noHeadings') || '无标题'}</div>
             return headings.map((h, i) => (
               <div key={i} className="text-xs cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5" style={{ marginLeft: (h.level - 1) * 12, color: 'var(--color-text-secondary)' }}
-                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(h.pos)) as any)); v.focus() } }}>
+                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(h.pos)))); v.focus() } }}>
                 {h.text || `(H${h.level})`}
               </div>
             ))
