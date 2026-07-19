@@ -165,11 +165,26 @@ export const schema = new Schema({
     // === 图片 ===
     image: {
       inline: false,
-      attrs: { src: { validate: 'string' }, alt: { default: '' }, title: { default: '' }, width: { default: 0 }, height: { default: 0 } },
+      attrs: {
+        src: { validate: 'string' },
+        alt: { default: '' },
+        title: { default: '' },
+        width: { default: 0 },
+        height: { default: 0 },
+        float: { default: '' },        // '' | 'left' | 'right' | 'center'
+        wrap: { default: true },       // text wrap around image
+      },
       group: 'block',
       toDOM: (node) => {
         const attrs: any = { src: node.attrs.src, alt: node.attrs.alt, title: node.attrs.title }
-        if (node.attrs.width) attrs.style = `width: ${node.attrs.width}px; max-width: 100%`
+        const styles: string[] = []
+        if (node.attrs.width) styles.push(`width: ${node.attrs.width}px`, 'max-width: 100%')
+        if (node.attrs.float === 'left') { styles.push('float: left', 'margin: 0 16px 8px 0') }
+        else if (node.attrs.float === 'right') { styles.push('float: right', 'margin: 0 0 8px 16px') }
+        else if (node.attrs.float === 'center') { styles.push('display: block', 'margin: 0 auto') }
+        if (styles.length) attrs.style = styles.join('; ')
+        attrs['data-float'] = node.attrs.float || 'none'
+        attrs['data-wrap'] = node.attrs.wrap ? 'true' : 'false'
         return ['img', attrs]
       },
       parseDOM: [{
@@ -180,21 +195,56 @@ export const schema = new Schema({
           title: dom.getAttribute('title') || '',
           width: parseInt(dom.style.width) || 0,
           height: parseInt(dom.style.height) || 0,
+          float: dom.getAttribute('data-float') === 'none' ? '' : (dom.getAttribute('data-float') || (dom.style.float as string) || ''),
+          wrap: dom.getAttribute('data-wrap') !== 'false',
         })
       }]
     },
 
-    // === 文本框（P2） ===
+    // === 文本框 / 形状（P2） ===
     text_box: {
       content: 'block+',
       group: 'block',
       atom: false,
-      attrs: { bgColor: { default: '#fef3c7' }, borderColor: { default: '#f59e0b' } },
-      toDOM: (node) => ['div', {
-        class: 'text-box',
-        style: `background: ${node.attrs.bgColor}; border: 2px solid ${node.attrs.borderColor}; border-radius: 8px; padding: 12px 16px; margin: 8px 0`
-      }, 0],
-      parseDOM: [{ tag: 'div.text-box' }],
+      attrs: {
+        bgColor: { default: '#fef3c7' },
+        borderColor: { default: '#f59e0b' },
+        shape: { default: 'rect' },     // rect | roundRect | ellipse | triangle | diamond | rightArrow | star5 | heart
+        width: { default: 0 },          // 0 = auto
+        float: { default: '' },         // '' | 'left' | 'right'
+      },
+      toDOM: (node) => {
+        const shape = node.attrs.shape || 'rect'
+        const baseStyle = `background: ${node.attrs.bgColor}; border: 2px solid ${node.attrs.borderColor}; padding: 12px 16px; margin: 8px 0; min-width: 120px; min-height: 80px;`
+        const shapeStyles: Record<string, string> = {
+          rect: 'border-radius: 0;',
+          roundRect: 'border-radius: 12px;',
+          ellipse: 'border-radius: 50%;',
+          triangle: 'border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%);',
+          diamond: 'border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);',
+          rightArrow: 'border-radius: 0; clip-path: polygon(0 40%, 60% 40%, 60% 15%, 100% 50%, 60% 85%, 60% 60%, 0 60%);',
+          star5: 'border-radius: 0; clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);',
+          heart: 'border-radius: 0; clip-path: path("M50,90 C35,70 0,50 0,25 C0,10 10,0 25,0 C35,0 45,5 50,15 C55,5 65,0 75,0 C90,0 100,10 100,25 C100,50 65,70 50,90 Z");',
+        }
+        const widthStyle = node.attrs.width > 0 ? ` width: ${node.attrs.width}px;` : ''
+        const floatStyle = node.attrs.float === 'left' ? ' float: left; margin-right: 16px;' :
+                           node.attrs.float === 'right' ? ' float: right; margin-left: 16px;' : ''
+        return ['div', {
+          class: 'text-box',
+          'data-shape': shape,
+          style: baseStyle + ' ' + (shapeStyles[shape] || '') + widthStyle + floatStyle,
+        }, 0]
+      },
+      parseDOM: [{
+        tag: 'div.text-box',
+        getAttrs: (dom: HTMLElement) => ({
+          bgColor: dom.style.backgroundColor || '#fef3c7',
+          borderColor: dom.style.borderColor || '#f59e0b',
+          shape: dom.getAttribute('data-shape') || 'rect',
+          width: parseInt(dom.style.width) || 0,
+          float: dom.style.float === 'left' ? 'left' : dom.style.float === 'right' ? 'right' : '',
+        })
+      }],
     },
 
     // === 脚注引用（P1） ===
