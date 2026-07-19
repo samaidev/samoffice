@@ -155,7 +155,19 @@ ${t('sample.md.more')}
     }
   }, [theme])
 
+  const [apiBaseUrl, setApiBaseUrl] = useState('')
+
   useEffect(() => {
+    // In Wails desktop mode, get the HTTP port from Go backend
+    const wailsApp = (window as any).go?.main?.App
+    if (wailsApp) {
+      // LocalBackend mode — need to get HTTP port for API calls
+      if (typeof wailsApp.HTTPPort === 'function') {
+        Promise.resolve(wailsApp.HTTPPort()).then((port: number) => {
+          if (port > 0) setApiBaseUrl(`http://127.0.0.1:${port}`)
+        }).catch(() => {})
+      }
+    }
     setBackend(createBackend())
     const checkMobile = () => setIsMobile(window.innerWidth <= 768)
     checkMobile()
@@ -215,7 +227,12 @@ ${t('sample.md.more')}
       setLoading(true)
       showToast(t('app.opening', { name: file.name }))
       try {
-        const result = await backend.uploadFile(file)
+        // Use HTTP API directly (works in both local and remote mode)
+        const form = new FormData()
+        form.append('file', file)
+        const r = await fetch(`${apiBaseUrl}/api/doc/open`, { method: 'POST', body: form })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const result = await r.json()
         setDoc(result.document)
         setFilePath(file.name)
         // Save to recent files
@@ -267,7 +284,7 @@ ${t('sample.md.more')}
           return { inline: [{ content: '' }] }
         })
       }
-      const resp = await fetch(endpoint, {
+      const resp = await fetch(`${apiBaseUrl}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(safeDoc)
@@ -525,8 +542,8 @@ ${t('sample.md.more')}
           </button>
         )}
 
-        {/* 窗口控制按钮 (最小化/最大化/关闭) — 整合到标题栏 */}
-        <div className="flex items-center gap-0.5 ml-2 flex-shrink-0">
+        {/* 窗口控制按钮 (最小化/最大化/关闭) — 右对齐到右上角 */}
+        <div className="flex items-center gap-0.5 flex-shrink-0" style={{ marginLeft: 'auto' }}>
           <button
             onClick={() => { try { (window as any).go.main.App.WindowMinimize() } catch {} }}
             className="w-8 h-8 rounded-md hover:bg-white/20 transition-all flex items-center justify-center"
