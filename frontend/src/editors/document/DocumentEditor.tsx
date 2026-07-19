@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { EditorState } from 'prosemirror-state'
+import { EditorState, NodeSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
 import { schema } from './schema'
 import { keymap } from 'prosemirror-keymap'
@@ -210,7 +210,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     for (let d = $from.depth; d > 0; d--) { if ($from.node(d).type.name === 'table') { isInTable = true; break } }
     setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c)
     // Track if cursor is on an image or shape node (for float/wrap buttons)
-    const selNode = state.selection.node
+    const sel = state.selection
+    const selNode = sel instanceof NodeSelection ? sel.node : null
     setActiveIsImage(!!selNode && selNode.type.name === 'image')
     setActiveIsShape(!!selNode && selNode.type.name === 'text_box')
     setTick(t => t + 1)
@@ -218,6 +219,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   const exec = (cmd: string) => {
     const v = viewRef.current; if (!v) return; const sel = v.state.selection
+    const selNode = sel instanceof NodeSelection ? sel.node : null
     switch (cmd) {
       case 'bold': toggleMark(schema.marks.bold)(v.state, v.dispatch); break
       case 'italic': toggleMark(schema.marks.italic)(v.state, v.dispatch); break
@@ -252,13 +254,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.text_box.create({ shape: shapeType }, cell)))
         break
       }
-      case 'imgFloatLeft': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'left' })); break }
-      case 'imgFloatRight': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'right' })); break }
-      case 'imgFloatCenter': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'center' })); break }
-      case 'imgFloatNone': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: '' })); break }
-      case 'imgToggleWrap': { const node = sel.node; if (node && node.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, wrap: !node.attrs.wrap })); break }
-      case 'shapeFloatLeft': { const node = sel.node; if (node && node.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'left' })); break }
-      case 'shapeFloatRight': { const node = sel.node; if (node && node.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...node.attrs, float: 'right' })); break }
+      case 'imgFloatLeft': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'left' })); break }
+      case 'imgFloatRight': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'right' })); break }
+      case 'imgFloatCenter': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'center' })); break }
+      case 'imgFloatNone': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: '' })); break }
+      case 'imgToggleWrap': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, wrap: !selNode.attrs.wrap })); break }
+      case 'shapeFloatLeft': { if (selNode && selNode.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'left' })); break }
+      case 'shapeFloatRight': { if (selNode && selNode.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'right' })); break }
       case 'footnote': { const text = prompt(t('doc.prompt.footnote')); if (text) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text }))); break }
       case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
       case 'comment': { const text = prompt(t('doc.prompt.comment')); if (text && !sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.comment_mark.create({ id: Date.now().toString(), author: 'User', text }))); break }
@@ -645,7 +647,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               } else {
                 // Trigger spell check
                 const v = viewRef.current; if (!v) return
-                if (onSpellCheckRef.current) onSpellCheckRef.current(v.doc.textContent)
+                if (onSpellCheckRef.current) onSpellCheckRef.current(v.state.doc.textContent)
               }
             }} title={spellErrors.length > 0 ? (t('doc.spellJumpTitle') || 'Jump to next spelling error') : (t('doc.spellRunTitle') || 'Run spell check')} />
             <RibbonButton icon="🌐" label={t('doc.translate')} onClick={() => {
