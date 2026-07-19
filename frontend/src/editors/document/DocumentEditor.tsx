@@ -581,7 +581,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                         v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, marks))))
                         v.focus(); setShowArtPanel(false)
                       }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 72 }}>
-                        <span style={{ fontSize: '18px', fontWeight: 700, ...(() => { try { return Object.fromEntries(p.preview.split(';').filter(s=>s.trim()).map(s => { const [k,v] = s.split(':').map(x=>x.trim()); return [k.replace('-webkit-','').replace('text-stroke','WebkitTextStroke').replace('text-fill-color','WebkitTextFillColor').replace('background-clip','WebkitBackgroundClip'), v] }) } catch { return {} } })() } }}>{p.name.charAt(0)}a</span>
+                        <span style={{ fontSize: '18px', fontWeight: 700, color: p.color, textShadow: p.style === 'shadow' ? '2px 2px 4px rgba(0,0,0,0.4)' : p.style === 'glow' ? '0 0 10px ' + p.color : p.style === '3d' ? '1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 6px rgba(0,0,0,0.3)' : 'none' }}>{p.name.charAt(0)}a</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{p.name}</span>
                       </button>
                     ))}
