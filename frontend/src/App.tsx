@@ -23,6 +23,26 @@ function base64ToBlob(b64: string, mime: string): Blob {
   return new Blob([bytes], { type: mime })
 }
 
+// 将 UDM 文档中的表格块（xlsx 每个 sheet 对应一个 Table）转换为表格编辑器所需的 sheet 数据
+function tablesToSheets(doc: any): { name: string; cells: Record<string, any> }[] | null {
+  const blocks: any[] = (doc && doc.blocks) || []
+  const tables = blocks.filter(b => b && (b.type === 'table' || (b.rows && Array.isArray(b.rows))))
+  if (!tables.length) return null
+  return tables.map((tb: any, i: number) => {
+    const cells: Record<string, any> = {}
+    ;(tb.rows || []).forEach((row: any[], r: number) => {
+      ;(row || []).forEach((cell: any, c: number) => {
+        const inline: any[] = (cell && cell.inline) || []
+        const text = inline.map((inl: any) => (inl ? (inl.content ?? inl.text ?? '') : '')).join('')
+        if (text || (cell && cell.isHeader)) {
+          cells[`${r}-${c}`] = { value: text, bold: !!(cell && cell.isHeader) }
+        }
+      })
+    })
+    return { name: (tb && tb.style) || `Sheet${i + 1}`, cells }
+  })
+}
+
 function App() {
   const { t, lang, setLang } = useI18n()
   // 全局 popup 自动定位：检测越界并翻转对齐
@@ -110,6 +130,35 @@ ${t('sample.md.more')}
   const [doc, setDoc] = useState<Document>(emptyDoc)
   const [spellErrors, setSpellErrors] = useState<SpellError[]>([])
   const [filePath, setFilePath] = useState('')
+  // 打开 xlsx/xls 时传入表格编辑器的初始 sheet 数据；epoch 用于强制重挂载以加载新文件
+  const [sheetInitial, setSheetInitial] = useState<{ name: string; cells: Record<string, any> }[] | null>(null)
+  const [sheetEpoch, setSheetEpoch] = useState(0)
+
+  // 统一处理打开结果：表格类文件切换到表格视图，其余切换到文档视图
+  const openResult = (result: any) => {
+    const path: string = result.path || ''
+    const isSheet = /\.(xlsx|xls|csv)$/i.test(path)
+    const sheets = isSheet ? tablesToSheets(result.document) : null
+    setFilePath(path)
+    try {
+      const name = path.split(/[\\/]/).pop() || path
+      const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
+      const filtered = recent.filter(r => r.path !== path)
+      filtered.unshift({ name, path })
+      localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
+    } catch {}
+    if (isSheet && sheets && sheets.length) {
+      setSheetInitial(sheets)
+      setSheetEpoch(e => e + 1)
+      setTab('spreadsheet')
+    } else {
+      setSheetInitial(null)
+      setDoc(result.document)
+      setTab('document')
+      try { triggerSpellCheck(JSON.stringify(result.document?.blocks || [])) } catch {}
+    }
+    showToast(t('app.opened', { name: path }))
+  }
   const [toast, setToast] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -226,17 +275,8 @@ ${t('sample.md.more')}
           const opener = (b && b.mode === 'local') ? b : { openFile: (pp: string) => app.OpenFile(pp) }
           const result = await opener.openFile(path)
           if (cancelled) return
-          setDoc(result.document)
-          setFilePath(result.path)
-          setTab('document')
-          const name = result.path.split(/[\\/]/).pop() || path
-          try {
-            const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
-            const filtered = recent.filter(r => r.path !== result.path)
-            filtered.unshift({ name, path: result.path })
-            localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
-          } catch {}
-          try { app.LogError?.('STARTUP_OPEN_OK: ' + result.path) } catch {}
+          openResult(result)
+          try { app.LogError?.('STARTUP_OPEN_OK: ' + (result.path || path)) } catch {}
           return
         } catch (e: any) {
           console.error('open startup file failed', e)
@@ -320,18 +360,7 @@ ${t('sample.md.more')}
       showToast(t('app.opening', { name: path }))
       try {
         const result = await backend.openFile(path)
-        setDoc(result.document)
-        setFilePath(result.path)
-        // 存入最近文件
-        try {
-          const name = result.path.split(/[\\/]/).pop() || path
-          const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
-          const filtered = recent.filter(r => r.path !== result.path)
-          filtered.unshift({ name, path: result.path })
-          localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
-        } catch {}
-        showToast(t('app.opened', { name: path }))
-        triggerSpellCheck(JSON.stringify(result.document.blocks))
+        openResult(result)
       } catch (e: any) {
         showToast(t('app.openFailed', { msg: e.message }))
       } finally {
@@ -826,7 +855,7 @@ ${t('sample.md.more')}
               backend={backend ?? undefined}
             />
           )}
-          {tab === 'spreadsheet' && <SpreadsheetEditor title={t('app.sheet1')} />}
+          {tab === 'spreadsheet' && <SpreadsheetEditor key={sheetEpoch} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} />}
           {tab === 'slide' && <SlideEditor />}
           {tab === 'markdown' && (
             <MarkdownHtmlEditor

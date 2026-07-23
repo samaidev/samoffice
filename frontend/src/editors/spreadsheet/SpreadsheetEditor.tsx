@@ -12,7 +12,13 @@ interface Cell {
   mergeRange?: { rowSpan: number; colSpan: number }
   hiddenBy?: string
 }
-interface Props { initialRows?: number; initialCols?: number; title?: string }
+interface Props {
+  initialRows?: number
+  initialCols?: number
+  title?: string
+  // 外部传入的工作簿数据（如打开 xlsx 时），每个元素对应一个 sheet
+  initialSheets?: { name: string; cells: Record<string, Cell> }[]
+}
 
 type RibbonTab = 'home' | 'insert' | 'data' | 'view'
 
@@ -118,16 +124,47 @@ function ChartSVG({ type, data, labels }: { type: string; data: number[]; labels
   return null
 }
 
-export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }: Props) {
+export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, initialSheets }: Props) {
   const { t, tf } = useI18n()
-  const [rows, setRows] = useState(initialRows)
-  const [cols, setCols] = useState(initialCols)
-  const [data, setData] = useState<Record<string, Cell>>({})
+
+  // 初始 sheet 标签：有外部数据时按传入的 sheet 名，否则给默认两个空 sheet
+  const initialSheetList = initialSheets && initialSheets.length
+    ? initialSheets.map((s, i) => ({ id: i + 1, name: s.name, active: i === 0 }))
+    : [
+        { id: 1, name: title || t('app.sheet1'), active: true },
+        { id: 2, name: 'Sheet2', active: false },
+      ]
+
+  // 根据所有 sheet 的数据估算初始行列数，避免切换大 sheet 时被裁切
+  const initialDims = (() => {
+    if (!initialSheets || !initialSheets.length) return { r: initialRows, c: initialCols }
+    let maxR = 0, maxC = 0
+    for (const sh of initialSheets) {
+      for (const key of Object.keys(sh.cells || {})) {
+        const [r, c] = key.split('-').map(Number)
+        if (r > maxR) maxR = r
+        if (c > maxC) maxC = c
+      }
+    }
+    return { r: Math.max(initialRows, maxR + 3), c: Math.max(initialCols, maxC + 3) }
+  })()
+
+  const [rows, setRows] = useState(initialDims.r)
+  const [cols, setCols] = useState(initialDims.c)
+  const [data, setData] = useState<Record<string, Cell>>(initialSheets && initialSheets[0]?.cells ? initialSheets[0].cells : {})
+  // 每个 sheet 独立保存单元格数据，切换不丢
+  const [sheetData, setSheetData] = useState<Record<number, Record<string, Cell>>>(() => {
+    const init: Record<number, Record<string, Cell>> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => { init[i + 1] = s.cells || {} })
+    return init
+  })
   const [active, setActive] = useState<{ r: number; c: number }>({ r: 0, c: 0 })
-  const [sheets, setSheets] = useState([
-    { id: 1, name: title || t('app.sheet1'), active: true },
-    { id: 2, name: 'Sheet2', active: false },
-  ])
+  const [sheets, setSheets] = useState(initialSheetList)
+  const activeId = sheets.find(s => s.active)?.id ?? 1
+  // 编辑后把当前 sheet 内容同步回 sheetData，保证切换 sheet 不丢数据
+  useEffect(() => {
+    setSheetData(sd => ({ ...sd, [activeId]: data }))
+  }, [data, activeId])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [frozen, setFrozen] = useState(false)
@@ -251,8 +288,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title }:
     setShowChartPanel(false)
   }
   const removeChart = (id: number) => setCharts(cs => cs.filter(c => c.id !== id))
-  const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
-  const switchSheet = (id: number) => setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
+  const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheetData(sd => ({ ...sd, [activeId]: data, [id]: {} })); setData({}); setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
+  const switchSheet = (id: number) => { setSheetData(sd => ({ ...sd, [activeId]: data })); setData(sheetData[id] || {}); setSheets(s => s.map(x => ({ ...x, active: x.id === id }))) }
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
   const activeSheet = sheets.find(s => s.active) || sheets[0]
 
