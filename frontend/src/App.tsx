@@ -9,9 +9,19 @@ import { PdfViewer } from './editors/pdf/PdfViewer'
 import { AboutPage } from './components/AboutPage'
 import { useI18n } from './i18n'
 import { usePopupAutoFlip } from './hooks/usePopupAutoFlip'
+import { Dropdown } from './components/Dropdown'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
+
+// base64 → Blob，用于本地模式读取 PDF 等二进制文件后在 WebView 中预览
+function base64ToBlob(b64: string, mime: string): Blob {
+  const bin = atob(b64)
+  const len = bin.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i)
+  return new Blob([bytes], { type: mime })
+}
 
 function App() {
   const { t, lang, setLang } = useI18n()
@@ -175,14 +185,73 @@ ${t('sample.md.more')}
   }
 
   useEffect(() => {
+    try { (window as any).go?.main?.App?.LogError?.('MOUNT_OK') } catch {}
     // Try to get port immediately, then retry after 1s if not ready
     getApiBase()
     const timer = setTimeout(() => getApiBase(), 1000)
-    setBackend(createBackend())
+    const b = createBackend()
+    setBackend(b)
+    // 右键"打开方式"/命令行传入的文件：启动时直接打开该文件而非默认模板。
+    let cancelled = false
+    // 规范化启动参数路径：处理 Windows "打开方式"可能传入的 file:// / file:/// / file:\\ 形式，
+    // 以及首尾引号；并把 /C:/xxx 还原为 C:/xxx（否则 openFile 读不到文件会静默回退到模板）。
+    const normalizeStartupPath = (raw: string): string => {
+      let p = String(raw).trim().replace(/^["']|["']$/g, '')
+      const m = p.match(/^file:\/\/+\/?(.+)$/i) || p.match(/^file:\\+(.+)$/i)
+      if (m) p = m[1]
+      p = p.replace(/^\/([A-Za-z]:[\\/])/, '$1')
+      return p.trim()
+    }
+    const tryOpenStartupFile = async () => {
+      // 注意：此处不依赖 createBackend() 判定出的 b.mode，因为 Wails 绑定在挂载瞬间可能
+      // 尚未注入，会导致 b 被误判为 RemoteBackend 而跳过本逻辑。改为直接探测 window.go.main.App。
+      for (let attempt = 0; attempt < 20; attempt++) {
+        if (cancelled) return
+        const app = (window as any).go?.main?.App
+        if (!app || !app.GetStartupArgs) {
+          await new Promise(r => setTimeout(r, 150))
+          continue
+        }
+        let rawArgs: string[] = []
+        try { rawArgs = await app.GetStartupArgs() } catch { rawArgs = [] }
+        try { app.LogError?.('STARTUP_ARGS: ' + JSON.stringify(rawArgs)) } catch {}
+        const raw = (rawArgs || [])[0]
+        const path = raw ? normalizeStartupPath(raw) : ''
+        if (!path) {
+          // 绑定就绪但确实没有文件参数：保留默认模板
+          return
+        }
+        try {
+          // 优先用 LocalBackend；若 createBackend 误判为 remote，则直接用 app 绑定打开
+          const opener = (b && b.mode === 'local') ? b : { openFile: (pp: string) => app.OpenFile(pp) }
+          const result = await opener.openFile(path)
+          if (cancelled) return
+          setDoc(result.document)
+          setFilePath(result.path)
+          setTab('document')
+          const name = result.path.split(/[\\/]/).pop() || path
+          try {
+            const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
+            const filtered = recent.filter(r => r.path !== result.path)
+            filtered.unshift({ name, path: result.path })
+            localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
+          } catch {}
+          try { app.LogError?.('STARTUP_OPEN_OK: ' + result.path) } catch {}
+          return
+        } catch (e: any) {
+          console.error('open startup file failed', e)
+          try { app.LogError?.('STARTUP_OPEN_FAIL: ' + path + ' :: ' + (e?.message || String(e))) } catch {}
+          showToast(t('app.openFailed', { msg: (e?.message || String(e)) + '  (' + path + ')' }))
+          return
+        }
+      }
+      try { (window as any).go?.main?.App?.LogError?.('STARTUP_NO_BINDING') } catch {}
+    }
+    tryOpenStartupFile()
     const checkMobile = () => setIsMobile(window.innerWidth <= 768)
     checkMobile()
     window.addEventListener('resize', checkMobile)
-    return () => { clearTimeout(timer); window.removeEventListener('resize', checkMobile) }
+    return () => { cancelled = true; clearTimeout(timer); window.removeEventListener('resize', checkMobile) }
   }, [])
 
   // 字数统计
@@ -215,9 +284,66 @@ ${t('sample.md.more')}
   const handleOpenFile = async () => {
     if (!backend) return
     setMenuOpen(false)
+
+    // 本地模式：使用系统原生“打开”对话框，拿到真实磁盘路径（用于后续“保存”覆盖）
+    if (backend.mode === 'local') {
+      let path = ''
+      try {
+        path = await backend.openFileDialog()
+      } catch (e: any) {
+        showToast(t('app.openFailed', { msg: e.message }))
+        return
+      }
+      if (!path) return // 用户取消
+
+      // PDF 直接读取字节并切换到 PDF Tab
+      if (path.toLowerCase().endsWith('.pdf')) {
+        setLoading(true)
+        showToast(t('app.opening', { name: path }))
+        try {
+          const b64 = await backend.readFile(path)
+          const blob = base64ToBlob(b64, 'application/pdf')
+          const url = URL.createObjectURL(blob)
+          setTab('pdf')
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('pdf-open', { detail: { url, name: path } }))
+          }, 300)
+        } catch (e: any) {
+          showToast(t('app.openFailed', { msg: e.message }))
+        } finally {
+          setLoading(false)
+        }
+        return
+      }
+
+      setLoading(true)
+      showToast(t('app.opening', { name: path }))
+      try {
+        const result = await backend.openFile(path)
+        setDoc(result.document)
+        setFilePath(result.path)
+        // 存入最近文件
+        try {
+          const name = result.path.split(/[\\/]/).pop() || path
+          const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
+          const filtered = recent.filter(r => r.path !== result.path)
+          filtered.unshift({ name, path: result.path })
+          localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
+        } catch {}
+        showToast(t('app.opened', { name: path }))
+        triggerSpellCheck(JSON.stringify(result.document.blocks))
+      } catch (e: any) {
+        showToast(t('app.openFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    // 远程模式：HTML 文件输入 → 上传
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.docx,.md,.markdown,.xlsx,.pptx,.pdf'
+    input.accept = '.docx,.doc,.md,.markdown,.xlsx,.pptx,.pdf'
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) return
@@ -246,6 +372,7 @@ ${t('sample.md.more')}
         const result = await r.json()
         setDoc(result.document)
         setFilePath(file.name)
+        setTab('document')
         // Save to recent files
         try {
           const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
@@ -264,7 +391,8 @@ ${t('sample.md.more')}
     input.click()
   }
 
-  const handleSave = async (format: 'docx' | 'pdf' | 'doc' | 'wps') => {
+  // 远程模式：沿用原下载逻辑（浏览器下载，带文件名）
+  const handleDownload = async (format: 'docx' | 'doc' | 'wps' | 'pdf') => {
     if (!backend) return
     setMenuOpen(false)
     setLoading(true)
@@ -330,6 +458,69 @@ ${t('sample.md.more')}
     }
   }
 
+  // 保存/另存为
+  // format 为空表示“快速保存”（Ctrl+S）：若已有真实磁盘路径则直接覆盖，否则弹“另存为”。
+  // forceDialog=true 时总是弹系统“保存/另存为”对话框（可输入文件名），用于菜单的“另存为/导出”。
+  // 本地模式写盘；远程模式回退为浏览器下载。
+  const handleSave = async (
+    format: 'docx' | 'doc' | 'wps' | 'pdf' | '',
+    opts: { forceDialog?: boolean } = {}
+  ) => {
+    if (!backend) return
+    setMenuOpen(false)
+
+    const isLocal = backend.mode === 'local'
+    if (!isLocal) {
+      return handleDownload((format || 'docx') as 'docx' | 'doc' | 'wps' | 'pdf')
+    }
+
+    // 本地模式：写盘
+    const fmt = (format ||
+      (filePath.toLowerCase().endsWith('.docx') ? 'docx' :
+       filePath.toLowerCase().endsWith('.doc') ? 'doc' :
+       filePath.toLowerCase().endsWith('.wps') ? 'wps' :
+       filePath.toLowerCase().endsWith('.pdf') ? 'pdf' : 'docx')) as 'docx' | 'doc' | 'wps' | 'pdf'
+
+    // 仅当用户通过本地“打开”得到真实磁盘路径时（含盘符），才允许“快速保存”覆盖
+    const hasRealPath = /^[A-Za-z]:[\\/]/.test(filePath)
+    let target = filePath
+    if (opts.forceDialog || !hasRealPath) {
+      const baseName = filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || ''
+      const defaultName = doc.meta?.title || baseName || t('app.untitled')
+      target = await backend.saveFileDialog(defaultName, fmt)
+      if (!target) return // 用户取消
+    }
+
+    setLoading(true)
+    showToast(t('app.saving'))
+    try {
+      await backend.writeDocument(target, fmt, doc)
+      setFilePath(target)
+      const name = target.split(/[\\/]/).pop() || target
+      showToast(t('app.saved', { name }))
+    } catch (e: any) {
+      showToast(t('app.saveFailed', { msg: e.message }))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 全局快捷键：Ctrl/Cmd+S 保存，Ctrl/Cmd+O 打开（放在函数声明之后，避免 TDZ）
+  useEffect(() => {
+    const onShortcut = (e: KeyboardEvent) => {
+      const k = (e.key || '').toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && k === 's') {
+        e.preventDefault()
+        handleSave('', { forceDialog: false })
+      } else if ((e.ctrlKey || e.metaKey) && k === 'o') {
+        e.preventDefault()
+        handleOpenFile()
+      }
+    }
+    window.addEventListener('keydown', onShortcut)
+    return () => window.removeEventListener('keydown', onShortcut)
+  }, [handleSave, handleOpenFile])
+
   const handleInsertImage = () => {
     setMenuOpen(false)
     const input = document.createElement('input')
@@ -376,9 +567,12 @@ ${t('sample.md.more')}
     { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
   ]
   if (tab === 'document') {
-    fileItems.push({ icon: '📄', label: t('app.saveDocx') || 'Save as DOCX', onClick: () => handleSave('docx'), shortcut: 'Ctrl+S' })
-    fileItems.push({ icon: '📃', label: t('app.saveDoc') || 'Save as DOC', onClick: () => handleSave('doc') })
-    fileItems.push({ icon: '📋', label: t('app.saveWps') || 'Save as WPS', onClick: () => handleSave('wps') })
+    // “保存”：直接覆盖当前文件（Ctrl+S）；无真实路径时自动转“另存为”
+    fileItems.push({ icon: '💾', label: t('app.save'), onClick: () => handleSave('', { forceDialog: false }), shortcut: 'Ctrl+S' })
+    // “另存为”：始终弹系统对话框，可输入文件名
+    fileItems.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx', { forceDialog: true }) })
+    fileItems.push({ icon: '📃', label: t('app.saveDoc'), onClick: () => handleSave('doc', { forceDialog: true }) })
+    fileItems.push({ icon: '📋', label: t('app.saveWps'), onClick: () => handleSave('wps', { forceDialog: true }) })
   }
   // Recent files
   const recentFiles: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
@@ -389,7 +583,7 @@ ${t('sample.md.more')}
     })
   }
   if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
-    fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf'), shortcut: 'Ctrl+P' })
+    fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf', { forceDialog: true }), shortcut: 'Ctrl+P' })
   }
 
   return (
@@ -528,15 +722,16 @@ ${t('sample.md.more')}
         </button>
 
         {/* 语言下拉 */}
-        <select
+        <Dropdown
+          className="text-xs rounded-md px-1 py-1"
+          style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', height: 26, ['--wails-draggable' as any]: 'no-drag' }}
           value={lang}
-          onChange={(e) => setLang(e.target.value as 'en' | 'zh')}
-          className="text-xs rounded-md px-1 py-1 flex-shrink-0"
-          style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', '--wails-draggable': 'no-drag' as any } as any}
-        >
-          <option value="zh" style={{ color: '#000' }}>中文</option>
-          <option value="en" style={{ color: '#000' }}>EN</option>
-        </select>
+          onChange={v => setLang(v as 'en' | 'zh')}
+          options={[
+            { label: '中文', value: 'zh' },
+            { label: 'EN', value: 'en' },
+          ]}
+        />
 
         {/* 模式标识 */}
         <div
@@ -628,6 +823,7 @@ ${t('sample.md.more')}
               onSpellCheck={triggerSpellCheck}
               zoom={docZoom}
               onZoomChange={setDocZoom}
+              backend={backend ?? undefined}
             />
           )}
           {tab === 'spreadsheet' && <SpreadsheetEditor title={t('app.sheet1')} />}

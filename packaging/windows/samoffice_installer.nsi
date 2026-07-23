@@ -91,6 +91,18 @@ Section "SamOffice Desktop (GUI)" SecDesktop
     WriteRegDWORD HKLM "${APP_UNINSTKEY}" "NoModify" 1
     WriteRegDWORD HKLM "${APP_UNINSTKEY}" "NoRepair" 1
 
+    ; 文件关联：双击 / 右键"打开方式" 用 SamOffice 打开 Office 文档
+    !define PROGID "SamOffice.File"
+    WriteRegStr HKLM "Software\Classes\${PROGID}" "" "SamOffice Document"
+    WriteRegStr HKLM "Software\Classes\${PROGID}\DefaultIcon" "" "$INSTDIR\samoffice.exe,0"
+    WriteRegStr HKLM "Software\Classes\${PROGID}\shell\open\command" "" '"$INSTDIR\samoffice.exe" "%1"'
+    WriteRegStr HKLM "Software\Classes\.docx" "" "${PROGID}"
+    WriteRegStr HKLM "Software\Classes\.doc"  "" "${PROGID}"
+    WriteRegStr HKLM "Software\Classes\.xlsx" "" "${PROGID}"
+    WriteRegStr HKLM "Software\Classes\.pptx" "" "${PROGID}"
+    WriteRegStr HKLM "Software\Classes\.pdf"  "" "${PROGID}"
+    WriteRegStr HKLM "Software\Classes\.md"   "" "${PROGID}"
+
     ; Uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -140,6 +152,15 @@ Section "Uninstall"
     Delete "$INSTDIR\README.txt"
     Delete "$INSTDIR\LICENSE.txt"
     Delete "$INSTDIR\uninstall.exe"
+    ; 清理文件关联（仅删除我们写入的值）
+    !define PROGID "SamOffice.File"
+    DeleteRegKey HKLM "Software\Classes\${PROGID}"
+    DeleteRegValue HKLM "Software\Classes\.docx" ""
+    DeleteRegValue HKLM "Software\Classes\.doc"  ""
+    DeleteRegValue HKLM "Software\Classes\.xlsx" ""
+    DeleteRegValue HKLM "Software\Classes\.pptx" ""
+    DeleteRegValue HKLM "Software\Classes\.pdf"  ""
+    DeleteRegValue HKLM "Software\Classes\.md"   ""
     RMDir /r "$INSTDIR"
 
     ; Delete shortcuts

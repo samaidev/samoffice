@@ -71,68 +71,92 @@ func (h *Handler) openDocument(c *gin.Context) {
         })
 }
 
+// RenderToBytes 把 UDM 文档渲染为指定格式，返回字节与规范扩展名。
+// format 支持: docx / doc / wps / pdf。供 HTTP 端点与本地写盘（Wails 绑定）共用。
+func RenderToBytes(doc *core.Document, format string) ([]byte, string, error) {
+	switch strings.ToLower(format) {
+	case "docx", "wps":
+		r := docx.New()
+		data, err := r.Render(doc)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, "." + strings.ToLower(format), nil
+	case "doc":
+		// .doc 为二进制 OLE 格式，这里用 Word/WPS 均可打开的 RTF 包裹。
+		return []byte(generateRTF(doc)), ".doc", nil
+	case "pdf":
+		r := pdf.New()
+		data, err := r.Render(doc)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, ".pdf", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
 // saveDocument 接收 UDM JSON 保存为 docx 文件并返回
 func (h *Handler) saveDocument(c *gin.Context) {
-        var doc core.Document
-        if err := c.ShouldBindJSON(&doc); err != nil {
-                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-                return
-        }
+	var doc core.Document
+	if err := c.ShouldBindJSON(&doc); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-        r := docx.New()
-        data, err := r.Render(&doc)
-        if err != nil {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-                return
-        }
+	data, _, err := RenderToBytes(&doc, "docx")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
-        filename := doc.Meta.Title
-        if filename == "" {
-                filename = "untitled"
-        }
-        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
-        c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
+	filename := doc.Meta.Title
+	if filename == "" {
+		filename = "untitled"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
 }
 
 // saveDocumentDoc saves as .doc (legacy Word format).
 // .doc is a binary OLE format. We generate a minimal RTF wrapper that Word
 // and WPS can both open when saved with .doc extension.
 func (h *Handler) saveDocumentDoc(c *gin.Context) {
-        var doc core.Document
-        if err := c.ShouldBindJSON(&doc); err != nil {
-                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-                return
-        }
-        // Generate RTF (Rich Text Format) — opens in Word/WPS as .doc
-        rtf := generateRTF(&doc)
-        filename := doc.Meta.Title
-        if filename == "" {
-                filename = "untitled"
-        }
-        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.doc"`, filename))
-        c.Data(http.StatusOK, "application/msword", []byte(rtf))
+	var doc core.Document
+	if err := c.ShouldBindJSON(&doc); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// Generate RTF (Rich Text Format) — opens in Word/WPS as .doc
+	data, _, _ := RenderToBytes(&doc, "doc")
+	filename := doc.Meta.Title
+	if filename == "" {
+		filename = "untitled"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.doc"`, filename))
+	c.Data(http.StatusOK, "application/msword", data)
 }
 
 // saveDocumentWps saves as .wps format (WPS Office native).
 // WPS can open .docx, so we reuse the docx renderer with .wps extension.
 func (h *Handler) saveDocumentWps(c *gin.Context) {
-        var doc core.Document
-        if err := c.ShouldBindJSON(&doc); err != nil {
-                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-                return
-        }
-        r := docx.New()
-        data, err := r.Render(&doc)
-        if err != nil {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-                return
-        }
-        filename := doc.Meta.Title
-        if filename == "" {
-                filename = "untitled"
-        }
-        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.wps"`, filename))
-        c.Data(http.StatusOK, "application/vnd.ms-works", data)
+	var doc core.Document
+	if err := c.ShouldBindJSON(&doc); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	data, _, err := RenderToBytes(&doc, "wps")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	filename := doc.Meta.Title
+	if filename == "" {
+		filename = "untitled"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.wps"`, filename))
+	c.Data(http.StatusOK, "application/vnd.ms-works", data)
 }
 
 // generateRTF converts UDM to a minimal RTF string that Word/WPS can open
@@ -227,25 +251,24 @@ func generateRTF(doc *core.Document) string {
 
 // exportPDF 接收 UDM JSON 导出为 PDF 文件
 func (h *Handler) exportPDF(c *gin.Context) {
-        var doc core.Document
-        if err := c.ShouldBindJSON(&doc); err != nil {
-                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-                return
-        }
+	var doc core.Document
+	if err := c.ShouldBindJSON(&doc); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-        r := pdf.New()
-        data, err := r.Render(&doc)
-        if err != nil {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-                return
-        }
+	data, _, err := RenderToBytes(&doc, "pdf")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
-        filename := doc.Meta.Title
-        if filename == "" {
-                filename = "untitled"
-        }
-        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
-        c.Data(http.StatusOK, "application/pdf", data)
+	filename := doc.Meta.Title
+	if filename == "" {
+		filename = "untitled"
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
+	c.Data(http.StatusOK, "application/pdf", data)
 }
 
 // spellCheck GET /api/dict/check?text=xxx&lang=en

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useI18n } from '../i18n'
+import { Dropdown } from './Dropdown'
 
 interface PrintDialogProps {
   open: boolean
@@ -190,18 +191,19 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 {/* 打印机 */}
                 <div>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.printer')}</label>
-                  <select
-                    data-testid="print-printer"
+                  <Dropdown
+                    testId="print-printer"
+                    className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                     value={settings.printer}
-                    onChange={e => update('printer', e.target.value)}
-                    className="w-full text-sm rounded-md px-3 py-2"
-                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                  >
-                    <option value="">{t('print.defaultPrinter')}</option>
-                    <option value="pdf">Save as PDF</option>
-                    <option value="microsoft">Microsoft Print to PDF</option>
-                    <option value="onenote">OneNote</option>
-                  </select>
+                    onChange={v => update('printer', v)}
+                    options={[
+                      { label: t('print.defaultPrinter'), value: '' },
+                      { label: 'Save as PDF', value: 'pdf' },
+                      { label: 'Microsoft Print to PDF', value: 'microsoft' },
+                      { label: 'OneNote', value: 'onenote' },
+                    ]}
+                  />
                 </div>
 
                 {/* 页范围 */}
@@ -284,17 +286,18 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 {/* 颜色 */}
                 <div>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.color')}</label>
-                  <select
+                  <Dropdown
+                    testId="print-color"
+                    className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                     value={settings.color}
-                    onChange={e => update('color', e.target.value as any)}
-                    data-testid="print-color"
-                    className="w-full text-sm rounded-md px-3 py-2"
-                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                  >
-                    <option value="color">{t('print.colorMode')}</option>
-                    <option value="grayscale">{t('print.grayscale')}</option>
-                    <option value="blackwhite">{t('print.blackwhite')}</option>
-                  </select>
+                    onChange={v => update('color', v as any)}
+                    options={[
+                      { label: t('print.colorMode'), value: 'color' },
+                      { label: t('print.grayscale'), value: 'grayscale' },
+                      { label: t('print.blackwhite'), value: 'blackwhite' },
+                    ]}
+                  />
                 </div>
               </div>
             )}
@@ -305,19 +308,20 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 {/* 纸张大小 */}
                 <div>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.paperSize')}</label>
-                  <select
+                  <Dropdown
+                    testId="print-paper-size"
+                    className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                     value={settings.paperSize}
-                    onChange={e => update('paperSize', e.target.value as any)}
-                    data-testid="print-paper-size"
-                    className="w-full text-sm rounded-md px-3 py-2"
-                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                  >
-                    <option value="A4">A4 (210×297mm)</option>
-                    <option value="A3">A3 (297×420mm)</option>
-                    <option value="A5">A5 (148×210mm)</option>
-                    <option value="Letter">Letter (216×279mm)</option>
-                    <option value="Legal">Legal (216×356mm)</option>
-                  </select>
+                    onChange={v => update('paperSize', v as any)}
+                    options={[
+                      { label: 'A4 (210×297mm)', value: 'A4' },
+                      { label: 'A3 (297×420mm)', value: 'A3' },
+                      { label: 'A5 (148×210mm)', value: 'A5' },
+                      { label: 'Letter (216×279mm)', value: 'Letter' },
+                      { label: 'Legal (216×356mm)', value: 'Legal' },
+                    ]}
+                  />
                 </div>
 
                 {/* 页边距 */}
@@ -384,32 +388,34 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 {/* 双面 */}
                 <div>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.duplex')}</label>
-                  <select
+                  <Dropdown
+                    testId="print-duplex"
+                    className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                     value={settings.duplex}
-                    onChange={e => update('duplex', e.target.value as any)}
-                    data-testid="print-duplex"
-                    className="w-full text-sm rounded-md px-3 py-2"
-                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                  >
-                    <option value="none">{t('print.duplexNone')}</option>
-                    <option value="long">{t('print.duplexLong')}</option>
-                    <option value="short">{t('print.duplexShort')}</option>
-                  </select>
+                    onChange={v => update('duplex', v as any)}
+                    options={[
+                      { label: t('print.duplexNone'), value: 'none' },
+                      { label: t('print.duplexLong'), value: 'long' },
+                      { label: t('print.duplexShort'), value: 'short' },
+                    ]}
+                  />
                 </div>
 
                 {/* 装订 */}
                 <div>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.binding')}</label>
-                  <select
+                  <Dropdown
+                    className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                     value={settings.binding}
-                    onChange={e => update('binding', e.target.value as any)}
-                    className="w-full text-sm rounded-md px-3 py-2"
-                    style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                  >
-                    <option value="none">{t('print.bindingNone')}</option>
-                    <option value="left">{t('print.bindingLeft')}</option>
-                    <option value="top">{t('print.bindingTop')}</option>
-                  </select>
+                    onChange={v => update('binding', v as any)}
+                    options={[
+                      { label: t('print.bindingNone'), value: 'none' },
+                      { label: t('print.bindingLeft'), value: 'left' },
+                      { label: t('print.bindingTop'), value: 'top' },
+                    ]}
+                  />
                 </div>
               </div>
             )}
@@ -421,18 +427,19 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 <>
                   <div>
                     <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.pptContent')}</label>
-                    <select
+                    <Dropdown
+                      testId="print-ppt-content"
+                      className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                       value={settings.pptContent}
-                      onChange={e => update('pptContent', e.target.value as any)}
-                      data-testid="print-ppt-content"
-                      className="w-full text-sm rounded-md px-3 py-2"
-                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                    >
-                      <option value="full">{t('print.pptFull')}</option>
-                      <option value="handout">{t('print.pptHandout')}</option>
-                      <option value="notes">{t('print.pptNotes')}</option>
-                      <option value="outline">{t('print.pptOutline')}</option>
-                    </select>
+                      onChange={v => update('pptContent', v as any)}
+                      options={[
+                        { label: t('print.pptFull'), value: 'full' },
+                        { label: t('print.pptHandout'), value: 'handout' },
+                        { label: t('print.pptNotes'), value: 'notes' },
+                        { label: t('print.pptOutline'), value: 'outline' },
+                      ]}
+                    />
                   </div>
                   {settings.pptContent === 'handout' && (
                     <div>
@@ -471,28 +478,30 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                   </label>
                   <div>
                     <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.excelComments')}</label>
-                    <select
+                    <Dropdown
+                      className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                       value={settings.printComments}
-                      onChange={e => update('printComments', e.target.value as any)}
-                      className="w-full text-sm rounded-md px-3 py-2"
-                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                    >
-                      <option value="none">{t('print.excelCommentsNone')}</option>
-                      <option value="end">{t('print.excelCommentsEnd')}</option>
-                      <option value="sheet">{t('print.excelCommentsSheet')}</option>
-                    </select>
+                      onChange={v => update('printComments', v as any)}
+                      options={[
+                        { label: t('print.excelCommentsNone'), value: 'none' },
+                        { label: t('print.excelCommentsEnd'), value: 'end' },
+                        { label: t('print.excelCommentsSheet'), value: 'sheet' },
+                      ]}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.excelPageOrder')}</label>
-                    <select
+                    <Dropdown
+                      className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                       value={settings.pageOrder}
-                      onChange={e => update('pageOrder', e.target.value as any)}
-                      className="w-full text-sm rounded-md px-3 py-2"
-                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                    >
-                      <option value="downRight">{t('print.excelOrderDown')}</option>
-                      <option value="rightDown">{t('print.excelOrderRight')}</option>
-                    </select>
+                      onChange={v => update('pageOrder', v as any)}
+                      options={[
+                        { label: t('print.excelOrderDown'), value: 'downRight' },
+                        { label: t('print.excelOrderRight'), value: 'rightDown' },
+                      ]}
+                    />
                   </div>
                 </>
               )}
@@ -500,17 +509,18 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
               {/* 质量 (通用) */}
               <div>
                 <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.quality')}</label>
-                <select
+                <Dropdown
+                  className="w-full text-sm rounded-md px-3 py-2 ribbon-input"
+                  style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 38 }}
                   value={settings.quality}
-                  onChange={e => update('quality', e.target.value as any)}
-                  className="w-full text-sm rounded-md px-3 py-2"
-                  style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                >
-                  <option value="draft">{t('print.qualityDraft')}</option>
-                  <option value="normal">{t('print.qualityNormal')}</option>
-                  <option value="high">{t('print.qualityHigh')}</option>
-                  <option value="photo">{t('print.qualityPhoto')}</option>
-                </select>
+                  onChange={v => update('quality', v as any)}
+                  options={[
+                    { label: t('print.qualityDraft'), value: 'draft' },
+                    { label: t('print.qualityNormal'), value: 'normal' },
+                    { label: t('print.qualityHigh'), value: 'high' },
+                    { label: t('print.qualityPhoto'), value: 'photo' },
+                  ]}
+                />
               </div>
             </div>
           </div>

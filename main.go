@@ -4,27 +4,30 @@
 package main
 
 import (
-        "context"
-        "embed"
-        "fmt"
-        "io/fs"
-        "log"
-        "net"
-        "net/http"
-        "os"
-        "path/filepath"
+	"context"
+	"embed"
+	"encoding/base64"
+	"fmt"
+	"io/fs"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
-        "github.com/gin-gonic/gin"
-        "github.com/wailsapp/wails/v2"
-        "github.com/wailsapp/wails/v2/pkg/options"
-        "github.com/wailsapp/wails/v2/pkg/options/assetserver"
-        "github.com/wailsapp/wails/v2/pkg/runtime"
-        "github.com/zai/samoffice/internal/dict"
-        "github.com/zai/samoffice/internal/dict/hunspell"
-        "github.com/zai/samoffice/internal/dict/userdict"
-        "github.com/zai/samoffice/internal/parser"
-        "github.com/zai/samoffice/internal/server/api"
-        "go.uber.org/zap"
+	"github.com/gin-gonic/gin"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/zai/samoffice/internal/core"
+	"github.com/zai/samoffice/internal/dict"
+	"github.com/zai/samoffice/internal/dict/hunspell"
+	"github.com/zai/samoffice/internal/dict/userdict"
+	"github.com/zai/samoffice/internal/parser"
+	"github.com/zai/samoffice/internal/server/api"
+	"go.uber.org/zap"
 )
 
 //go:embed all:frontend/dist
@@ -32,12 +35,13 @@ var frontendAssets embed.FS
 
 // App 是 Wails 应用上下文
 type App struct {
-        ctx       context.Context
-        registry  *parser.Registry
-        dictMgr   *dict.Manager
-        userStore *userdict.Store
-        httpPort  int
-        logger    *zap.Logger
+	ctx       context.Context
+	registry  *parser.Registry
+	dictMgr   *dict.Manager
+	userStore *userdict.Store
+	httpPort  int
+	logger    *zap.Logger
+	startupArgs []string
 }
 
 // WindowMinimize minimizes the window
@@ -132,6 +136,109 @@ func (a *App) LearnWord(word, lang, source string) error {
 // HTTPPort 返回内嵌 HTTP 服务端口
 func (a *App) HTTPPort() int { return a.httpPort }
 
+// GetStartupArgs 返回启动时传入的命令行参数（右键"打开方式"/命令行打开的文件路径）。
+// 仅返回看起来像文档的路径（以常见扩展名结尾），其余忽略。
+func (a *App) GetStartupArgs() []string {
+	out := []string{}
+	for _, arg := range a.startupArgs {
+		lower := strings.ToLower(arg)
+		if strings.HasSuffix(lower, ".docx") || strings.HasSuffix(lower, ".doc") ||
+			strings.HasSuffix(lower, ".xlsx") || strings.HasSuffix(lower, ".pptx") ||
+			strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
+			strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".sam") ||
+			strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") {
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+// === 本地文件对话框与写盘（Wails Binding）===
+
+// OpenFileDialog 弹出系统“打开文件”对话框，返回选中文件的完整路径；用户取消则返回空字符串。
+func (a *App) OpenFileDialog() (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("app not started")
+	}
+	filters := []runtime.FileFilter{
+		{DisplayName: "Office 文档 (*.docx;*.md;*.markdown;*.xlsx;*.pptx)", Pattern: "*.docx;*.md;*.markdown;*.xlsx;*.pptx"},
+		{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
+	}
+	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "打开文件",
+		Filters: filters,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
+// ReadFile 读取本地文件并以 base64 返回（供前端构造 blob，例如 PDF 预览）。
+func (a *App) ReadFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+// LogError 接收前端上报的错误/状态，写入 boot.log 便于排障（诊断用）。
+func (a *App) LogError(msg string) {
+	f, err := os.OpenFile("c:/Users/Administrator/samoffice/boot.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, msg)
+}
+
+// SaveFileDialog 弹出系统“保存/另存为”对话框，返回用户选择的完整路径；用户取消则返回空字符串。
+func (a *App) SaveFileDialog(defaultName, format string) (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("app not started")
+	}
+	var filters []runtime.FileFilter
+	switch strings.ToLower(format) {
+	case "docx":
+		filters = []runtime.FileFilter{{DisplayName: "Word 文档 (*.docx)", Pattern: "*.docx"}}
+	case "doc":
+		filters = []runtime.FileFilter{{DisplayName: "Word 97-2003 (*.doc)", Pattern: "*.doc"}}
+	case "wps":
+		filters = []runtime.FileFilter{{DisplayName: "WPS 文档 (*.wps)", Pattern: "*.wps"}}
+	case "pdf":
+		filters = []runtime.FileFilter{{DisplayName: "PDF 文件 (*.pdf)", Pattern: "*.pdf"}}
+	default:
+		filters = []runtime.FileFilter{{DisplayName: "所有文件 (*.*)", Pattern: "*.*"}}
+	}
+	name := defaultName
+	if name == "" {
+		name = "untitled"
+	}
+	result, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: name + "." + strings.ToLower(format),
+		Title:           "另存为",
+		Filters:         filters,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
+// WriteDocument 把 UDM 文档渲染为指定格式并写入磁盘。
+// format 支持: docx / doc / wps / pdf。若 path 缺少扩展名会自动补全。
+func (a *App) WriteDocument(path, format string, document core.Document) error {
+	data, ext, err := api.RenderToBytes(&document, format)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(filepath.Ext(path), ext) {
+		path = path + ext
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 // === 内嵌 HTTP 服务 ===
 func (a *App) startHTTPServer() {
         gin.SetMode(gin.ReleaseMode)
@@ -180,6 +287,10 @@ func main() {
                 BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
                 OnStartup: func(ctx context.Context) {
                         app.ctx = ctx
+                        // 捕获右键"打开方式"/命令行传入的文件路径（os.Args[1:]）
+                        if len(os.Args) > 1 {
+                                app.startupArgs = append(app.startupArgs, os.Args[1:]...)
+                        }
                 },
                 Bind: []interface{}{app},
         })

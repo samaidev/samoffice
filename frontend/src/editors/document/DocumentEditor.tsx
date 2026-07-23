@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
 import { schema } from './schema'
@@ -7,13 +7,16 @@ import { baseKeymap, toggleMark, setBlockType, wrapIn } from 'prosemirror-comman
 import { history, undo, redo } from 'prosemirror-history'
 import { inputRules, wrappingInputRule, textblockTypeInputRule } from 'prosemirror-inputrules'
 import { udmToProseMirror, proseMirrorToUDM } from './convert'
+import { BUILTIN_STYLES, BUILTIN_STYLE_MAP, AppStyle, StyleFormat, styleDefToFormat, outlineLevelFromName } from './styles'
 import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign } from './tableCommands'
 import { columnResizing, tableEditing, CellSelection } from 'prosemirror-tables'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
-import type { Document, SpellError } from '../../types/udm'
+import { Dropdown } from '../../components/Dropdown'
+import { Ruler } from '../../components/Ruler'
+import type { Document, SpellError, PageNumberConfig, Backend } from '../../types/udm'
 
 interface Props {
   document: Document
@@ -22,6 +25,7 @@ interface Props {
   onSpellCheck?: (text: string) => void
   zoom?: number
   onZoomChange?: (z: number) => void
+  backend?: Backend
 }
 
 type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
@@ -29,6 +33,10 @@ type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
 const LINE_HEIGHTS = [{ name: '1.0', value: '1.0' }, { name: '1.5', value: '1.5' }, { name: '1.75', value: '1.75' }, { name: '2.0', value: '2.0' }, { name: '固定28pt (公文)', value: '28pt' }, { name: '固定30pt', value: '30pt' }]
 const COLORS = ['#000000','#374151','#6B7280','#9CA3AF','#EF4444','#F59E0B','#10B981','#3B82F6','#6366F1','#8B5CF6','#EC4899','#6B7280']
 const HL_COLORS = ['#fef08a','#bbf7d0','#bfdbfe','#fbcfe8','#fed7aa','#e9d5ff']
+
+function readBool(key: string): boolean {
+  try { return localStorage.getItem(key) === '1' } catch { return false }
+}
 
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
@@ -52,7 +60,237 @@ function RibbonGroup({ label, children }: any) {
   )
 }
 
-export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange }: Props) {
+function StyleEditor({ name, initial, onCancel, onSave }: { name: string; initial: StyleFormat; onCancel: () => void; onSave: (f: StyleFormat) => void }) {
+  const { t } = useI18n()
+  const [fontSize, setFontSize] = useState(initial.fontSize || '')
+  const [bold, setBold] = useState(!!initial.bold)
+  const [italic, setItalic] = useState(!!initial.italic)
+  const [color, setColor] = useState(initial.color || '#000000')
+  const [align, setAlign] = useState(initial.align || 'left')
+  const save = () => {
+    const f: StyleFormat = { bold, italic, color, align }
+    if (fontSize) f.fontSize = fontSize
+    onSave(f)
+  }
+  return (
+    <div className="style-editor">
+      <div className="style-editor-title">{name}</div>
+      <label className="style-field"><span>{t('doc.fontSize')}</span><input value={fontSize} onChange={(e) => setFontSize(e.target.value)} placeholder="15px" /></label>
+      <label className="style-field"><span>{t('doc.bold')}</span><input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /></label>
+      <label className="style-field"><span>{t('doc.italic')}</span><input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /></label>
+      <label className="style-field"><span>{t('doc.color')}</span><input type="color" value={color} onChange={(e) => setColor(e.target.value)} /></label>
+      <label className="style-field"><span>{t('doc.align')}</span>
+        <Dropdown
+          className="ribbon-input"
+          style={{ width: 140, height: 26 }}
+          value={align}
+          onChange={v => setAlign(v)}
+          options={[
+            { label: t('doc.alignLeft'), value: 'left' },
+            { label: t('doc.alignCenter'), value: 'center' },
+            { label: t('doc.alignRight'), value: 'right' },
+            { label: t('doc.alignJustify'), value: 'justify' },
+          ]}
+        />
+      </label>
+      <div className="style-editor-actions">
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>{t('doc.cancel')}</button>
+        <button className="btn btn-primary btn-sm" onClick={save}>{t('doc.save')}</button>
+      </div>
+    </div>
+  )
+}
+
+const PAGE_NUM_FORMATS = [
+  { label: '第 {n} 页', value: '第 {n} 页' },
+  { label: '第 {n} / 共 {total} 页', value: '第 {n} / 共 {total} 页' },
+  { label: '{n}', value: '{n}' },
+  { label: 'Page {n} of {total}', value: 'Page {n} of {total}' },
+  { label: '— {n} —', value: '— {n} —' },
+]
+
+function PageNumberDialog({ value, onClose, onSave }: {
+  value: PageNumberConfig | null
+  onClose: () => void
+  onSave: (pn: PageNumberConfig) => void
+}) {
+  const { t } = useI18n()
+  const [format, setFormat] = useState(value?.format || '第 {n} 页')
+  const [align, setAlign] = useState<('left' | 'center' | 'right')>((value?.align as any) || 'center')
+  const [fontSize, setFontSize] = useState(value?.fontSize ? String(value.fontSize / 2) : '9')
+  const [color, setColor] = useState(value?.fontColor || '#000000')
+  const [bold, setBold] = useState(!!value?.bold)
+  const [italic, setItalic] = useState(!!value?.italic)
+  const [firstDiff, setFirstDiff] = useState(!!value?.firstPageDifferent)
+  const [enabled, setEnabled] = useState(!!value?.enabled)
+  const save = () => {
+    onSave({
+      enabled, format, align,
+      fontSize: Math.round(parseFloat(fontSize) * 2) || 18,
+      fontColor: color, bold, italic, firstPageDifferent: firstDiff,
+    })
+  }
+  const preview = (format || '第 {n} 页').replace('{n}', '1').replace('{total}', '3')
+  return (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 420 }}>
+        <div className="modal-title">{t('doc.pageNumSettings')}</div>
+        <div className="pn-form">
+          <label className="pn-field"><span>{t('doc.enabled')}</span><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /></label>
+          <label className="pn-field"><span>{t('doc.pnFormat')}</span>
+            <Dropdown
+              className="ribbon-input"
+              style={{ width: 180, height: 26 }}
+              value={format}
+              onChange={v => setFormat(v)}
+              options={PAGE_NUM_FORMATS.map(f => ({ label: f.label, value: f.value }))}
+            />
+          </label>
+          <label className="pn-field"><span>{t('doc.align')}</span>
+            <Dropdown
+              className="ribbon-input"
+              style={{ width: 140, height: 26 }}
+              value={align}
+              onChange={v => setAlign(v as any)}
+              options={[
+                { label: t('doc.alignLeft'), value: 'left' },
+                { label: t('doc.alignCenter'), value: 'center' },
+                { label: t('doc.alignRight'), value: 'right' },
+              ]}
+            />
+          </label>
+          <label className="pn-field"><span>{t('doc.fontSize')}</span><input value={fontSize} onChange={(e) => setFontSize(e.target.value)} placeholder="9" /></label>
+          <label className="pn-field"><span>{t('doc.color')}</span><input type="color" value={color} onChange={(e) => setColor(e.target.value)} /></label>
+          <label className="pn-field"><span>{t('doc.bold')}</span><input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /></label>
+          <label className="pn-field"><span>{t('doc.italic')}</span><input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /></label>
+          <label className="pn-field"><span>{t('doc.firstPageDifferent')}</span><input type="checkbox" checked={firstDiff} onChange={(e) => setFirstDiff(e.target.checked)} /></label>
+          <div className="pn-preview" style={{
+            textAlign: align, fontWeight: bold ? 700 : 400, fontStyle: italic ? 'italic' : 'normal',
+            fontSize: `${fontSize}px`, color,
+          }}>{preview}</div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>{t('doc.cancel')}</button>
+          <button className="btn btn-primary btn-sm" onClick={save}>{t('doc.save')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ParagraphDialog({ value, onClose, onSave }: {
+  value: any
+  onClose: () => void
+  onSave: (d: any) => void
+}) {
+  const { t } = useI18n()
+  const [d, setD] = useState<any>(value || {})
+  const set = (k: string, v: any) => setD((prev: any) => ({ ...prev, [k]: v }))
+  const lineNeedsValue = d.lineKind === 'multiple' || d.lineKind === 'exact' || d.lineKind === 'atLeast'
+  const outlineOpts = [{ v: 0, l: t('doc.paraBody') }]
+  for (let i = 1; i <= 9; i++) outlineOpts.push({ v: i, l: `${t('doc.outlineLevel')} ${i}` })
+  return (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 460 }}>
+        <div className="modal-title">{t('doc.paraDialog')}</div>
+        <div className="pn-form">
+          <fieldset className="para-fieldset">
+            <legend>{t('doc.paraIndent')}</legend>
+            <label className="pn-field"><span>{t('doc.paraLeft')}</span><input type="number" value={d.indentLeft || 0} onChange={e => set('indentLeft', e.target.value)} style={{ width: 70 }} /><span className="pn-unit">{t('doc.paraPx')}</span></label>
+            <label className="pn-field"><span>{t('doc.paraRight')}</span><input type="number" value={d.indentRight || 0} onChange={e => set('indentRight', e.target.value)} style={{ width: 70 }} /><span className="pn-unit">{t('doc.paraPx')}</span></label>
+            <label className="pn-field"><span>{t('doc.paraSpecial')}</span>
+              <Dropdown
+                className="ribbon-input"
+                style={{ width: 140, height: 26 }}
+                value={d.special || 'none'}
+                onChange={v => set('special', v)}
+                options={[
+                  { label: t('doc.paraNone'), value: 'none' },
+                  { label: t('doc.paraFirstLine'), value: 'firstLine' },
+                  { label: t('doc.paraHanging'), value: 'hanging' },
+                ]}
+              />
+            </label>
+            {d.special && d.special !== 'none' && (
+              <label className="pn-field"><span>{t('doc.paraBy')}</span><input type="number" value={d.specialBy || 0} onChange={e => set('specialBy', e.target.value)} style={{ width: 70 }} /><span className="pn-unit">{t('doc.paraPx')}</span></label>
+            )}
+          </fieldset>
+          <fieldset className="para-fieldset">
+            <legend>{t('doc.paraSpacing')}</legend>
+            <label className="pn-field"><span>{t('doc.paraBefore')}</span><input type="number" value={d.spaceBefore || 0} onChange={e => set('spaceBefore', e.target.value)} style={{ width: 70 }} /><span className="pn-unit">{t('doc.paraPt')}</span></label>
+            <label className="pn-field"><span>{t('doc.paraAfter')}</span><input type="number" value={d.spaceAfter || 0} onChange={e => set('spaceAfter', e.target.value)} style={{ width: 70 }} /><span className="pn-unit">{t('doc.paraPt')}</span></label>
+            <label className="pn-field"><span>{t('doc.paraLine')}</span>
+              <Dropdown
+                className="ribbon-input"
+                style={{ width: 140, height: 26 }}
+                value={d.lineKind || 'single'}
+                onChange={v => set('lineKind', v)}
+                options={[
+                  { label: t('doc.paraLineSingle'), value: 'single' },
+                  { label: t('doc.paraLine15'), value: '1.5' },
+                  { label: t('doc.paraLineDouble'), value: 'double' },
+                  { label: t('doc.paraLineMultiple'), value: 'multiple' },
+                  { label: t('doc.paraLineExact'), value: 'exact' },
+                  { label: t('doc.paraLineAtLeast'), value: 'atLeast' },
+                ]}
+              />
+            </label>
+            {lineNeedsValue && (
+              <label className="pn-field"><span>{t('doc.paraLineValue')}</span><input type="number" step="0.5" value={d.lineValue || 1} onChange={e => set('lineValue', e.target.value)} style={{ width: 70 }} /><span className="pn-unit">{d.lineKind === 'multiple' ? '' : t('doc.paraPt')}</span></label>
+            )}
+          </fieldset>
+          <fieldset className="para-fieldset">
+            <legend>{t('doc.paraBreak')}</legend>
+            <label className="pn-field"><span>{t('doc.paraKeepLines')}</span><input type="checkbox" checked={!!d.keepLines} onChange={e => set('keepLines', e.target.checked)} /></label>
+            <label className="pn-field"><span>{t('doc.paraKeepWithNext')}</span><input type="checkbox" checked={!!d.keepWithNext} onChange={e => set('keepWithNext', e.target.checked)} /></label>
+            <label className="pn-field"><span>{t('doc.paraPageBreakBefore')}</span><input type="checkbox" checked={!!d.pageBreakBefore} onChange={e => set('pageBreakBefore', e.target.checked)} /></label>
+            <label className="pn-field"><span>{t('doc.paraOutline')}</span>
+              <Dropdown
+                className="ribbon-input"
+                style={{ width: 160, height: 26 }}
+                value={String(d.outlineLevel || 0)}
+                onChange={v => set('outlineLevel', Number(v))}
+                options={outlineOpts.map(o => ({ label: o.l, value: String(o.v) }))}
+              />
+            </label>
+          </fieldset>
+        </div>
+        <div className="modal-actions">
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>{t('doc.paraCancel')}</button>
+          <button className="btn btn-primary btn-sm" onClick={() => onSave(d)}>{t('doc.paraOk')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// 从 PM 文档中提取批注数据（对齐 MS Word 右侧批注栏：批注锚点在正文，批注卡片显示在右侧对应位置）
+function extractComments(doc: any): { id: string; author: string; text: string; pos: number }[] {
+  const out: { id: string; author: string; text: string; pos: number }[] = []
+  doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'comment_mark' && node.attrs && node.attrs.text) {
+      out.push({ id: node.attrs.id, author: node.attrs.author || 'User', text: node.attrs.text, pos })
+    }
+  })
+  return out
+}
+
+// 从 PM 文档中提取脚注数据（脚注区在编辑器内隐藏渲染，这里仅取数据用于页底脚注区展示/编辑）
+function extractFootnotes(doc: any): { num: number; text: string; pos: number }[] {
+  const out: { num: number; text: string; pos: number }[] = []
+  doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'footnote_section') {
+      node.forEach((child: any, offset: number) => {
+        if (child.type.name === 'footnote_item') {
+          out.push({ num: child.attrs.num, text: child.textContent || '', pos: pos + 1 + offset })
+        }
+      })
+    }
+  })
+  return out
+}
+
+export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange, backend }: Props) {
   const { t } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 加载 (Chrome/Edge 支持), 回退到常用字体列表
@@ -84,11 +322,89 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  // 页底脚注区数据（从 PM 文档提取，避免在正文中渲染脚注）
+  const [footnotes, setFootnotes] = useState<{ num: number; text: string; pos: number }[]>([])
+  // 右侧批注栏数据（对齐 MS Word：批注锚点在正文，卡片显示在右侧对应位置）
+  const [comments, setComments] = useState<{ id: string; author: string; text: string; pos: number }[]>([])
+  const [activeComment, setActiveComment] = useState<string | null>(null)
+
+  const editFootnote = (f: { num: number; text: string; pos: number }) => {
+    const v = viewRef.current
+    if (!v) return
+    const newText = prompt(t('doc.prompt.footnote') || '编辑脚注内容：', f.text)
+    if (newText === null) return
+    const node = v.state.doc.nodeAt(f.pos)
+    if (!node || node.type.name !== 'footnote_item') return
+    const item = schema.nodes.footnote_item.create({ num: f.num }, newText ? schema.text(newText) : null)
+    v.dispatch(v.state.tr.replaceWith(f.pos, f.pos + node.nodeSize, item))
+  }
+  const deleteFootnote = (f: { num: number; text: string; pos: number }) => {
+    const v = viewRef.current
+    if (!v) return
+    const node = v.state.doc.nodeAt(f.pos)
+    if (!node || node.type.name !== 'footnote_item') return
+    v.dispatch(v.state.tr.delete(f.pos, f.pos + node.nodeSize))
+  }
+  // 批注卡片编辑态：正在编辑的批注 id（null 表示只读查看）
+  const [editingComment, setEditingComment] = useState<string | null>(null)
+  const editComment = (id: string) => {
+    const v = viewRef.current; if (!v) return
+    const idx = comments.findIndex(c => c.id === id); if (idx < 0) return
+    const cur = comments[idx]
+    const newText = prompt(t('doc.prompt.comment') || '编辑批注：', cur.text)
+    if (newText === null) return
+    const node = v.state.doc.nodeAt(cur.pos)
+    if (!node || node.type.name !== 'comment_mark') return
+    const item = schema.nodes.comment_mark.create({ id: cur.id, author: cur.author, text: newText })
+    const tr = v.state.tr.replaceWith(cur.pos, cur.pos + node.nodeSize, item)
+    v.dispatch(tr); v.focus()
+    try { setComments(extractComments(v.state.doc)) } catch (e) { /* ignore */ }
+  }
+  const deleteComment = (id: string) => {
+    const v = viewRef.current; if (!v) return
+    const cur = comments.find(c => c.id === id); if (!cur) return
+    const node = v.state.doc.nodeAt(cur.pos)
+    if (!node || node.type.name !== 'comment_mark') return
+    v.dispatch(v.state.tr.delete(cur.pos, cur.pos + node.nodeSize))
+    setActiveComment(null)
+    try { setComments(extractComments(v.state.doc)) } catch (e) { /* ignore */ }
+  }
+  const goToComment = (id: string) => {
+    const v = viewRef.current; if (!v) return
+    const cur = comments.find(c => c.id === id); if (!cur) return
+    const node = v.state.doc.nodeAt(cur.pos)
+    if (!node || node.type.name !== 'comment_mark') return
+    setActiveComment(id)
+    const from = cur.pos
+    const to = cur.pos + node.nodeSize
+    v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to)))
+    v.focus()
+  }
   const onChangeRef = useRef(onChange)
   const onSpellCheckRef = useRef(onSpellCheck)
   const trackChangesRef = useRef(false)
+  // 记录本组件最近一次通过 onChange 向外发出的 UDM 引用，
+  // 用于区分「外部加载了新文档」与「自身编辑回流」，避免把用户编辑覆盖回旧内容。
+  const lastEmittedRef = useRef<any>(null)
+  const [pageNumber, setPageNumber] = useState<PageNumberConfig | null>(() => {
+    const pn = (document as any)?.pageNumber
+    return pn ? { ...pn } : null
+  })
+  const pageNumberRef = useRef<PageNumberConfig | null>(pageNumber)
+  pageNumberRef.current = pageNumber
   onChangeRef.current = onChange
   onSpellCheckRef.current = onSpellCheck
+
+  const [styles, setStyles] = useState<Record<string, StyleFormat>>(() => {
+    const init: Record<string, StyleFormat> = {}
+    for (const s of (document.styles || [])) init[s.name] = styleDefToFormat(s.props)
+    return init
+  })
+  const [showStyles, setShowStyles] = useState(false)
+  const [styleSearch, setStyleSearch] = useState('')
+  const [editingStyle, setEditingStyle] = useState<string | null>(null)
+  const stylesRef = useRef(styles); stylesRef.current = styles
+
 
   const [activeMarks, setActiveMarks] = useState<Set<string>>(new Set())
   const [activeAttrs, setActiveAttrs] = useState<any>({})
@@ -105,9 +421,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [replaceQuery, setReplaceQuery] = useState('')
   const [matchCount, setMatchCount] = useState(0)
   const [activeMatch, setActiveMatch] = useState(-1)
-  const [zoomInternal, setZoomInternal] = useState(100)
+  const [zoomInternal, setZoomInternal] = useState<number>(() => {
+    try { const z = parseInt(localStorage.getItem('samoffice_zoom') || '100', 10); return isNaN(z) ? 100 : Math.max(50, Math.min(300, z)) } catch { return 100 }
+  })
   const zoom = zoomProp ?? zoomInternal
-  const setZoom = (z: number) => { const v = Math.max(50, Math.min(300, z)); setZoomInternal(v); if (onZoomChange) onZoomChange(v) }
+  const setZoom = (z: number) => {
+    const v = Math.max(50, Math.min(300, z))
+    setZoomInternal(v)
+    try { localStorage.setItem('samoffice_zoom', String(v)) } catch { /* ignore */ }
+    if (onZoomChange) onZoomChange(v)
+  }
   const [trackChanges, setTrackChanges] = useState(false)
   trackChangesRef.current = trackChanges
   const [printPreview, setPrintPreview] = useState(false)
@@ -157,22 +480,49 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup || showFormulaPanel || showSymbolPanel
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
-  const [bgColor, setBgColor] = useState('#ffffff')
-  // View 标签页: 标尺 / 网格线 / 导航窗口 / 拆分窗口 / 护眼模式
-  const [showRuler, setShowRuler] = useState(false)
-  const [showGridlines, setShowGridlines] = useState(false)
-  const [showNavPane, setShowNavPane] = useState(false)
-  const [splitWindow, setSplitWindow] = useState(false)
-  const [eyeCareMode, setEyeCareMode] = useState(false)
-  // 页码计数器（避免每次点击都追加）
-  const [pageNumInserted, setPageNumInserted] = useState(false)
+  const [bgColor, setBgColor] = useState<string>(() => {
+    try { return localStorage.getItem('samoffice_bg_color') || '#ffffff' } catch { return '#ffffff' }
+  })
+  const setBgColorPersist = (c: string) => { try { localStorage.setItem('samoffice_bg_color', c) } catch { /* ignore */ }; setBgColor(c) }
+  // View 标签页: 标尺 / 网格线 / 导航窗口 / 拆分窗口 / 护眼模式（均持久化到 localStorage）
+  const [showRuler, setShowRuler] = useState<boolean>(() => readBool('samoffice_show_ruler'))
+  const [showGridlines, setShowGridlines] = useState<boolean>(() => readBool('samoffice_show_gridlines'))
+  const [showNavPane, setShowNavPane] = useState<boolean>(() => readBool('samoffice_show_nav'))
+  const [splitWindow, setSplitWindow] = useState<boolean>(() => readBool('samoffice_split_win'))
+  const persistBool = (key: string, v: boolean) => { try { localStorage.setItem(key, v ? '1' : '0') } catch { /* ignore */ } }
+  const setShowRulerPersist = (v: boolean) => { persistBool('samoffice_show_ruler', v); setShowRuler(v) }
+  const setShowGridlinesPersist = (v: boolean) => { persistBool('samoffice_show_gridlines', v); setShowGridlines(v) }
+  const setShowNavPanePersist = (v: boolean) => { persistBool('samoffice_show_nav', v); setShowNavPane(v) }
+  const setSplitWindowPersist = (v: boolean) => { persistBool('samoffice_split_win', v); setSplitWindow(v) }
+  const [eyeCareMode, setEyeCareMode] = useState<boolean>(() => {
+    try { return localStorage.getItem('samoffice_eye_care') === '1' } catch { return false }
+  })
+  const setEyeCarePersist = (ec: boolean) => { try { localStorage.setItem('samoffice_eye_care', ec ? '1' : '0') } catch { /* ignore */ }; setEyeCareMode(ec) }
+  const [showPageNumDialog, setShowPageNumDialog] = useState(false)
+  const [showParaDialog, setShowParaDialog] = useState(false)
+  const [paraDraft, setParaDraft] = useState<any>({})
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [compareDiff, setCompareDiff] = useState<{ type: 'add' | 'del' | 'eq'; text: string }[]>([])
+  const [protectedMode, setProtectedMode] = useState(false)
+  const protectPwdRef = useRef<string>('')
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
-  const [showMarks, setShowMarks] = useState(false)
+  const [showMarks, setShowMarks] = useState<boolean>(() => readBool('samoffice_show_marks'))
+  const setShowMarksPersist = (v: boolean) => { persistBool('samoffice_show_marks', v); setShowMarks(v) }
   // 文档级设置 (页眉/页脚/页边距/分栏/行号)
   const [docHeader, setDocHeader] = useState('')
-  const [docFooter, setDocFooter] = useState('')
-  const [docMargins, setDocMargins] = useState({ top: 64, bottom: 64, left: 80, right: 80 })
+  const [docMargins, setDocMargins] = useState({ top: 96, bottom: 96, left: 96, right: 96 })
+  const [pageSize, setPageSize] = useState<'A4'|'A3'|'A5'|'B5'|'Letter'|'Legal'>('A4')
+  const [orientation, setOrientation] = useState<'portrait'|'landscape'>('portrait')
   const [docColumns, setDocColumns] = useState(1)
+  // 纸张物理尺寸（mm）→ 屏幕像素（96dpi: 1mm ≈ 3.7795px）
+  const PAGE_SIZES_MM: Record<string, [number, number]> = {
+    A4: [210, 297], A3: [297, 420], A5: [148, 210], B5: [176, 250],
+    Letter: [215.9, 279.4], Legal: [215.9, 355.6],
+  }
+  const mmToPx = (mm: number) => Math.round(mm * 96 / 25.4)
+  const [pwMm, phMm] = PAGE_SIZES_MM[pageSize] || PAGE_SIZES_MM.A4
+  const pageWidthPx = mmToPx(orientation === 'landscape' ? phMm : pwMm)
+  const pageHeightPx = mmToPx(orientation === 'landscape' ? pwMm : phMm)
   const [docLineNumbers, setDocLineNumbers] = useState(false)
 
   useEffect(() => {
@@ -282,24 +632,74 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           }
           view.dispatch = wrappedDispatch
           return { dom }
-        }
-      },
-      dispatchTransaction(tr) {
-        // Track changes: if enabled and this is a text insertion/deletion, add track marks
-        if (trackChangesRef.current && tr.docChanged) {
-          tr.steps.forEach((step: any) => {
-            if (step.from !== undefined && step.to !== undefined) {
-              const inserted = (step as any).slice?.openStart !== undefined
-              if (inserted) {
-                tr.addMark(step.from, step.to || step.from, schema.marks.insert_track.create({ author: 'User' }))
+        },
+        math: (node) => {
+          const dom = window.document.createElement(node.attrs.inline ? 'span' : 'div')
+          dom.className = 'sam-math' + (node.attrs.inline ? ' sam-math-inline' : '')
+          const render = () => {
+            const latex = node.attrs.latex || ''
+            if ((window as any).katex && latex) {
+              try {
+                ;(window as any).katex.render(latex, dom, { displayMode: !node.attrs.inline, throwOnError: false })
+                dom.classList.remove('sam-math-error')
+              } catch {
+                dom.textContent = latex
+                dom.classList.add('sam-math-error')
               }
+            } else {
+              dom.textContent = latex ? `⟨formula:${latex}⟩` : '公式'
+            }
+            dom.setAttribute('data-latex', latex)
+            dom.title = '双击编辑公式'
+            dom.style.cursor = 'pointer'
+          }
+          render()
+          dom.addEventListener('dblclick', (e) => {
+            e.preventDefault()
+            const cur = node.attrs.latex || ''
+            const input = prompt('编辑 LaTeX 公式：', cur)
+            if (input === null) return
+            const v = viewRef.current
+            if (!v) return
+            const pos = v.state.doc.resolve(v.state.selection.from)
+            let mathPos = -1
+            v.state.doc.descendants((n, p) => {
+              if (n.type.name === 'math' && n.attrs.latex === cur && mathPos < 0) { mathPos = p; return false }
+              return true
+            })
+            if (mathPos >= 0) {
+              const newNode = schema.nodes.math.create({ latex: input, inline: node.attrs.inline })
+              v.dispatch(v.state.tr.replaceWith(mathPos, mathPos + 1, newNode))
             }
           })
-        }
+          return {
+            dom,
+            stopEvent: () => true,
+            ignoreMutation: () => true,
+          }
+        },
+        footnote_section: () => {
+          // 脚注区在编辑器正文内隐藏渲染，实际显示在页面底部的脚注区
+          const dom = window.document.createElement('div')
+          dom.style.display = 'none'
+          return { dom, contentDOM: dom }
+        },
+      },
+      dispatchTransaction(tr) {
         const ns = view.state.apply(tr); view.updateState(ns)
-        if (onChangeRef.current) onChangeRef.current(proseMirrorToUDM(ns.doc))
+        if (onChangeRef.current) {
+          const udm = proseMirrorToUDM(ns.doc, { pageNumber: pageNumberRef.current ?? undefined })
+          const overrides = stylesRef.current
+          if (Object.keys(overrides).length) {
+            ;(udm as any).styles = Object.keys(overrides).map((name) => ({ name, type: 'paragraph', props: overrides[name] }))
+          }
+          lastEmittedRef.current = udm
+          onChangeRef.current(udm)
+        }
         if (onSpellCheckRef.current) onSpellCheckRef.current(ns.doc.textContent)
         updateActiveState(ns)
+        try { setFootnotes(extractFootnotes(ns.doc)) } catch (e) { /* ignore */ }
+        try { setComments(extractComments(ns.doc)) } catch (e) { /* ignore */ }
         const ss = getSearchState(view); if (ss) { setMatchCount(ss.matches.length); setActiveMatch(ss.activeIndex) }
       },
       handleDOMEvents: {
@@ -312,17 +712,105 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           return false
         },
         contextmenu: (view: any, e: any) => { e.preventDefault(); setShowContextMenu(true); setContextMenuPos({ x: e.clientX, y: e.clientY }); return false },
-      }
+        click: (_view: any, event: any) => {
+          const el = event.target as HTMLElement
+          const link = el?.closest?.('.sam-toc-link') as HTMLElement | null
+          if (link) {
+            const tid = link.getAttribute('data-target')
+            if (tid) { jumpToHeading(tid); return true }
+          }
+          const cm = el?.closest?.('.comment-mark') as HTMLElement | null
+          if (cm) {
+            const cid = cm.getAttribute('data-comment-id')
+            if (cid) {
+              setActiveComment(cid)
+              const card = window.document.getElementById(`comment-card-${cid}`)
+              if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+            }
+          }
+          return false
+        },
+      },
+      // === 修订追踪：输入时标记插入、删除时保留为删除线 ===
+      handleTextInput(view, from, to, text) {
+        if (!trackChangesRef.current) return false
+        const { schema, tr } = view.state
+        const insertMark = schema.marks.insert_track
+        if (from !== to) {
+          // 替换选区：原选区标记为删除，新文本标记为插入
+          const hasDelete = view.state.doc.rangeHasMark(from, to, schema.marks.delete_track)
+          if (!hasDelete) tr.addMark(from, to, schema.marks.delete_track.create({ author: 'User' }))
+        }
+        const insFrom = from !== to ? from : from
+        tr.insertText(text, from, to)
+        tr.addMark(insFrom, insFrom + text.length, insertMark.create({ author: 'User' }))
+        tr.setSelection(TextSelection.create(tr.doc, insFrom + text.length))
+        view.dispatch(tr)
+        return true
+      },
+      handleKeyDown(view, event) {
+        if (!trackChangesRef.current) return false
+        if (event.key !== 'Backspace' && event.key !== 'Delete') return false
+        const { state } = view
+        const { schema } = state
+        const delMark = schema.marks.delete_track
+        const { from, to, empty } = state.selection
+        let start = from, end = to
+        if (empty) {
+          if (event.key === 'Backspace') {
+            if (from === 0) return false
+            // 跳过块边界
+            const $from = state.doc.resolve(from)
+            if ($from.parentOffset === 0) return false
+            start = from - 1; end = from
+          } else {
+            const $from = state.doc.resolve(from)
+            if ($from.parentOffset === $from.parent.content.size) return false
+            start = from; end = from + 1
+          }
+        }
+        // 若该范围已是删除线，则真正删除（第二次退格生效）
+        const already = state.doc.rangeHasMark(start, end, delMark)
+        if (already) {
+          const tr = state.tr.delete(start, end)
+          tr.setSelection(TextSelection.create(tr.doc, event.key === 'Backspace' ? start : start))
+          view.dispatch(tr)
+          return true
+        }
+        const tr = state.tr.addMark(start, end, delMark.create({ author: 'User' }))
+        const cursor = event.key === 'Backspace' ? start : end
+        tr.setSelection(TextSelection.create(tr.doc, cursor))
+        view.dispatch(tr)
+        return true
+      },
     })
     viewRef.current = view; ;(window as any).__pmView = view
+    try { setFootnotes(extractFootnotes(doc)) } catch (e) { /* ignore */ }
+    try { setComments(extractComments(doc)) } catch (e) { /* ignore */ }
+    lastEmittedRef.current = document
     return () => { view.destroy(); viewRef.current = null }
   }, [])
+
+  // 当外部（打开文件 / 新建文档）替换了 document prop 时，同步到编辑器视图。
+  // 若该 document 正是本组件刚通过 onChange 发出的引用，则说明是自身编辑回流，跳过以避免光标重置与内容抖动。
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    if (document === lastEmittedRef.current) return
+    lastEmittedRef.current = document
+    const pn = (document as any)?.pageNumber
+    setPageNumber(pn ? { ...pn } : null)
+    const newDoc = udmToProseMirror(document, schema)
+    const newState = EditorState.create({ doc: newDoc, plugins: view.state.plugins })
+    view.updateState(newState)
+    if (onSpellCheckRef.current) onSpellCheckRef.current(newDoc.textContent)
+  }, [document])
 
   const updateActiveState = (state: EditorState) => {
     const marks = new Set<string>()
     const { from, $from, to, empty } = state.selection
     const attrs: any = {}
-    if ($from.parent.type.name === 'paragraph') { Object.assign(attrs, { align: $from.parent.attrs.align, lineHeight: $from.parent.attrs.lineHeight, indent: $from.parent.attrs.indent, border: $from.parent.attrs.border, shading: $from.parent.attrs.shading, rtl: $from.parent.attrs.rtl, letterSpacing: $from.parent.attrs.letterSpacing, dropCap: $from.parent.attrs.dropCap }) }
+    if ($from.parent.type.name === 'paragraph' || $from.parent.type.name === 'heading') { Object.assign(attrs, { align: $from.parent.attrs.align, lineHeight: $from.parent.attrs.lineHeight, indent: $from.parent.attrs.indent, indentLeft: $from.parent.attrs.indentLeft, firstLine: $from.parent.attrs.firstLine, spaceBefore: $from.parent.attrs.spaceBefore, spaceAfter: $from.parent.attrs.spaceAfter, border: $from.parent.attrs.border, shading: $from.parent.attrs.shading, rtl: $from.parent.attrs.rtl, letterSpacing: $from.parent.attrs.letterSpacing, dropCap: $from.parent.attrs.dropCap }) }
     let f = '', sz = '', c = ''
     const collect = (m: any) => { marks.add(m.type.name); if (m.type.name === 'fontFamily') f = m.attrs.font; if (m.type.name === 'fontSize') sz = m.attrs.size; if (m.type.name === 'textColor') c = m.attrs.color }
     if (empty) { state.storedMarks?.forEach(collect); $from.marks().forEach(collect) } else { state.doc.nodesBetween(from, to, (n) => n.marks.forEach(collect)) }
@@ -336,6 +824,230 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     setActiveIsImage(!!selNode && selNode.type.name === 'image')
     setActiveIsShape(!!selNode && selNode.type.name === 'text_box')
     setTick(t => t + 1)
+  }
+
+  // ============ 样式系统 ============
+  const resolveStyle = (name: string): StyleFormat => {
+    if (styles[name]) return styles[name]
+    const b = BUILTIN_STYLE_MAP[name]
+    return b ? b.format : {}
+  }
+
+  const allStyles: AppStyle[] = useMemo(() => {
+    const list: AppStyle[] = BUILTIN_STYLES.map((s) => ({ ...s, format: styles[s.name] ?? s.format }))
+    const customNames = Object.keys(styles).filter((n) => !BUILTIN_STYLE_MAP[n])
+    for (const n of customNames) list.push({ name: n, type: 'paragraph', builtin: false, format: styles[n] })
+    return list
+  }, [styles])
+
+  const applyStyleMarks = (tr: any, from: number, to: number, fmt: StyleFormat) => {
+    if (from >= to) return
+    const m = schema.marks
+    if (fmt.bold !== undefined) { if (fmt.bold) tr.addMark(from, to, m.bold.create()); else tr.removeMark(from, to, m.bold) }
+    if (fmt.italic !== undefined) { if (fmt.italic) tr.addMark(from, to, m.italic.create()); else tr.removeMark(from, to, m.italic) }
+    if (fmt.fontSize) { tr.removeMark(from, to, m.fontSize); tr.addMark(from, to, m.fontSize.create({ size: fmt.fontSize })) }
+    if (fmt.color) { tr.removeMark(from, to, m.textColor); tr.addMark(from, to, m.textColor.create({ color: fmt.color })) }
+    if (fmt.fontFamily) { tr.removeMark(from, to, m.fontFamily); tr.addMark(from, to, m.fontFamily.create({ font: fmt.fontFamily })) }
+  }
+
+  const applyStyle = (name: string, explicit?: StyleFormat) => {
+    const v = viewRef.current
+    if (!v) return
+    const fmt = explicit ?? resolveStyle(name)
+    const { state, dispatch } = v
+    const tr = state.tr
+    const { from, to } = state.selection
+    const targets: { pos: number; node: any }[] = []
+    state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+      if ((node.type.name === 'paragraph' || node.type.name === 'heading') && state.doc.resolve(pos).parent.type.name === 'doc') { targets.push({ pos, node }); return false }
+      return true
+    })
+    for (const { pos, node } of targets) {
+      const start = pos
+      const end = pos + node.nodeSize
+      if (fmt.outlineLevel && fmt.outlineLevel > 0) {
+        tr.setBlockType(start, end, schema.nodes.heading, { level: fmt.outlineLevel, id: node.attrs.id || '', style: name, align: fmt.align ?? node.attrs.align })
+      } else {
+        tr.setBlockType(start, end, schema.nodes.paragraph, { style: name, align: fmt.align ?? node.attrs.align })
+      }
+      applyStyleMarks(tr, start + 1, end - 1, fmt)
+    }
+    if (targets.length) { dispatch(tr); v.focus() }
+    setShowStyles(false)
+  }
+
+  const updateStyleEverywhere = (name: string, fmt: StyleFormat) => {
+    const v = viewRef.current
+    if (!v) return
+    const { state, dispatch } = v
+    const tr = state.tr
+    const positions: number[] = []
+    state.doc.descendants((node: any, pos: number) => {
+      if ((node.type.name === 'paragraph' || node.type.name === 'heading') && node.attrs.style === name) positions.push(pos)
+    })
+    for (const pos of positions) {
+      const node = tr.doc.nodeAt(pos)!
+      const start = pos
+      const end = pos + node.nodeSize
+      const newAttrs: any = { ...node.attrs, align: fmt.align ?? node.attrs.align, style: name }
+      tr.setNodeMarkup(pos, null, newAttrs)
+      applyStyleMarks(tr, start + 1, end - 1, fmt)
+    }
+    if (positions.length) { dispatch(tr); v.focus() }
+    setStyles((prev) => ({ ...prev, [name]: fmt }))
+  }
+
+  const createStyleFromSelection = () => {
+    const v = viewRef.current
+    if (!v) return
+    const name = prompt(t('doc.newStyleName') || '样式名称')
+    if (!name) return
+    const { state } = v
+    const { $from } = state.selection
+    const block = $from.parent
+    const text = block.firstChild
+    const marks = text ? text.marks : []
+    const bold = marks.find((m: any) => m.type.name === 'bold')
+    const italic = marks.find((m: any) => m.type.name === 'italic')
+    const size = marks.find((m: any) => m.type.name === 'fontSize')
+    const color = marks.find((m: any) => m.type.name === 'textColor')
+    const font = marks.find((m: any) => m.type.name === 'fontFamily')
+    const fmt: StyleFormat = {}
+    if (bold) fmt.bold = true
+    if (italic) fmt.italic = true
+    if (size) fmt.fontSize = size.attrs.size
+    if (color) fmt.color = color.attrs.color
+    if (font) fmt.fontFamily = font.attrs.font
+    if (block.attrs.align) fmt.align = block.attrs.align
+    const lvl = outlineLevelFromName(name)
+    if (lvl) fmt.outlineLevel = lvl
+    setStyles((prev) => ({ ...prev, [name]: fmt }))
+    applyStyle(name, fmt)
+  }
+
+  const jumpToHeading = (tid: string) => {
+    const v = viewRef.current
+    if (!v || !tid) return
+    const { state } = v
+    let found = -1
+    state.doc.descendants((node: any, pos: number) => {
+      if (node.type.name === 'heading' && node.attrs.id === tid) { found = pos; return false }
+    })
+    if (found >= 0) {
+      const tr = state.tr.setSelection(TextSelection.create(state.doc, found + 1))
+      v.dispatch(tr)
+      v.focus()
+      const dom = v.nodeDOM(found) as HTMLElement | null
+      dom?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }
+
+  const generateTOC = () => {
+    const v = viewRef.current
+    if (!v) return
+    const { state, dispatch } = v
+    // 1) 为缺少 id 的标题分配稳定 id
+    const tr0 = state.tr
+    state.doc.descendants((node: any, pos: number) => {
+      if (node.type.name === 'heading' && !node.attrs.id) {
+        tr0.setNodeMarkup(pos, null, { ...node.attrs, id: 'h-' + Math.random().toString(36).slice(2, 9) })
+      }
+    })
+    if (tr0.docChanged) dispatch(tr0)
+    // 2) 收集标题（提纲级别），生成多级编号
+    const headings: { level: number; text: string; id: string }[] = []
+    v.state.doc.descendants((node: any) => {
+      if (node.type.name === 'heading') headings.push({ level: node.attrs.level, text: node.textContent || `标题 ${node.attrs.level}`, id: node.attrs.id })
+    })
+    if (headings.length === 0) { alert(t('doc.noHeadingsForToc')); return }
+    const counters: number[] = []
+    const numbered = headings.map((h) => {
+      const lvl = Math.max(1, h.level)
+      counters[lvl] = (counters[lvl] || 0) + 1
+      for (let i = lvl + 1; i < counters.length; i++) counters[i] = 0
+      const num = counters.slice(1, lvl + 1).filter((x) => x).join('.')
+      return { ...h, num }
+    })
+    // 3) 移除旧目录（标题块或含 tocLink 的段落）
+    const tr = v.state.tr
+    const toRemove: number[] = []
+    tr.doc.descendants((node: any, pos: number) => {
+      if (node.type.name !== 'paragraph') return
+      let hasLink = false
+      node.content.forEach((c: any) => { if (c.type.name === 'tocLink') hasLink = true })
+      if (node.attrs.style === 'Table of Contents' || hasLink) toRemove.push(pos)
+    })
+    for (let i = toRemove.length - 1; i >= 0; i--) {
+      const pos = toRemove[i]
+      const node = tr.doc.nodeAt(pos)!
+      tr.delete(pos, pos + node.nodeSize)
+    }
+    // 4) 插入新目录（标题 + 可点击条目）
+    const title = schema.nodes.paragraph.create(
+      { style: 'Table of Contents' },
+      schema.text(t('doc.autoTocTitle'), [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])
+    )
+    const nodes: any[] = [title]
+    numbered.forEach((h) => {
+      const indent = ' '.repeat(Math.max(0, h.level - 1))
+      const label = `${h.num}  ${h.text}`
+      const link = schema.nodes.tocLink.create({ target: h.id, label: indent + label })
+      nodes.push(schema.nodes.paragraph.create({ style: 'TOC Entry' }, link))
+    })
+    let pos = 0
+    nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
+    dispatch(tr)
+    v.focus()
+  }
+
+  const insertManualToc = () => {
+    const v = viewRef.current
+    if (!v) return
+    const text = prompt(t('doc.prompt.tocEntry'))
+    if (!text) return
+    const lines = text.split('\n').filter((l) => l.trim())
+    const tr = v.state.tr
+    const title = schema.nodes.paragraph.create(
+      { style: 'Table of Contents' },
+      schema.text(t('doc.manualTocTitle'), [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])
+    )
+    const nodes: any[] = [title]
+    lines.forEach((line) => {
+      const level = line.startsWith('  ') ? 2 : 1
+      const indent = ' '.repeat(level - 1)
+      nodes.push(schema.nodes.paragraph.create({ style: 'TOC Entry' }, schema.text(indent + line.trim())))
+    })
+    let pos = v.state.selection.from
+    nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
+    v.dispatch(tr); v.focus()
+  }
+
+  const styleDesc = (fmt: StyleFormat) => {
+    const parts: string[] = []
+    if (fmt.fontSize) parts.push(fmt.fontSize)
+    if (fmt.bold) parts.push(t('doc.bold'))
+    if (fmt.italic) parts.push(t('doc.italic'))
+    if (fmt.color) parts.push(fmt.color)
+    if (fmt.align) parts.push(fmt.align)
+    return parts.join(' · ')
+  }
+
+  // 预览页码文本（将模板中的 {n}/{total} 替换为示例值）
+  const previewPageNumber = (fmt?: string) => {
+    const f = fmt || '第 {n} 页'
+    return f.replace('{n}', '1').replace('{total}', '3')
+  }
+
+  // 主动向外 emit 当前文档（携带最新页码配置）。
+  // 用于「仅修改页码设置、未编辑正文」时，确保 pageNumber 写回 doc 以免保存丢失。
+  const emitDoc = (pn?: PageNumberConfig | null) => {
+    const v = viewRef.current
+    if (!v || !onChangeRef.current) return
+    const cfg = pn === undefined ? pageNumberRef.current : pn
+    if (pn !== undefined) pageNumberRef.current = pn
+    const out = proseMirrorToUDM(v.state.doc, { pageNumber: cfg ?? undefined })
+    lastEmittedRef.current = out // 标记为自身 emit，避免同步 effect 误触发重建
+    onChangeRef.current(out)
   }
 
   const exec = (cmd: string) => {
@@ -359,7 +1071,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'codeBlock': setBlockType(schema.nodes.code_block)(v.state, v.dispatch); break
       case 'undo': undo(v.state, v.dispatch); break
       case 'redo': redo(v.state, v.dispatch); break
-      case 'pageBreak': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create())); break
+      case 'pageBreak': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create({ restart: false, startNumber: 1 }))); break
+      case 'pageBreakRestart': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create({ restart: true, startNumber: 1 }))); break
       case 'horizontalRule': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.horizontal_rule.create())); break
       case 'textBox': { const cell = schema.nodes.paragraph.create(null, schema.text(t('doc.textBoxDefault'))); v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.text_box.create(null, cell))); break }
       case 'shape:rect':
@@ -386,32 +1099,45 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'tableAlignCenter': { alignTable(v, 'center'); break }
       case 'tableAlignRight': { alignTable(v, 'right'); break }
       case 'footnote': {
-        const text = prompt(t('doc.prompt.footnote')); if (!text) break
-        // Count existing footnotes for numbering
+        const text = prompt(t('doc.prompt.footnote') || '输入脚注内容'); if (!text) break
+        const { state, dispatch } = v
         let footnoteCount = 0
-        v.state.doc.descendants(node => { if (node.type.name === 'footnote') footnoteCount++ })
+        state.doc.descendants(node => { if (node.type.name === 'footnote') footnoteCount++ })
         const num = footnoteCount + 1
-        // Insert footnote reference at cursor
-        v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text, num })))
-        // Add footnote item at end of document (or create footnote section if none exists)
-        const docEnd = v.state.doc.content.size
-        let tr2 = v.state.tr
-        const lastNode = v.state.doc.lastChild
-        if (lastNode && lastNode.type.name === 'footnote_section') {
-          // Append to existing section
-          const sectionEnd = docEnd - 1
-          tr2 = tr2.insert(sectionEnd, schema.nodes.footnote_item.create({ num }, schema.text(text)))
+        const tr = state.tr
+        // 1) 在光标处插入脚注引用
+        tr.replaceSelectionWith(schema.nodes.footnote.create({ content: text, num }))
+        // 2) 追加到已有脚注区或新建脚注区（同一事务，避免反复 reconcile 卡死）
+        const doc = tr.doc
+        let target = -1
+        doc.descendants((node: any, pos: number) => { if (node.type.name === 'footnote_section') target = pos })
+        if (target >= 0) {
+          const section = doc.nodeAt(target)!
+          tr.insert(target + section.nodeSize - 1, schema.nodes.footnote_item.create({ num }, schema.text(text)))
         } else {
-          // Create new section at end
           const item = schema.nodes.footnote_item.create({ num }, schema.text(text))
           const section = schema.nodes.footnote_section.create(null, item)
-          tr2 = tr2.insert(docEnd, section)
+          tr.insert(doc.content.size, section)
         }
-        v.dispatch(tr2)
+        dispatch(tr)
+        v.focus()
         break
       }
       case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
-      case 'comment': { const text = prompt(t('doc.prompt.comment')); if (text && !sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.comment_mark.create({ id: Date.now().toString(), author: 'User', text }))); break }
+      case 'comment': {
+        const text = prompt(t('doc.prompt.comment'))
+        if (text && !sel.empty) {
+          const id = Date.now().toString()
+          const node = schema.nodes.comment_mark.create({ id, author: 'User', text })
+          v.dispatch(v.state.tr.insert(sel.to, node))
+          v.focus()
+          // 新建批注后自动打开对应批注卡片编辑框（对齐 MS Word 审阅窗格）
+          try { setComments(extractComments(v.state.doc)) } catch (e) { /* ignore */ }
+          setActiveComment(id)
+          setEditingComment(id)
+        }
+        break
+      }
       case 'insertTable': { const rows = parseInt(prompt(t('doc.prompt.rows'), '3') || '3'); const cols = parseInt(prompt(t('doc.prompt.cols'), '3') || '3'); if (rows > 0 && cols > 0) { const tr = []; for (let r = 0; r < rows; r++) { const cells = []; for (let c = 0; c < cols; c++) { const headerText = r === 0 ? `列${c+1}` : ''; const content = headerText ? schema.text(headerText) : null; cells.push(schema.nodes.table_cell.create({ isHeader: r === 0 }, schema.nodes.paragraph.create(null, content))) } tr.push(schema.nodes.table_row.create(null, cells)) } v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.table.create(null, tr))) } break }
       case 'dropCap': setParaAttr('dropCap', !activeAttrs.dropCap); break
       case 'toggleRTL': setParaAttr('rtl', !activeAttrs.rtl); break
@@ -419,7 +1145,143 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     v.focus(); setShowMiniToolbar(false); setShowMiniColorPopup(false); setShowContextMenu(false)
   }
 
-  const setParaAttr = (attr: string, value: any) => { const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; if ($from.parent.type.name !== 'paragraph') return; v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [attr]: value })); v.focus() }
+  // === 修订：收集所有 insert_track / delete_track 变更区间 ===
+  const findChanges = (doc: any) => {
+    const changes: { from: number; to: number; type: 'insert' | 'delete' }[] = []
+    let cur: { from: number; to: number; type: 'insert' | 'delete' } | null = null
+    doc.descendants((node: any, pos: number) => {
+      if (!node.isText) return
+      const ins = node.marks.find((m: any) => m.type.name === 'insert_track')
+      const del = node.marks.find((m: any) => m.type.name === 'delete_track')
+      const type = ins ? 'insert' : del ? 'delete' : null
+      if (!type) { cur = null; return }
+      const from = pos, to = pos + node.nodeSize
+      if (cur && cur.type === type && cur.to === from) { cur.to = to }
+      else { if (cur) changes.push(cur); cur = { from, to, type } }
+    })
+    if (cur) changes.push(cur)
+    return changes
+  }
+
+  // 接受单条变更：插入→保留（去标记）；删除→真正删除文字
+  const acceptChange = (change: { from: number; to: number; type: string }) => {
+    const v = viewRef.current; if (!v) return
+    const tr = v.state.tr
+    if (change.type === 'insert') tr.removeMark(change.from, change.to, v.state.schema.marks.insert_track)
+    else { tr.delete(change.from, change.to) }
+    v.dispatch(tr); v.focus()
+  }
+  // 拒绝单条变更：插入→删除文字；删除→保留原字（去标记）
+  const rejectChange = (change: { from: number; to: number; type: string }) => {
+    const v = viewRef.current; if (!v) return
+    const tr = v.state.tr
+    if (change.type === 'insert') tr.delete(change.from, change.to)
+    else tr.removeMark(change.from, change.to, v.state.schema.marks.delete_track)
+    v.dispatch(tr); v.focus()
+  }
+
+  const acceptAll = () => {
+    const v = viewRef.current; if (!v) return
+    let tr = v.state.tr
+    const changes = findChanges(v.state.doc)
+    // 从后往前处理，避免位置偏移：删除类先删，插入类去标记
+    changes.filter(c => c.type === 'delete').reverse().forEach(c => { tr = tr.delete(c.from, c.to) })
+    changes.filter(c => c.type === 'insert').forEach(c => { tr = tr.removeMark(c.from, c.to, v.state.schema.marks.insert_track) })
+    v.dispatch(tr); v.focus()
+  }
+  const rejectAll = () => {
+    const v = viewRef.current; if (!v) return
+    let tr = v.state.tr
+    const changes = findChanges(v.state.doc)
+    changes.filter(c => c.type === 'insert').reverse().forEach(c => { tr = tr.delete(c.from, c.to) })
+    changes.filter(c => c.type === 'delete').forEach(c => { tr = tr.removeMark(c.from, c.to, v.state.schema.marks.delete_track) })
+    v.dispatch(tr); v.focus()
+  }
+
+  // 跳转到上/下一条变更
+  const gotoChange = (dir: 1 | -1) => {
+    const v = viewRef.current; if (!v) return
+    const changes = findChanges(v.state.doc)
+    if (!changes.length) return
+    const pos = v.state.selection.from
+    let target: { from: number; to: number; type: string } | undefined
+    if (dir === 1) target = changes.find(c => c.to > pos)
+    else { for (let i = changes.length - 1; i >= 0; i--) { if (changes[i].from < pos) { target = changes[i]; break } } }
+    if (!target) target = dir === 1 ? changes[0] : changes[changes.length - 1]
+    v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, target.from, target.to)))
+    v.focus()
+  }
+  // 对当前光标处的变更进行接受/拒绝
+  const acceptCurrent = () => {
+    const v = viewRef.current; if (!v) return
+    const pos = v.state.selection.from
+    const c = findChanges(v.state.doc).find(ch => ch.from <= pos && ch.to >= pos)
+    if (c) acceptChange(c)
+  }
+  const rejectCurrent = () => {
+    const v = viewRef.current; if (!v) return
+    const pos = v.state.selection.from
+    const c = findChanges(v.state.doc).find(ch => ch.from <= pos && ch.to >= pos)
+    if (c) rejectChange(c)
+  }
+
+  const setParaAttr = (attr: string, value: any) => { const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; const tn = $from.parent.type.name; if (tn !== 'paragraph' && tn !== 'heading') return; v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [attr]: value })); v.focus() }
+  // 缩进增减（按字符单位 em，贴近 Word 的“增加/减少缩进量”）
+  // 段前/段后间距快捷调节（pt）
+  const changeSpace = (which: 'before' | 'after', delta: number) => {
+    const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; const tn = $from.parent.type.name
+    if (tn !== 'paragraph' && tn !== 'heading') return
+    const key = which === 'before' ? 'spaceBefore' : 'spaceAfter'
+    const cur = Number($from.parent.attrs[key]) || 0
+    const next = Math.max(0, Math.min(120, cur + delta))
+    v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [key]: next })); v.focus()
+  }
+  // 打开"段落"对话框：读取当前段落/标题的格式属性作为初值
+  const openParaDialog = () => {
+    const v = viewRef.current; if (!v) return
+    const { $from } = v.state.selection
+    const a = $from.parent.attrs
+    setParaDraft({
+      indentLeft: Number(a.indentLeft) || 0,
+      indentRight: Number(a.indentRight) || 0,
+      special: a.firstLine ? 'firstLine' : (a.hanging ? 'hanging' : 'none'),
+      specialBy: Number(a.firstLine) || Number(a.hanging) || 0,
+      spaceBefore: Number(a.spaceBefore) || 0,
+      spaceAfter: Number(a.spaceAfter) || 0,
+      lineKind: a.lineSpacingKind || (a.lineHeight ? '' : 'single'),
+      lineValue: a.lineSpacingValue || (a.lineHeight ? parseFloat(a.lineHeight) || 1 : 1),
+      keepLines: !!a.keepLines, keepWithNext: !!a.keepWithNext, pageBreakBefore: !!a.pageBreakBefore,
+      outlineLevel: Number(a.outlineLevel) || 0,
+    })
+    setShowParaDialog(true)
+  }
+  // 将对话框中的段落格式应用到选区覆盖的所有段落/标题
+  const applyParagraphFormat = (d: any) => {
+    const v = viewRef.current; if (!v) return
+    const { $from, $to } = v.state.selection
+    const tr = v.state.tr
+    let changed = false
+    v.state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+      if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+        const attrs = {
+          ...node.attrs,
+          indentLeft: Number(d.indentLeft) || 0,
+          indentRight: Number(d.indentRight) || 0,
+          firstLine: d.special === 'firstLine' ? (Number(d.specialBy) || 0) : 0,
+          hanging: d.special === 'hanging' ? (Number(d.specialBy) || 0) : 0,
+          spaceBefore: Number(d.spaceBefore) || 0,
+          spaceAfter: Number(d.spaceAfter) || 0,
+          lineSpacingKind: d.lineKind || '',
+          lineSpacingValue: (d.lineKind === 'multiple' || d.lineKind === 'exact' || d.lineKind === 'atLeast') ? (Number(d.lineValue) || 1) : 0,
+          keepLines: !!d.keepLines, keepWithNext: !!d.keepWithNext, pageBreakBefore: !!d.pageBreakBefore,
+          outlineLevel: Number(d.outlineLevel) || 0,
+        }
+        tr.setNodeMarkup(pos, undefined, attrs)
+        changed = true
+      }
+    })
+    if (changed) { v.dispatch(tr); v.focus() }
+  }
   // Align the entire table that contains the cursor
   const alignTable = (v: EditorView, align: 'left' | 'center' | 'right') => {
     const { $from } = v.state.selection
@@ -437,7 +1299,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     }
   }
   const setFont = (font: string) => { const v = viewRef.current; if (!v) return; if (font) toggleMark(schema.marks.fontFamily, { font })(v.state, v.dispatch); else v.dispatch(v.state.tr.removeMark(v.state.selection.from, v.state.selection.to, schema.marks.fontFamily)); v.focus() }
-  const setFontSize = (size: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.fontSize, { size })(v.state, v.dispatch); v.focus() }
+  const setFontSize = (size: string) => {
+    const v = viewRef.current; if (!v) return
+    const { state, dispatch } = v
+    const { from, to, empty } = state.selection
+    const mark = schema.marks.fontSize.create({ size })
+    if (empty) {
+      // 无选区：存入 storedMarks，待下次输入生效（不在每次按键时抢占焦点）
+      const stored = state.storedMarks ? state.storedMarks.slice() : state.selection.$from.marks()
+      const filtered = stored.filter(m => m.type !== schema.marks.fontSize)
+      dispatch(state.tr.setStoredMarks([...filtered, mark]))
+    } else {
+      // 有选区：移除旧 fontSize 后再添加，避免使用 toggleMark 误删/不生效
+      dispatch(state.tr.removeMark(from, to, schema.marks.fontSize).addMark(from, to, mark))
+    }
+    // 注意：输入过程中不调用 v.focus()，否则焦点会被抢回编辑器，
+    // 导致后续输入的数字被当作正文内容写入（艺术字内容变成输入数值的现象）。
+  }
   const setTextColor = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.textColor, { color })(v.state, v.dispatch); v.focus() }
   const setHighlight = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.highlight, { color })(v.state, v.dispatch); v.focus() }
   const handleSearch = () => { const v = viewRef.current; if (!v || !searchQuery) return; doSearch(v, searchQuery, false) }
@@ -452,9 +1330,78 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const insertLatexFormula = (latex: string) => {
     const v = viewRef.current; if (!v) return
-    v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(`⟨formula:${latex}⟩`))))
+    if (!latex) { setShowFormulaPanel(false); return }
+    const mathNode = schema.nodes.math.create({ latex, inline: false })
+    v.dispatch(v.state.tr.replaceSelectionWith(mathNode))
     v.focus()
     setShowFormulaPanel(false)
+  }
+
+  // 从文件 base64 中提取纯文本（txt/md/json 直接解码；docx 提取 <w:t> 文本）
+  const extractFileText = (b64: string, fileName: string): string => {
+    try {
+      const bin = atob(b64)
+      if (/\.docx$/i.test(fileName)) {
+        const texts = [...bin.matchAll(/<w:t[^>]*>(.*?)<\/w:t>/g)].map((m) => m[1]).join(' ')
+        return texts || bin
+      }
+      // 尝试 UTF-8 解码（处理多字节）
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff
+      const dec = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+      return dec || bin
+    } catch {
+      return atob(b64)
+    }
+  }
+
+  // 简单的行级差异
+  const diffLines = (a: string, b: string) => {
+    const al = a.split(/\r?\n/), bl = b.split(/\r?\n/)
+    const res: { type: 'add' | 'del' | 'eq'; text: string }[] = []
+    let i = 0, j = 0
+    while (i < al.length && j < bl.length) {
+      if (al[i] === bl[j]) { res.push({ type: 'eq', text: al[i] }); i++; j++ }
+      else { res.push({ type: 'del', text: al[i] }); res.push({ type: 'add', text: bl[j] }); i++; j++ }
+    }
+    while (i < al.length) res.push({ type: 'del', text: al[i++] })
+    while (j < bl.length) res.push({ type: 'add', text: bl[j++] })
+    return res
+  }
+
+  const runCompare = async () => {
+    try {
+      const path = await backend?.openFileDialog?.()
+      if (!path) return
+      const b64 = await backend?.readFile(path)
+      if (!b64) return
+      const otherText = extractFileText(b64, path)
+      const curText = viewRef.current ? viewRef.current.state.doc.textContent : ''
+      setCompareDiff(diffLines(curText, otherText))
+      setCompareOpen(true)
+    } catch (e: any) {
+      alert(t('doc.compareError') + ': ' + (e?.message || e))
+    }
+  }
+
+  const toggleProtect = () => {
+    const v = viewRef.current; if (!v) return
+    if (!protectedMode) {
+      const pwd = prompt(t('doc.protectSetPwd'))
+      if (!pwd) return
+      protectPwdRef.current = pwd
+      setProtectedMode(true)
+      v.setProps({ editable: () => false })
+    } else {
+      const pwd = prompt(t('doc.protectEnterPwd'))
+      if (pwd === protectPwdRef.current) {
+        setProtectedMode(false)
+        protectPwdRef.current = ''
+        v.setProps({ editable: () => true })
+      } else {
+        alert(t('doc.protectWrongPwd'))
+      }
+    }
   }
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
@@ -539,26 +1486,32 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.font')}>
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-1">
-                <select value={activeFont} onChange={e => setFont(e.target.value)} className="text-xs rounded-md px-2 ribbon-input" style={{ width: 110, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}>{FONTS.map(f => <option key={f.value} value={f.value}>{f.name}</option>)}</select>
-                <input
-                  type="text"
-                  value={activeFontSize.replace(/px$/, '')}
-                  placeholder={t('doc.size.body').replace('px','')}
-                  onChange={e => {
-                    const raw = e.target.value.trim()
-                    if (raw === '') { setFontSize(''); return }
-                    const num = parseFloat(raw)
+                <Dropdown
+                className="text-xs rounded-md px-2 ribbon-input"
+                style={{ width: 110, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                value={activeFont}
+                onChange={v => setFont(v)}
+                options={FONTS.map(f => ({ label: f.name, value: f.value }))}
+              />
+                <Dropdown
+                  className="text-xs rounded-md px-2 ribbon-input"
+                  style={{ width: 76, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  editable
+                  inputMode="numeric"
+                  inputValue={activeFontSize.replace(/px$/, '')}
+                  placeholder={t('doc.size.body').replace('px', '')}
+                  onInputChange={(raw) => {
+                    const v = raw.trim()
+                    if (v === '') { setFontSize(''); return }
+                    const num = parseFloat(v)
                     if (!isNaN(num) && num > 0) setFontSize(`${num}px`)
                   }}
-                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                  list="font-size-list"
-                  className="text-xs rounded-md px-2 ribbon-input"
-                  style={{ width: 56, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
+                  value={activeFontSize}
+                  onChange={(v) => setFontSize(v)}
+                  options={FONT_SIZES.map(s => ({ label: s.name, value: s.value }))}
                   title={t('doc.fontSize')}
                 />
-                <datalist id="font-size-list">
-                  {FONT_SIZES.map(s => <option key={s.value} value={s.value.replace('px','')} />)}
-                </datalist>
               </div>
               <div className="flex items-center gap-0.5">
                 <button onClick={() => exec('bold')} className={`toolbar-btn ${activeMarks.has('bold') ? 'active' : ''}`} title={t('doc.bold') + ' Ctrl+B'} type="button" style={{ width: 28, height: 26 }}><b>B</b></button>
@@ -609,12 +1562,34 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <button onClick={() => setParaAttr('indent', Math.min(8, (activeAttrs.indent || 0) + 1))} className="toolbar-btn" title={t('doc.indentMore')} type="button" style={{ width: 28, height: 26 }}>→|</button>
                 <button onClick={() => setParaAttr('indent', Math.max(0, (activeAttrs.indent || 0) - 1))} className="toolbar-btn" title={t('doc.indentLess')} type="button" style={{ width: 28, height: 26 }}>|←</button>
               </div>
+              <div className="flex items-center gap-1">
+                <RibbonButton icon="⚙" label={t('doc.paraDialog')} onClick={openParaDialog} title={t('doc.paraDialog')} active={showParaDialog} />
+                <Dropdown
+                  className="text-xs rounded-md px-2 py-1 ribbon-input"
+                  style={{ width: 92, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  value={activeAttrs.lineHeight || ''}
+                  onChange={v => setParaAttr('lineHeight', v)}
+                  options={[{ label: t('doc.lineSpacing'), value: '' }, ...LINE_HEIGHTS.map(l => ({ label: l.name, value: l.value }))]}
+                />
+                <Dropdown
+                  className="text-xs rounded-md px-2 py-1 ribbon-input"
+                  style={{ width: 92, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  value={activeAttrs.letterSpacing || ''}
+                  onChange={v => setParaAttr('letterSpacing', v)}
+                  options={[
+                    { label: t('doc.charSpacing'), value: '' },
+                    { label: t('doc.spacing.loose'), value: '0.5px' },
+                    { label: t('doc.spacing.looser'), value: '1px' },
+                    { label: t('doc.spacing.tight'), value: '-0.5px' },
+                  ]}
+                />
+                <button onClick={() => changeSpace('before', 6)} className="toolbar-btn" title={t('doc.spaceBefore')} type="button" style={{ width: 28, height: 26 }}>↥</button>
+                <button onClick={() => changeSpace('after', 6)} className="toolbar-btn" title={t('doc.spaceAfter')} type="button" style={{ width: 28, height: 26 }}>↧</button>
+              </div>
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('doc.styles')}>
-            <RibbonButton icon="❝" label={t('doc.quote')} onClick={() => exec('quote')} />
-            <RibbonButton icon="</>" label={t('doc.code')} onClick={() => exec('code')} active={activeMarks.has('code')} />
-            <RibbonButton icon="{}" label={t('doc.codeBlock')} onClick={() => exec('codeBlock')} />
+            <RibbonButton icon="🎨" label={t('doc.styleGallery')} onClick={() => setShowStyles(true)} title={t('doc.styleGallery')} />
           </RibbonGroup>
         </>)}
 
@@ -627,6 +1602,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="⏹" label={t('doc.imgFloatNone')} onClick={() => exec('imgFloatNone')} disabled={!activeIsImage} title={t('doc.imgFloatNoneTitle')} />
             <RibbonButton icon="—" label={t('doc.horizontalRule')} onClick={() => exec('horizontalRule')} />
             <RibbonButton icon="⏎" label={t('doc.pageBreak')} onClick={() => exec('pageBreak')} />
+            <RibbonButton icon="🔄" label={t('doc.pageBreakRestart')} onClick={() => exec('pageBreakRestart')} title={t('doc.pageBreakRestartTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.shapes')}>
             <div className="relative">
@@ -772,50 +1748,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="🔗" label={t('doc.hyperlink')} onClick={insertLink} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.toc') || '目录'}>
-            <RibbonButton icon="📑" label={t('doc.autoToc') || '自动目录'} onClick={() => {
-              const v = viewRef.current; if (!v) return
-              // Scan document for headings and build a TOC
-              const headings: { level: number; text: string; pos: number }[] = []
-              v.state.doc.descendants((node, pos) => {
-                if (node.type.name === 'heading') {
-                  headings.push({ level: node.attrs.level, text: node.textContent, pos })
-                }
-              })
-              if (headings.length === 0) { alert(t('doc.noHeadingsForToc') || '没有标题，无法生成目录'); return }
-              // Build TOC paragraphs
-              const tocNodes: any[] = []
-              tocNodes.push(schema.nodes.paragraph.create({ align: 'center' }, schema.text(t('doc.tocTitle') || '目录', [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])))
-              headings.forEach(h => {
-                const indent = '  '.repeat(h.level - 1)
-                const dotLeader = ' ' + '·'.repeat(Math.max(3, 40 - h.text.length - indent.length))
-                tocNodes.push(schema.nodes.paragraph.create({ indent: h.level - 1 }, schema.text(indent + h.text + dotLeader)))
-              })
-              // Insert at cursor position
-              const tr = v.state.tr
-              let pos = v.state.selection.from
-              tocNodes.forEach(node => {
-                tr.insert(pos, node)
-                pos += node.nodeSize
-              })
-              v.dispatch(tr)
-              v.focus()
-            }} title={t('doc.autoTocTitle') || '从标题自动生成目录'} />
-            <RibbonButton icon="📋" label={t('doc.manualToc') || '手动目录'} onClick={() => {
-              const v = viewRef.current; if (!v) return
-              const text = prompt(t('doc.prompt.tocEntry') || '输入目录条目（每行一个）')
-              if (!text) return
-              const lines = text.split('\n').filter(l => l.trim())
-              const tocNodes: any[] = [schema.nodes.paragraph.create({ align: 'center' }, schema.text(t('doc.tocTitle') || '目录', [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })]))]
-              lines.forEach(line => {
-                const level = line.startsWith('  ') ? 2 : 1
-                tocNodes.push(schema.nodes.paragraph.create({ indent: level - 1 }, schema.text(line.trim())))
-              })
-              const tr = v.state.tr
-              let pos = v.state.selection.from
-              tocNodes.forEach(node => { tr.insert(pos, node); pos += node.nodeSize })
-              v.dispatch(tr)
-              v.focus()
-            }} title={t('doc.manualTocTitle') || '手动输入目录条目'} />
+            <RibbonButton icon="📑" label={t('doc.autoToc')} onClick={() => generateTOC()} title={t('doc.autoTocTitle')} />
+            <RibbonButton icon="🔄" label={t('doc.updateToc')} onClick={() => generateTOC()} title={t('doc.updateTocTitle')} />
+            <RibbonButton icon="📋" label={t('doc.manualToc')} onClick={() => insertManualToc()} title={t('doc.manualTocTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.annotation')}>
             <RibbonButton icon="📝" label={t('doc.footnote')} onClick={() => exec('footnote')} />
@@ -824,12 +1759,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </>)}
 
         {ribbonTab === 'layout' && (<>
-          <RibbonGroup label={t('doc.paragraph')}>
-            <div className="flex flex-col gap-1">
-              <select value={activeAttrs.lineHeight || ''} onChange={e => setParaAttr('lineHeight', e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 80 }}><option value="">{t('doc.lineSpacing')}</option>{LINE_HEIGHTS.map(l => <option key={l.value} value={l.value}>{l.name}</option>)}</select>
-              <select value={activeAttrs.letterSpacing || ''} onChange={e => setParaAttr('letterSpacing', e.target.value)} className="text-xs rounded-md px-2 py-1" style={{ width: 80 }}><option value="">{t('doc.charSpacing')}</option><option value="0.5px">{t('doc.spacing.loose')}</option><option value="1px">{t('doc.spacing.looser')}</option><option value="-0.5px">{t('doc.spacing.tight')}</option></select>
-            </div>
-          </RibbonGroup>
           <RibbonGroup label={t('doc.border')}>
             <RibbonButton icon="▢" label={t('doc.borderAll')} onClick={() => setParaAttr('border', activeAttrs.border === 'all' ? '' : 'all')} active={activeAttrs.border === 'all'} />
             <RibbonButton icon="▏" label={t('doc.borderLeft')} onClick={() => setParaAttr('border', activeAttrs.border === 'left' ? '' : 'left')} active={activeAttrs.border === 'left'} />
@@ -854,32 +1783,30 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           {/* MS Office 风格页面设置 */}
           <RibbonGroup label={t('doc.pageSetup')}>
             <div className="flex flex-col gap-1">
-              <select
-                data-testid="page-size-select"
-                value={activeAttrs.pageSize || 'A4'}
-                onChange={e => setParaAttr('pageSize', e.target.value)}
-                className="text-xs rounded-md px-2 py-1"
-                style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                title={t('doc.pageSize')}
-              >
-                <option value="A4">A4</option>
-                <option value="A3">A3</option>
-                <option value="A5">A5</option>
-                <option value="B5">B5</option>
-                <option value="Letter">Letter</option>
-                <option value="Legal">Legal</option>
-              </select>
-              <select
-                data-testid="orientation-select"
-                value={activeAttrs.orientation || 'portrait'}
-                onChange={e => setParaAttr('orientation', e.target.value)}
-                className="text-xs rounded-md px-2 py-1"
-                style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
-                title={t('doc.orientation')}
-              >
-                <option value="portrait">{t('doc.portrait')}</option>
-                <option value="landscape">{t('doc.landscape')}</option>
-              </select>
+              <Dropdown
+                className="text-xs rounded-md px-2 py-1 ribbon-input"
+                style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                value={pageSize}
+                onChange={v => setPageSize(v as any)}
+                options={[
+                  { label: 'A4', value: 'A4' },
+                  { label: 'A3', value: 'A3' },
+                  { label: 'A5', value: 'A5' },
+                  { label: 'B5', value: 'B5' },
+                  { label: 'Letter', value: 'Letter' },
+                  { label: 'Legal', value: 'Legal' },
+                ]}
+              />
+              <Dropdown
+                className="text-xs rounded-md px-2 py-1 ribbon-input"
+                style={{ width: 90, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                value={orientation}
+                onChange={v => setOrientation(v as any)}
+                options={[
+                  { label: t('doc.portrait'), value: 'portrait' },
+                  { label: t('doc.landscape'), value: 'landscape' },
+                ]}
+              />
             </div>
             <RibbonButton icon="📄" label={t('doc.margins')} onClick={() => {
               const preset = prompt(t('doc.marginsPrompt') + ' (top,bottom,left,right cm)', '2.54,2.54,2.54,2.54')
@@ -898,36 +1825,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="🔢" label={t('doc.lineNumber')} onClick={() => setDocLineNumbers(!docLineNumbers)} active={docLineNumbers} title={t('doc.lineNumberTitle')} />
             <RibbonButton icon="📑" label={t('doc.pageBreakInsert')} onClick={() => exec('pageBreak')} title={t('doc.pageBreakInsertTitle')} />
           </RibbonGroup>
-          {/* 页眉页脚 */}
+          {/* 页眉页脚 / 页码 */}
           <RibbonGroup label={t('doc.headerFooter')}>
             <RibbonButton icon="📄" label={t('doc.header')} onClick={() => {
               const h = prompt(t('doc.headerPrompt'), docHeader)
               if (h !== null) setDocHeader(h)
             }} title={t('doc.headerTitle')} />
-            <RibbonButton icon="📃" label={t('doc.footer')} onClick={() => {
-              const f = prompt(t('doc.footerPrompt'), docFooter)
-              if (f !== null) setDocFooter(f)
-            }} title={t('doc.footerTitle')} />
-            <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => {
-              // Toggle page number in footer — only insert once, not append every click
-              if (pageNumInserted) {
-                // Remove page number from footer
-                const cleaned = docFooter.replace(/\s*·\s*第 \d+ 页\s*$/, '').replace(/^第 \d+ 页\s*·\s*/, '')
-                setDocFooter(cleaned)
-                setPageNumInserted(false)
-              } else {
-                // Insert page number
-                const pn = '第 1 页'
-                setDocFooter(docFooter ? `${docFooter} · ${pn}` : pn)
-                setPageNumInserted(true)
-              }
-            }} title={t('doc.pageNumTitle')} />
+            <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => setShowPageNumDialog(true)} active={!!pageNumber?.enabled} title={t('doc.pageNumTitle')} />
           </RibbonGroup>
           <RibbonGroup label="公文 GB/T 9704">
             <RibbonButton icon="📜" label="公文模板" onClick={() => {
               // 应用政府公文标准排版: 3号仿宋 + 固定28磅 + 首行缩进2字符
               setParaAttr('lineHeight', '28pt')
-              setParaAttr('indent', 2)
+              setParaAttr('firstLine', 2)
               setParaAttr('align', 'justify')
             }} title="应用 GB/T 9704-2012 政府公文标准排版" />
             <RibbonButton icon="🇨" label="红头线" onClick={() => setParaAttr('border', activeAttrs.border === 'redBottom' ? '' : 'redBottom')} active={activeAttrs.border === 'redBottom'} title="红色分隔线" />
@@ -965,8 +1875,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.revision')}>
             <RibbonButton icon="✏️" label={t('doc.revisionMode')} onClick={() => setTrackChanges(!trackChanges)} active={trackChanges} />
             <RibbonButton icon="💬" label={t('doc.annotation')} onClick={() => exec('comment')} />
-            <RibbonButton icon="📥" label={t('doc.acceptAll')} onClick={() => setTrackChanges(false)} title={t('doc.acceptAllTitle')} />
-            <RibbonButton icon="📤" label={t('doc.rejectAll')} onClick={() => setTrackChanges(false)} title={t('doc.rejectAllTitle')} />
+          </RibbonGroup>
+          <RibbonGroup label={t('doc.changesNav')}>
+            <RibbonButton icon="◀" label={t('doc.prevChange')} onClick={() => gotoChange(-1)} title={t('doc.prevChangeTitle')} />
+            <RibbonButton icon="▶" label={t('doc.nextChange')} onClick={() => gotoChange(1)} title={t('doc.nextChangeTitle')} />
+            <RibbonButton icon="✓" label={t('doc.accept')} onClick={acceptCurrent} title={t('doc.acceptTitle')} />
+            <RibbonButton icon="✗" label={t('doc.reject')} onClick={rejectCurrent} title={t('doc.rejectTitle')} />
+          </RibbonGroup>
+          <RibbonGroup label={t('doc.changesAll')}>
+            <RibbonButton icon="📥" label={t('doc.acceptAll')} onClick={acceptAll} title={t('doc.acceptAllTitle')} />
+            <RibbonButton icon="📤" label={t('doc.rejectAll')} onClick={rejectAll} title={t('doc.rejectAllTitle')} />
           </RibbonGroup>
           {/* MS Office 风格字数统计 (详细) */}
           <RibbonGroup label={t('doc.wordCount')}>
@@ -992,9 +1910,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             </div>
           </RibbonGroup>
           {/* 比较与保护 */}
-          <RibbonGroup label={t('doc.compare')}>
-            <RibbonButton icon="⚖️" label={t('doc.compare')} onClick={() => alert(t('doc.comparePlaceholder'))} title={t('doc.compareTitle')} />
-            <RibbonButton icon="🔒" label={t('doc.protect')} onClick={() => setParaAttr('protected', !activeAttrs.protected)} active={activeAttrs.protected} title={t('doc.protectTitle')} />
+          <RibbonGroup label={t('doc.compareProtect')}>
+            <RibbonButton icon="⚖️" label={t('doc.compare')} onClick={runCompare} active={compareOpen} title={t('doc.compareTitle')} />
+            <RibbonButton icon="🔒" label={t('doc.protect')} onClick={toggleProtect} active={protectedMode} title={protectedMode ? t('doc.protectOn') : t('doc.protectTitle')} />
           </RibbonGroup>
         </>)}
 
@@ -1028,7 +1946,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.625rem', zIndex: 50 }}>
                   <div className="grid grid-cols-3 gap-1.5">
                     {[['#ffffff', t('doc.bgWhite')], ['#c7edcc', t('doc.bgEyeGreen')], ['#f5f5dc', t('doc.bgBeige')], ['#faf3e0', t('doc.bgCream')], ['#e8e8e8', t('doc.bgGray')], ['#fff5e6', t('doc.bgWarm')]].map(([c, n]) => (
-                      <button key={c} onClick={() => { setBgColor(c as string); setEyeCareMode(c === '#c7edcc'); closeAllPanels() }} className="flex flex-col items-center gap-0.5 p-1 rounded transition-colors hover:bg-slate-100" title={n as string}>
+                      <button key={c} onClick={() => { setBgColorPersist(c as string); setEyeCarePersist(c === '#c7edcc'); closeAllPanels() }} className="flex flex-col items-center gap-0.5 p-1 rounded transition-colors hover:bg-slate-100" title={n as string}>
                         <span className="w-7 h-7 rounded border" style={{ background: c, border: '1px solid var(--color-border)' }} />
                       </button>
                     ))}
@@ -1036,19 +1954,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 </div>
               )}
             </div>
-            <RibbonButton icon="👁" label={t('doc.eyeCare')} onClick={() => { const ec = !eyeCareMode; setEyeCareMode(ec); setBgColor(ec ? '#c7edcc' : '#ffffff') }} active={eyeCareMode} title={t('doc.eyeCareTitle')} />
+            <RibbonButton icon="👁" label={t('doc.eyeCare')} onClick={() => { const ec = !eyeCareMode; setEyeCarePersist(ec); setBgColorPersist(ec ? '#c7edcc' : '#ffffff') }} active={eyeCareMode} title={t('doc.eyeCareTitle')} />
           </RibbonGroup>
           {/* 显示编辑标记 (¶ 段落标记 / 分页符) */}
           <RibbonGroup label={t('doc.show')}>
-            <RibbonButton icon="¶" label={t('doc.showMarks')} onClick={() => setShowMarks(!showMarks)} active={showMarks} title={t('doc.showMarksTitle')} />
-            <RibbonButton icon="📏" label={t('doc.ruler')} onClick={() => setShowRuler(!showRuler)} active={showRuler} title={t('doc.rulerTitle')} />
-            <RibbonButton icon="📐" label={t('doc.gridlines')} onClick={() => setShowGridlines(!showGridlines)} active={showGridlines} title={t('doc.gridlinesTitle')} />
-            <RibbonButton icon="🗂" label={t('doc.navPane')} onClick={() => setShowNavPane(!showNavPane)} active={showNavPane} title={t('doc.navPaneTitle')} />
+            <RibbonButton icon="¶" label={t('doc.showMarks')} onClick={() => setShowMarksPersist(!showMarks)} active={showMarks} title={t('doc.showMarksTitle')} />
+            <RibbonButton icon="📏" label={t('doc.ruler')} onClick={() => setShowRulerPersist(!showRuler)} active={showRuler} title={t('doc.rulerTitle')} />
+            <RibbonButton icon="📐" label={t('doc.gridlines')} onClick={() => setShowGridlinesPersist(!showGridlines)} active={showGridlines} title={t('doc.gridlinesTitle')} />
+            <RibbonButton icon="🗂" label={t('doc.navPane')} onClick={() => setShowNavPanePersist(!showNavPane)} active={showNavPane} title={t('doc.navPaneTitle')} />
           </RibbonGroup>
           {/* 窗口 */}
           <RibbonGroup label={t('doc.window')}>
             <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(window.window.document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
-            <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindow(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
+            <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindowPersist(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
         </>)}
@@ -1161,7 +2079,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${splitWindow ? 'flex' : ''}`}
-        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1 }}
+        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex' }}
       >
         <div
           className="max-w-4xl mx-auto animate-fade-in"
@@ -1171,12 +2089,33 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             marginBottom: '24px',
             borderRadius: '8px',
             background: bgColor,
-            minHeight: 'calc(100% - 48px)',
+            width: pageWidthPx,
+            minHeight: pageHeightPx,
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
           }}
         >
+          {/* 水平标尺（Word 风格：厘米刻度 + 页边距 + 可拖拽缩进滑块） */}
+          {showRuler && (
+            <Ruler
+              width={pageWidthPx}
+              marginLeft={docMargins.left}
+              marginRight={docMargins.right}
+              indents={{
+                indentLeft: Number(activeAttrs.indentLeft) || 0,
+                indentRight: Number(activeAttrs.indentRight) || 0,
+                firstLine: Number(activeAttrs.firstLine) || 0,
+                hanging: Number(activeAttrs.hanging) || 0,
+              }}
+              onChange={(next: Partial<import('../../components/Ruler').RulerIndents>) => {
+                if (next.indentLeft !== undefined) setParaAttr('indentLeft', next.indentLeft)
+                if (next.indentRight !== undefined) setParaAttr('indentRight', next.indentRight)
+                if (next.firstLine !== undefined) setParaAttr('firstLine', next.firstLine)
+                if (next.hanging !== undefined) setParaAttr('hanging', next.hanging)
+              }}
+            />
+          )}
           {/* 页眉 */}
           {(docHeader || docLineNumbers) && (
             <div style={{
@@ -1234,20 +2173,177 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               className={`${showRuler ? 'show-ruler' : ''} ${showGridlines ? 'show-gridlines' : ''} ${eyeCareMode ? 'eye-care-mode' : ''}`}
             />
           </div>
-          {/* 页脚 */}
-          {docFooter && (
+          {/* 页底脚注区：脚注引用在正文，脚注文本统一显示在页底 */}
+          {footnotes.length > 0 && (
+            <div style={{
+              borderTop: '1px solid var(--color-border)',
+              padding: `${Math.round(docMargins.bottom * 0.3)}px ${docMargins.right}px ${Math.round(docMargins.bottom * 0.3)}px ${docMargins.left}px`,
+              fontSize: '0.82em',
+              color: 'var(--color-text-muted)',
+              background: bgColor,
+            }}>
+              {footnotes.map((f) => (
+                <div key={f.pos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
+                     onDoubleClick={() => editFootnote(f)} title={t('doc.prompt.footnote') || '双击编辑脚注'}>
+                  <span style={{ flex: 1, wordBreak: 'break-word', lineHeight: 1.5 }}>
+                    <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
+                  </span>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); deleteFootnote(f) }}
+                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '14px', lineHeight: 1, padding: '0 4px' }}
+                          title="删除脚注">×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* 页脚（页码预览，真实页码/分节在导出 docx 时生成） */}
+          {pageNumber?.enabled && (
             <div style={{
               padding: `${Math.round(docMargins.bottom * 0.3)}px ${docMargins.right}px ${Math.round(docMargins.bottom * 0.3)}px ${docMargins.left}px`,
               borderTop: '1px solid var(--color-border)',
-              fontSize: '12px',
-              color: 'var(--color-text-muted)',
-              textAlign: 'center',
+              fontSize: `${((pageNumber.fontSize || 18) / 2)}px`,
+              color: pageNumber.fontColor || 'var(--color-text-muted)',
+              fontFamily: pageNumber.fontFamily || undefined,
+              fontWeight: pageNumber.bold ? 700 : 400,
+              fontStyle: pageNumber.italic ? 'italic' : 'normal',
+              textAlign: (pageNumber.align as any) || 'center',
             }}>
-              {docFooter}
+              {previewPageNumber(pageNumber.format)}
             </div>
           )}
         </div>
+
+        {/* 右侧批注栏（对齐 MS Word 审阅窗格：批注卡片显示在正文右侧，与批注锚点对应） */}
+        {comments.length > 0 && (
+          <div
+            className="comments-pane"
+            style={{
+              width: 240,
+              flexShrink: 0,
+              borderLeft: '1px solid var(--color-border)',
+              background: 'var(--color-surface)',
+              overflowY: 'auto',
+              padding: '12px 10px',
+              position: 'sticky',
+              top: 0,
+              alignSelf: 'flex-start',
+              maxHeight: '100%',
+            }}
+          >
+            <div className="comments-pane-header">{t('doc.comments') || '批注'} ({comments.length})</div>
+            {comments.map(c => {
+              const anchor = viewRef.current?.domAtPos(Math.min(c.pos + 1, viewRef.current.state.doc.content.size))
+              let top = 0
+              if (anchor) { const rect = (anchor.node as HTMLElement).getBoundingClientRect?.(); const scroll = (window.document.querySelector('.editor-scroll') as HTMLElement); if (rect) top = rect.top - (scroll ? scroll.getBoundingClientRect().top : 0) }
+              const isActive = activeComment === c.id
+              const isEditing = editingComment === c.id
+              return (
+                <div
+                  key={c.id}
+                  id={`comment-card-${c.id}`}
+                  className={`comment-card ${isActive ? 'active' : ''}`}
+                  style={{ position: 'relative', marginTop: top > 0 ? top : undefined, marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', border: `1px solid ${isActive ? '#4f46e5' : 'var(--color-border)'}`, background: isActive ? 'var(--color-bg-alt)' : 'var(--color-surface)' }}
+                  onClick={() => { setActiveComment(c.id); const v = viewRef.current; if (v) { const node = v.state.doc.nodeAt(c.pos); if (node && node.type.name === 'comment_mark') { const from = c.pos, to = c.pos + node.nodeSize; v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to))); v.focus() } } }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-text-muted)' }}>{c.author}</span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button type="button" className="comment-action" title={t('doc.editComment') || '编辑'} onClick={(e) => { e.stopPropagation(); setEditingComment(c.id) }}>✎</button>
+                      <button type="button" className="comment-action" title={t('doc.deleteComment') || '删除'} onClick={(e) => { e.stopPropagation(); deleteComment(c.id) }}>×</button>
+                    </div>
+                  </div>
+                  {isEditing ? (
+                    <textarea
+                      autoFocus
+                      defaultValue={c.text}
+                      className="comment-edit-input"
+                      style={{ width: '100%', minHeight: '56px', fontSize: '12px', resize: 'vertical', borderRadius: '4px', border: '1px solid var(--color-border)', padding: '4px 6px', background: 'var(--color-bg)', color: 'var(--color-text)' }}
+                      onBlur={(e) => { editComment(c.id); setEditingComment(null) }}
+                      onKeyDown={(e) => { if (e.key === 'Escape') { setEditingComment(null) } }}
+                    />
+                  ) : (
+                    <div style={{ fontSize: '12px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text)' }}>{c.text}</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
+
+      {/* 页码设置对话框 */}
+      {showPageNumDialog && (
+        <PageNumberDialog
+          value={pageNumber}
+          onClose={() => setShowPageNumDialog(false)}
+          onSave={(pn) => { setPageNumber(pn); setShowPageNumDialog(false); emitDoc(pn) }}
+        />
+      )}
+      {showParaDialog && (
+        <ParagraphDialog
+          value={paraDraft}
+          onClose={() => setShowParaDialog(false)}
+          onSave={(d) => { applyParagraphFormat(d); setShowParaDialog(false) }}
+        />
+      )}
+
+      {/* 文档对比面板 */}
+      {compareOpen && (
+        <div className="modal-overlay" onMouseDown={() => setCompareOpen(false)}>
+          <div className="modal compare-panel" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-title">{t('doc.compareResult')}</div>
+            <div className="compare-body">
+              {compareDiff.length === 0 && <div className="compare-empty">{t('doc.compareEmpty')}</div>}
+              {compareDiff.map((d, i) => (
+                <div key={i} className={`compare-line compare-${d.type}`}>
+                  <span className="compare-sign">{d.type === 'add' ? '+' : d.type === 'del' ? '−' : ' '}</span>
+                  <span className="compare-text">{d.text || ' '}</span>
+                </div>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setCompareOpen(false)}>{t('doc.close')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 样式库面板 */}
+      {showStyles && (
+        <div className="modal-overlay" onMouseDown={() => { setShowStyles(false); setEditingStyle(null) }}>
+          <div className="modal styles-panel" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>{t('doc.styles')}</span>
+              <button className="modal-close" onClick={() => { setShowStyles(false); setEditingStyle(null) }}>×</button>
+            </div>
+            <div className="styles-toolbar">
+              <input className="styles-search" placeholder={t('doc.search') || ''} value={styleSearch} onChange={(e) => setStyleSearch(e.target.value)} />
+              <button className="btn btn-outline btn-sm" onClick={createStyleFromSelection}>{t('doc.newStyle')}</button>
+            </div>
+            <div className="styles-list">
+              {allStyles.filter(s => s.name.toLowerCase().includes(styleSearch.toLowerCase())).map((s) => (
+                <div key={s.name} className="style-row" onClick={() => applyStyle(s.name)} title={t('doc.applyStyle')}>
+                  <div className="style-preview" style={{ fontSize: s.format.fontSize, fontWeight: s.format.bold ? 700 : 400, fontStyle: s.format.italic ? 'italic' : 'normal', color: s.format.color || 'inherit', textAlign: (s.format.align as any) || 'left' }}>
+                    {s.name}
+                  </div>
+                  <div className="style-meta">
+                    <div className="style-name">{s.name}{!s.builtin ? ' *' : ''}</div>
+                    <div className="style-desc">{styleDesc(s.format)}</div>
+                  </div>
+                  <button className="style-edit" title={t('doc.editStyle')} onClick={(e) => { e.stopPropagation(); setEditingStyle(s.name) }}>✎</button>
+                </div>
+              ))}
+            </div>
+            {editingStyle && (
+              <StyleEditor
+                name={editingStyle}
+                initial={resolveStyle(editingStyle)}
+                onCancel={() => setEditingStyle(null)}
+                onSave={(fmt) => { updateStyleEverywhere(editingStyle, fmt); setEditingStyle(null) }}
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* MS Office 风格打印对话框 */}
       <PrintDialog

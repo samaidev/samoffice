@@ -11,6 +11,11 @@ declare global {
           Suggest: (word: string, lang: string, n: number) => Promise<Candidate[]>
           LearnWord: (word: string, lang: string, source: string) => Promise<void>
           HTTPPort: () => Promise<number>
+          GetStartupArgs: () => Promise<string[]>
+          OpenFileDialog: () => Promise<string>
+          ReadFile: (path: string) => Promise<string>
+          SaveFileDialog: (defaultName: string, format: string) => Promise<string>
+          WriteDocument: (path: string, format: string, document: Document) => Promise<void>
         }
       }
     }
@@ -32,6 +37,8 @@ export class RemoteBackend implements Backend {
     if (!r.ok) throw new Error(`openFile: ${r.status} ${await r.text()}`)
     return r.json()
   }
+
+  async getStartupArgs(): Promise<string[]> { return [] }
 
   async uploadFile(file: File): Promise<{ document: Document; warnings: Warning[] }> {
     const form = new FormData()
@@ -64,6 +71,14 @@ export class RemoteBackend implements Backend {
       body: JSON.stringify({ word, lang, source })
     })
   }
+
+  // 远程模式无原生对话框，返回 '' 让调用方回退到浏览器下载
+  async openFileDialog(): Promise<string> { return '' }
+  async saveFileDialog(_defaultName: string, _format: string): Promise<string> { return '' }
+  async readFile(_path: string): Promise<string> { throw new Error('readFile not supported in remote mode') }
+  async writeDocument(_path: string, _format: string, _document: Document): Promise<void> {
+    throw new Error('writeDocument not supported in remote mode')
+  }
 }
 
 // LocalBackend 通过 Wails Binding 与本地 Go 进程通信
@@ -83,6 +98,16 @@ export class LocalBackend implements Backend {
     return this.app.OpenFile(path)
   }
 
+  async getStartupArgs(): Promise<string[]> {
+    if (!this.app || !this.app.GetStartupArgs) return []
+    try {
+      const args = await this.app.GetStartupArgs()
+      return Array.isArray(args) ? args : []
+    } catch {
+      return []
+    }
+  }
+
   async uploadFile(_file: File): Promise<{ document: Document; warnings: Warning[] }> {
     throw new Error('Local mode uses openFile(path), not uploadFile')
   }
@@ -100,6 +125,26 @@ export class LocalBackend implements Backend {
   async learnWord(word: string, lang: string, source = 'manual'): Promise<void> {
     if (!this.app) return
     await this.app.LearnWord(word, lang, source)
+  }
+
+  async openFileDialog(): Promise<string> {
+    if (!this.app) return ''
+    return this.app.OpenFileDialog()
+  }
+
+  async readFile(path: string): Promise<string> {
+    if (!this.app) throw new Error('Wails binding not available')
+    return this.app.ReadFile(path)
+  }
+
+  async saveFileDialog(defaultName: string, format: string): Promise<string> {
+    if (!this.app) return ''
+    return this.app.SaveFileDialog(defaultName, format)
+  }
+
+  async writeDocument(path: string, format: string, document: Document): Promise<void> {
+    if (!this.app) throw new Error('Wails binding not available')
+    return this.app.WriteDocument(path, format, document)
   }
 }
 

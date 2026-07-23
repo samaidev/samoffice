@@ -1,6 +1,7 @@
 import { useState, useMemo, memo, useEffect } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
+import { Dropdown } from '../../components/Dropdown'
 
 interface Slide {
   id: number; title: string; content: string; bg: string
@@ -565,9 +566,18 @@ export function SlideEditor() {
           <RibbonGroup label={t('slide.timing')}>
             <RibbonButton icon="⏱" label={autoPlay ? `${t('slide.auto')}${autoPlaySec}s` : t('slide.manual')} onClick={() => setAutoPlay(!autoPlay)} active={autoPlay} />
             {autoPlay && (
-              <select value={autoPlaySec} onChange={e => setAutoPlaySec(parseInt(e.target.value))} className="text-xs rounded-md px-2 py-1" style={{ width: 50, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
-                <option value={3}>3s</option><option value={5}>5s</option><option value={10}>10s</option><option value={15}>15s</option>
-              </select>
+              <Dropdown
+                className="text-xs rounded-md px-2 py-1 ribbon-input"
+                style={{ width: 60, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                value={String(autoPlaySec)}
+                onChange={v => setAutoPlaySec(parseInt(v))}
+                options={[
+                  { label: '3s', value: '3' },
+                  { label: '5s', value: '5' },
+                  { label: '10s', value: '10' },
+                  { label: '15s', value: '15' },
+                ]}
+              />
             )}
           </RibbonGroup>
         </>)}

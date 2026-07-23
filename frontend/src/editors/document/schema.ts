@@ -12,9 +12,22 @@ export const schema = new Schema({
       attrs: {
         align: { default: '' },
         lineHeight: { default: '' },
-        indent: { default: 0 },
-        spaceBefore: { default: 0 },
-        spaceAfter: { default: 0 },
+        indent: { default: 0 },          // 工具栏缩进档位（*2em），与 indentLeft 并存
+        // P2: 精确缩进（px）
+        indentLeft: { default: 0 },
+        indentRight: { default: 0 },
+        firstLine: { default: 0 },       // 首行缩进 px
+        hanging: { default: 0 },         // 悬挂缩进 px
+        spaceBefore: { default: 0 },     // pt
+        spaceAfter: { default: 0 },      // pt
+        // P2: 行距种类
+        lineSpacingKind: { default: '' },   // '' | single | 1.5 | double | multiple | exact | atLeast
+        lineSpacingValue: { default: 0 },   // multiple 系数 或 exact/atLeast 的 pt 值
+        // 换行与分页
+        keepLines: { default: false },      // 段中不分页
+        keepWithNext: { default: false },   // 与下段同页
+        pageBreakBefore: { default: false },// 段前分页
+        outlineLevel: { default: 0 },       // 0=正文, 1-9=提纲级别
         // P1: 段落边框/底纹
         border: { default: '' },        // "all" / "left" / "none"
         shading: { default: '' },        // hex color
@@ -28,31 +41,61 @@ export const schema = new Schema({
         rtl: { default: false },
       },
       toDOM: (node) => {
+        const a = node.attrs
         const s: string[] = []
-        if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
-        if (node.attrs.lineHeight) s.push(`line-height: ${node.attrs.lineHeight}`)
-        if (node.attrs.indent > 0) s.push(`margin-left: ${node.attrs.indent * 2}em`)
-        if (node.attrs.spaceBefore > 0) s.push(`margin-top: ${node.attrs.spaceBefore}pt`)
-        if (node.attrs.spaceAfter > 0) s.push(`margin-bottom: ${node.attrs.spaceAfter}pt`)
-        if (node.attrs.shading) s.push(`background-color: ${node.attrs.shading}`)
-        if (node.attrs.border === 'all') s.push('border: 1px solid #ccc; padding: 4px')
-        if (node.attrs.border === 'left') s.push('border-left: 3px solid #4f46e5; padding-left: 8px')
-        if (node.attrs.letterSpacing) s.push(`letter-spacing: ${node.attrs.letterSpacing}`)
-        if (node.attrs.rtl) s.push('direction: rtl')
-        return ['p', { style: s.join('; ') }, 0]
+        if (a.align) s.push(`text-align: ${a.align}`)
+        // 行距：优先用对话框的 lineSpacingKind/Value（贴近 MS Word 语义），
+        // 其次用工具栏直接设置的 lineHeight（如 '1.5' / '28pt'）。
+        if (a.lineSpacingKind) {
+          const k = a.lineSpacingKind
+          if (k === 'single') s.push('line-height: 1')
+          else if (k === '1.5') s.push('line-height: 1.5')
+          else if (k === 'double') s.push('line-height: 2')
+          else if (k === 'multiple') s.push(`line-height: ${a.lineSpacingValue || 1}`)
+          else if (k === 'exact' || k === 'atLeast') s.push(`line-height: ${a.lineSpacingValue}pt`)
+        } else if (a.lineHeight) {
+          // 兼容倍数（'1.5'）与固定值（'28pt'）两种写法
+          s.push(`line-height: ${a.lineHeight}`)
+        }
+        // 缩进：以「字符」为单位（em），与 MS Word 一致。
+        // indentLeft/right 以 em 存储（Word 的“左侧/右侧”用字符），
+        // indent 档位 * 2em；firstLine/hanging 用 em（首行/悬挂缩进按字符计）。
+        if (a.indentLeft) s.push(`margin-left: ${a.indentLeft}em`)
+        else if (a.indent > 0) s.push(`margin-left: ${a.indent * 2}em`)
+        if (a.indentRight) s.push(`margin-right: ${a.indentRight}em`)
+        if (a.firstLine) s.push(`text-indent: ${a.firstLine}em`)
+        if (a.hanging) s.push(`text-indent: -${a.hanging}em; margin-left: ${a.hanging}em`)
+        if (a.spaceBefore > 0) s.push(`margin-top: ${a.spaceBefore}pt`)
+        if (a.spaceAfter > 0) s.push(`margin-bottom: ${a.spaceAfter}pt`)
+        if (a.shading) s.push(`background-color: ${a.shading}`)
+        if (a.border === 'all') s.push('border: 1px solid #ccc; padding: 4px')
+        if (a.border === 'left') s.push('border-left: 3px solid #4f46e5; padding-left: 8px')
+        if (a.letterSpacing) s.push(`letter-spacing: ${a.letterSpacing}`)
+        if (a.rtl) s.push('direction: rtl')
+        if (a.keepWithNext) s.push('break-after: avoid')
+        if (a.keepLines) s.push('break-inside: avoid')
+        if (a.pageBreakBefore) s.push('break-before: page')
+        const domAttrs: any = { style: s.join('; ') }
+        if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
+        return ['p', domAttrs, 0]
       },
       parseDOM: [{
         tag: 'p',
         getAttrs: (dom: HTMLElement) => ({
           align: dom.style.textAlign || '',
           lineHeight: dom.style.lineHeight || '',
-          indent: parseInt(dom.style.marginLeft) > 0 ? Math.floor(parseInt(dom.style.marginLeft) / 32) : 0,
+          indent: parseInt(dom.style.marginLeft) > 0 && dom.style.marginLeft.endsWith('em') ? Math.max(1, Math.round(parseFloat(dom.style.marginLeft) / 2)) : 0,
+          indentLeft: dom.style.marginLeft.endsWith('em') ? parseFloat(dom.style.marginLeft) : (dom.style.marginLeft.endsWith('px') ? Math.round(parseInt(dom.style.marginLeft) / 32) : 0),
+          indentRight: dom.style.marginRight.endsWith('em') ? parseFloat(dom.style.marginRight) : (dom.style.marginRight.endsWith('px') ? Math.round(parseInt(dom.style.marginRight) / 32) : 0),
+          firstLine: dom.style.textIndent.endsWith('em') && !dom.style.textIndent.startsWith('-') ? parseFloat(dom.style.textIndent) : (dom.style.textIndent.endsWith('px') && !dom.style.textIndent.startsWith('-') ? Math.round(parseInt(dom.style.textIndent) / 32) : 0),
+          hanging: dom.style.textIndent.startsWith('-') ? (dom.style.textIndent.endsWith('em') ? parseFloat(dom.style.textIndent.replace('-', '')) : Math.round(parseInt(dom.style.textIndent.replace('-', '')) / 32)) : 0,
           spaceBefore: parseInt(dom.style.marginTop) || 0,
           spaceAfter: parseInt(dom.style.marginBottom) || 0,
           shading: dom.style.backgroundColor || '',
           border: dom.style.border ? 'all' : (dom.style.borderLeft ? 'left' : ''),
           letterSpacing: dom.style.letterSpacing || '',
           rtl: dom.style.direction === 'rtl',
+          outlineLevel: parseInt(dom.getAttribute('data-outline') || '') || 0,
           columnSpan: 0, dropCap: false,
         })
       }]
@@ -60,10 +103,57 @@ export const schema = new Schema({
 
     // === 标题 ===
     heading: {
-      attrs: { level: { default: 1, validate: 'number' }, align: { default: '' } },
+      attrs: {
+        level: { default: 1, validate: 'number' },
+        id: { default: '' },
+        align: { default: '' },
+        indentLeft: { default: 0 },
+        indentRight: { default: 0 },
+        firstLine: { default: 0 },
+        hanging: { default: 0 },
+        spaceBefore: { default: 0 },
+        spaceAfter: { default: 0 },
+        lineSpacingKind: { default: '' },
+        lineSpacingValue: { default: 0 },
+        keepLines: { default: false },
+        keepWithNext: { default: false },
+        pageBreakBefore: { default: false },
+        outlineLevel: { default: 0 },
+        border: { default: '' },
+        shading: { default: '' },
+        letterSpacing: { default: '' },
+        rtl: { default: false },
+      },
       content: 'inline*',
       group: 'block',
-      toDOM: (node) => ['h' + node.attrs.level, { style: node.attrs.align ? `text-align: ${node.attrs.align}` : '' }, 0],
+      toDOM: (node) => {
+        const a = node.attrs
+        const s: string[] = []
+        if (a.align) s.push(`text-align: ${a.align}`)
+        if (a.lineSpacingKind) {
+          const k = a.lineSpacingKind
+          if (k === 'single') s.push('line-height: 1')
+          else if (k === '1.5') s.push('line-height: 1.5')
+          else if (k === 'double') s.push('line-height: 2')
+          else if (k === 'multiple') s.push(`line-height: ${a.lineSpacingValue || 1}`)
+          else if (k === 'exact' || k === 'atLeast') s.push(`line-height: ${a.lineSpacingValue}pt`)
+        }
+        if (a.indentLeft) s.push(`margin-left: ${a.indentLeft}px`)
+        if (a.indentRight) s.push(`margin-right: ${a.indentRight}px`)
+        if (a.firstLine) s.push(`text-indent: ${a.firstLine}px`)
+        if (a.hanging) s.push(`text-indent: -${a.hanging}px; margin-left: ${a.hanging}px`)
+        if (a.spaceBefore > 0) s.push(`margin-top: ${a.spaceBefore}pt`)
+        if (a.spaceAfter > 0) s.push(`margin-bottom: ${a.spaceAfter}pt`)
+        if (a.shading) s.push(`background-color: ${a.shading}`)
+        if (a.letterSpacing) s.push(`letter-spacing: ${a.letterSpacing}`)
+        if (a.rtl) s.push('direction: rtl')
+        if (a.keepWithNext) s.push('break-after: avoid')
+        if (a.keepLines) s.push('break-inside: avoid')
+        if (a.pageBreakBefore) s.push('break-before: page')
+        const domAttrs: any = { style: s.join('; ') }
+        if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
+        return ['h' + node.attrs.level, domAttrs, 0]
+      },
       parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({ tag: `h${level}`, attrs: { level } }))
     },
 
@@ -174,13 +264,57 @@ export const schema = new Schema({
     page_break: {
       group: 'block',
       atom: true,
-      toDOM: () => ['div', { style: 'page-break-after: always; border-top: 1px dashed #94a3b8; margin: 16px 0; text-align: center', 'data-page-break': 'true' }, '— 分页 —'],
-      parseDOM: [{ tag: 'div[data-page-break]' }],
+      attrs: {
+        restart: { default: false },     // 从此处分节并重启页码编号
+        startNumber: { default: 1 },     // 重启后的起始页码
+      },
+      toDOM: (node) => {
+        const restart = node.attrs.restart ? 'true' : 'false'
+        const start = String(node.attrs.startNumber || 1)
+        const label = node.attrs.restart ? `— 分页并重启页码 (从 ${start}) —` : '— 分页 —'
+        return ['div', { style: 'page-break-after: always; border-top: 1px dashed #94a3b8; margin: 16px 0; text-align: center', 'data-page-break': 'true', 'data-restart': restart, 'data-start': start }, label]
+      },
+      parseDOM: [{
+        tag: 'div[data-page-break]',
+        getAttrs: (dom: any) => ({
+          restart: dom.getAttribute('data-restart') === 'true',
+          startNumber: parseInt(dom.getAttribute('data-start') || '1', 10) || 1,
+        }),
+      }],
+    },
+
+    // === 数学公式 ===
+    math: {
+      group: 'block',
+      atom: true,
+      isolating: true,
+      attrs: {
+        latex: { default: '' },
+        inline: { default: false },
+      },
+      toDOM: (node) => {
+        const latex = node.attrs.latex || ''
+        const wrap = node.attrs.inline ? 'span' : 'div'
+        return [wrap, { class: 'sam-math', 'data-latex': latex }, `⟨formula:${latex}⟩`]
+      },
+      parseDOM: [{
+        tag: 'div.sam-math, span.sam-math',
+        getAttrs: (dom: any) => ({
+          latex: dom.getAttribute('data-latex') || (dom.textContent || '').replace(/^⟨formula:/, '').replace(/⟩$/, ''),
+          inline: dom.tagName.toLowerCase() === 'span',
+        }),
+      }, {
+        tag: 'p',
+        getAttrs: (dom: any) => {
+          const text = dom.textContent || ''
+          if (!text.startsWith('⟨formula:')) return false
+          return { latex: text.replace(/^⟨formula:/, '').replace(/⟩$/, '') }
+        },
+      }],
     },
 
     // === 图片 ===
     image: {
-      inline: false,
       attrs: {
         src: { validate: 'string' },
         alt: { default: '' },
@@ -277,7 +411,6 @@ export const schema = new Schema({
     footnote_section: {
       content: 'footnote_item+',
       group: 'block',
-      atom: true,
       defining: true,
       toDOM: () => ['div', { class: 'footnote-section', style: 'border-top: 1px solid #ccc; margin-top: 32px; padding-top: 8px; font-size: 0.8em; color: #666' }, 0],
       parseDOM: [{ tag: 'div.footnote-section' }],
@@ -285,9 +418,19 @@ export const schema = new Schema({
     footnote_item: {
       content: 'inline*',
       atom: false,
-      toDOM: (node) => ['div', { class: 'footnote-item', style: 'margin: 2px 0' }, ['sup', { style: 'color: #4f46e5; margin-right: 4px' }, `${node.attrs.num}.`], 0],
+      toDOM: (node) => ['div', { class: 'footnote-item', style: 'margin: 2px 0' },
+        ['sup', { class: 'footnote-num', style: 'color: #4f46e5; margin-right: 4px', contenteditable: 'false' }, `${node.attrs.num}.`],
+        ['span', { class: 'footnote-body' }, 0]],
       parseDOM: [{ tag: 'div.footnote-item' }],
       attrs: { num: { default: 1 } },
+    },
+
+    // === 目录条目（可点击跳转） ===
+    tocLink: {
+      inline: true, group: 'inline', atom: true,
+      attrs: { target: { default: '' }, label: { default: '' } },
+      toDOM: (node) => ['span', { class: 'sam-toc-link', 'data-target': node.attrs.target, style: 'color:#1d4ed8;cursor:pointer' }, node.attrs.label],
+      parseDOM: [{ tag: 'span.sam-toc-link', getAttrs: (dom: any) => ({ target: dom.getAttribute('data-target') || '', label: dom.textContent || '' }) }],
     },
 
     // === 书签（P1） ===

@@ -1,6 +1,31 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
+    <script>
+      (function(){
+        function report(text){
+          try{
+            var pre=document.createElement('pre');
+            pre.style.cssText='position:fixed;inset:0;z-index:99999;color:#f44;background:#111;padding:16px;white-space:pre-wrap;font-family:monospace;margin:0;overflow:auto';
+            pre.textContent='前端错误：\n'+text;
+            (document.body||document.documentElement).appendChild(pre);
+          }catch(e){}
+          var tries=0;
+          function t(){
+            try{ if(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.LogError){ window.go.main.App.LogError(text); return; } }catch(e){}
+            if(tries++<80){ setTimeout(t,250); }
+          }
+          t();
+        }
+        window.addEventListener('error', function(e){
+          var msg = e.error && e.error.stack ? e.error.stack : (e.message || String(e));
+          report('window.error: '+msg);
+        });
+        window.addEventListener('unhandledrejection', function(e){
+          var r=e.reason; report('unhandledrejection: '+(r&&r.stack?r.stack:String(r)));
+        });
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SamOffice - 跨平台办公套件</title>

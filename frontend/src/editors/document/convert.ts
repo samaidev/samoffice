@@ -1,5 +1,32 @@
 import { Schema, Mark, Node } from 'prosemirror-model'
-import type { Document, Block, Inline } from '../../types/udm'
+import type { Document, Block, Inline, PageNumberConfig } from '../../types/udm'
+
+// 段落/标题的格式化属性键（统一存于 UDM 的 props 中，确保 Go 往返与 docx 导出保留）
+const PARA_PROP_KEYS = [
+  'indent', 'indentLeft', 'indentRight', 'firstLine', 'hanging',
+  'lineHeight', 'spaceBefore', 'spaceAfter',
+  'lineSpacingKind', 'lineSpacingValue',
+  'keepLines', 'keepWithNext', 'pageBreakBefore', 'outlineLevel',
+  'border', 'shading', 'columnSpan', 'dropCap', 'letterSpacing', 'rtl',
+]
+
+function extractParaProps(attrs: any): any {
+  const props: any = {}
+  for (const k of PARA_PROP_KEYS) {
+    if (attrs[k] !== undefined && attrs[k] !== '' && attrs[k] !== 0 && attrs[k] !== false) props[k] = attrs[k]
+  }
+  return props
+}
+
+function applyParaAttrsFromProps(b: any, base: any): any {
+  const props = b.props || {}
+  const a = { ...base }
+  for (const k of PARA_PROP_KEYS) {
+    if (props[k] !== undefined) a[k] = props[k]
+    else if (b[k] !== undefined) a[k] = b[k] // 兼容旧版顶层字段
+  }
+  return a
+}
 
 // UDM → ProseMirror 转换
 export function udmToProseMirror(udm: Document, schema: Schema): Node {
@@ -12,11 +39,11 @@ function blockToPM(b: Block, schema: Schema): Node {
   switch (t) {
     case 'heading': {
       const h = b as any
-      return schema.node('heading', { level: h.level }, inlineToPM(h.inline, schema))
+      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '' }), inlineToPM(h.inline, schema))
     }
     case 'paragraph': {
       const p = b as any
-      return schema.node('paragraph', {}, inlineToPM(p.inline, schema))
+      return schema.node('paragraph', applyParaAttrsFromProps(p, {}), inlineToPM(p.inline, schema))
     }
     case 'codeBlock': {
       const c = b as any
@@ -31,7 +58,41 @@ function blockToPM(b: Block, schema: Schema): Node {
     }
     case 'image': {
       const im = b as any
-      return schema.node('image', { src: im.src, alt: im.alt || '' })
+      return schema.node('image', { src: im.src, alt: im.alt || '', width: im.width || 0, height: im.height || 0, float: im.float || '', align: im.align || '' })
+    }
+    case 'math': {
+      const m = b as any
+      return schema.node('math', { latex: m.formula || m.latex || '', inline: !!m.inline })
+    }
+    case 'formula' in (b as any) && (b as any).formula: {
+      const m = b as any
+      return schema.node('math', { latex: m.formula || '', inline: !!m.inline })
+    }
+    case 'pageBreak': {
+      const pb = b as any
+      return schema.node('page_break', { restart: !!pb.restart, startNumber: Number(pb.startNumber) || 1 })
+    }
+    case 'table': {
+      const tb = b as any
+      const rows = (tb.rows || []).map((row: any[]) =>
+        schema.node(
+          'table_row',
+          {},
+          row.map((cell: any) =>
+            schema.node(
+              'table_cell',
+              {
+                colspan: cell.colSpan || 1,
+                rowspan: cell.rowSpan || 1,
+                align: cell.align || '',
+                isHeader: !!cell.isHeader,
+              },
+              cell.inline && cell.inline.length ? inlineToPM(cell.inline, schema) : schema.text(''),
+            ),
+          ),
+        ),
+      )
+      return schema.node('table', { align: tb.align || '' }, rows)
     }
     default:
       return schema.node('paragraph', {}, schema.text('[unsupported block]'))
@@ -42,6 +103,7 @@ function blockType(b: Block): string {
   if ('level' in b) return 'heading'
   if ('code' in b) return 'codeBlock'
   if ('items' in b) return 'bulletList'
+  if ('formula' in b) return 'math'
   if ('src' in b && 'caption' in b) return 'image'
   if ('rows' in b) return 'table'
   return 'paragraph'
@@ -80,21 +142,23 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
 }
 
 // ProseMirror → UDM 转换
-export function proseMirrorToUDM(doc: Node): Document {
+export function proseMirrorToUDM(doc: Node, opts?: { pageNumber?: PageNumberConfig }): Document {
   const blocks: Block[] = []
   doc.forEach((node) => {
     const b = pmToBlock(node)
     if (b) blocks.push(b)
   })
-  return { meta: { title: 'Untitled' }, blocks }
+  const out: Document = { meta: { title: 'Untitled' }, blocks }
+  if (opts && opts.pageNumber) out.pageNumber = opts.pageNumber
+  return out
 }
 
 function pmToBlock(node: Node): Block | null {
   switch (node.type.name) {
     case 'paragraph':
-      return { inline: pmToInline(node), style: '', align: '' }
+      return { inline: pmToInline(node), style: node.attrs.style || '', align: node.attrs.align || '', props: extractParaProps(node.attrs) }
     case 'heading':
-      return { level: node.attrs.level, inline: pmToInline(node), style: '' }
+      return { level: node.attrs.level, inline: pmToInline(node), style: node.attrs.style || '', id: node.attrs.id || '', align: node.attrs.align || '', props: extractParaProps(node.attrs) }
     case 'bullet_list':
     case 'ordered_list': {
       const items: Block[][] = []
@@ -117,6 +181,22 @@ function pmToBlock(node: Node): Block | null {
     }
     case 'image':
       return { src: node.attrs.src, alt: node.attrs.alt || '', width: 0, height: 0 }
+    case 'page_break':
+      return { restart: !!node.attrs.restart, startNumber: Number(node.attrs.startNumber) || 1 }
+    case 'math':
+      return { formula: node.attrs.latex || '', inline: !!node.attrs.inline }
+    case 'table': {
+      const rows = node.children.map((row: any) =>
+        row.children.map((cell: any) => ({
+          inline: cell.childCount > 0 ? pmToInline(cell) : [],
+          colSpan: (cell.attrs.colSpan as number) || 1,
+          rowSpan: (cell.attrs.rowSpan as number) || 1,
+          align: (cell.attrs.align as string) || '',
+          isHeader: !!cell.attrs.isHeader,
+        })),
+      )
+      return { rows }
+    }
     default:
       return null
   }
@@ -125,7 +205,12 @@ function pmToBlock(node: Node): Block | null {
 function pmToInline(node: Node): Inline[] {
   const result: Inline[] = []
   node.forEach((child) => {
-    if (!child.isText) return
+    if (!child.isText) {
+      if (child.type.name === 'tocLink') {
+        if (child.attrs.label) result.push({ content: child.attrs.label } as any)
+      }
+      return
+    }
     const marks = child.marks
     const text = child.text || ''
     const bold = marks.some((m) => m.type.name === 'bold')

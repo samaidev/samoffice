@@ -3,14 +3,15 @@
 package docx
 
 import (
-        "archive/zip"
-        "bytes"
-        "encoding/xml"
-        "fmt"
-        "io"
-        "strings"
+	"archive/zip"
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
 
-        "github.com/zai/samoffice/internal/core"
+	"github.com/zai/samoffice/internal/core"
 )
 
 // Parser 实现 core.Parser 接口
@@ -129,6 +130,13 @@ func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
                                 }
                                 depth--
                         }
+                        if t.Name.Local == "tbl" && t.Name.Space == "http://schemas.openxmlformats.org/wordprocessingml/2006/main" {
+                                tbl := parseTable(dec)
+                                if tbl != nil {
+                                        blocks = append(blocks, tbl)
+                                }
+                                depth--
+                        }
                 case xml.EndElement:
                         depth--
                 }
@@ -136,65 +144,491 @@ func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
         return blocks, warnings
 }
 
-// parseParagraph 解析 <w:p> 段落
-func parseParagraph(dec *xml.Decoder) *core.Paragraph {
-        para := &core.Paragraph{Inline: []core.Inline{}}
-        var inRun bool
-        var curText core.Text
+// headingLevel 根据 Word 内置标题样式 ID（Heading1..Heading9）推断标题级别，
+// 非标题样式返回 0。大小写均可识别（Heading1 / heading1）。
+func headingLevel(style string) int {
+	if style == "" {
+		return 0
+	}
+	const prefix = "heading"
+	lower := strings.ToLower(style)
+	if !strings.HasPrefix(lower, prefix) {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(lower, prefix))
+	if err != nil || n < 1 || n > 9 {
+		return 0
+	}
+	return n
+}
 
-        for {
-                tok, err := dec.Token()
-                if err != nil {
-                        return para
-                }
-                switch t := tok.(type) {
-                case xml.StartElement:
-                        switch t.Name.Local {
-                        case "r": // <w:r> run
-                                inRun = true
-                                curText = core.Text{}
-                        case "t": // <w:t> text
-                                if inRun {
-                                        text := readCharData(dec)
-                                        curText.Content += text
-                                }
-                        case "b": // bold
-                                if inRun {
-                                        curText.Bold = readOnOffAttr(t)
-                                }
-                        case "i":
-                                if inRun {
-                                        curText.Italic = readOnOffAttr(t)
-                                }
-                        case "u":
-                                if inRun {
-                                        curText.Under = true
-                                }
-                        case "pStyle": // paragraph style
-                                for _, a := range t.Attr {
-                                        if a.Name.Local == "val" {
-                                                para.Style = a.Value
-                                        }
-                                }
-                        case "jc": // justify/align
-                                for _, a := range t.Attr {
-                                        if a.Name.Local == "val" {
-                                                para.Align = a.Value
-                                        }
-                                }
-                        }
-                case xml.EndElement:
-                        if t.Name.Local == "r" && inRun {
-                                if curText.Content != "" {
-                                        para.Inline = append(para.Inline, curText)
-                                }
-                                inRun = false
-                        }
-                        if t.Name.Local == "p" {
-                                return para
-                        }
-                }
-        }
+// parseParagraph 解析 <w:p> 段落。若段落内含 OMML 公式，则返回 *core.Math 块。
+func parseParagraph(dec *xml.Decoder) core.Block {
+	para := &core.Paragraph{Inline: []core.Inline{}}
+	var inRun bool
+	var curText core.Text
+	hasMath := false
+	var mathXML strings.Builder
+	inPPr := false // 当前是否处于 <w:pPr> 内（用于区分段落属性与 run 属性的同名元素，如 w:spacing）
+	setProp := func(k string, v any) {
+		if para.Props == nil {
+			para.Props = map[string]any{}
+		}
+		para.Props[k] = v
+	}
+
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return para
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "pPr":
+				inPPr = true
+			case "r": // <w:r> run
+				inRun = true
+				curText = core.Text{}
+			case "t": // <w:t> text
+				if inRun {
+					text := readCharData(dec)
+					curText.Content += text
+				}
+			case "b": // bold
+				if inRun {
+					curText.Bold = readOnOffAttr(t)
+				}
+			case "i":
+				if inRun {
+					curText.Italic = readOnOffAttr(t)
+				}
+			case "u":
+				if inRun {
+					curText.Under = true
+				}
+			case "pStyle": // paragraph style
+				for _, a := range t.Attr {
+					if a.Name.Local == "val" {
+						para.Style = a.Value
+					}
+				}
+			case "jc": // justify/align
+				for _, a := range t.Attr {
+					if a.Name.Local == "val" {
+						para.Align = a.Value
+					}
+				}
+			case "ind": // 缩进（仅在 pPr 上下文）
+				if !inPPr {
+					break
+				}
+				var leftTw, rightTw, firstTw, hangTw, leftCh, firstCh, hangCh float64
+				for _, a := range t.Attr {
+					f, _ := strconv.ParseFloat(a.Value, 64)
+					switch a.Name.Local {
+					case "left":
+						leftTw = f
+					case "right":
+						rightTw = f
+					case "firstLine":
+						firstTw = f
+					case "hanging":
+						hangTw = f
+					case "leftChars":
+						leftCh = f
+					case "firstLineChars":
+						firstCh = f
+					case "hangingChars":
+						hangCh = f
+					}
+				}
+				// 优先使用字符单位，否则用 twips（1 字符 ≈ 240twips @12pt）
+				if leftCh != 0 {
+					setProp("indentLeft", leftCh/100)
+				} else if leftTw != 0 {
+					setProp("indentLeft", leftTw/240)
+				}
+				if rightTw != 0 {
+					setProp("indentRight", rightTw/240)
+				}
+				if firstCh != 0 {
+					setProp("firstLine", firstCh/100)
+				} else if firstTw != 0 {
+					setProp("firstLine", firstTw/240)
+				}
+				if hangCh != 0 {
+					setProp("hanging", hangCh/100)
+				} else if hangTw != 0 {
+					setProp("hanging", hangTw/240)
+				}
+			case "spacing": // 段前/段后/行距（仅在 pPr 上下文）
+				if !inPPr {
+					break
+				}
+				var before, after, line float64
+				rule := ""
+				for _, a := range t.Attr {
+					f, _ := strconv.ParseFloat(a.Value, 64)
+					switch a.Name.Local {
+					case "before":
+						before = f
+					case "after":
+						after = f
+					case "line":
+						line = f
+					case "lineRule":
+						rule = a.Value
+					}
+				}
+				if before != 0 {
+					setProp("spaceBefore", before/20) // twips → pt
+				}
+				if after != 0 {
+					setProp("spaceAfter", after/20)
+				}
+				if line != 0 {
+					if rule == "exact" || rule == "atLeast" {
+						setProp("lineHeight", fmt.Sprintf("%.0fpt", line/20))
+					} else {
+						mult := line / 240.0
+						setProp("lineHeight", strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", mult), "0"), "."))
+					}
+				}
+			case "keepLines":
+				if inPPr {
+					setProp("keepLines", readOnOffAttr(t))
+				}
+			case "keepNext":
+				if inPPr {
+					setProp("keepWithNext", readOnOffAttr(t))
+				}
+			case "pageBreakBefore":
+				if inPPr {
+					setProp("pageBreakBefore", readOnOffAttr(t))
+				}
+			case "outlineLvl":
+				if inPPr {
+					for _, a := range t.Attr {
+						if a.Name.Local == "val" {
+							if v, err := strconv.Atoi(a.Value); err == nil {
+								setProp("outlineLevel", v+1)
+							}
+						}
+					}
+				}
+			case "oMath", "oMathPara": // OMML 公式
+				hasMath = true
+				mathXML.WriteString(serializeStart(t))
+				collectElement(dec, &mathXML, t.Name.Local)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "pPr" {
+				inPPr = false
+			}
+			if t.Name.Local == "r" && inRun {
+				if curText.Content != "" {
+					para.Inline = append(para.Inline, curText)
+				}
+				inRun = false
+			}
+		if t.Name.Local == "p" {
+			if hasMath {
+				if latex := ommlToLatex(mathXML.String()); latex != "" {
+					return &core.Math{Formula: latex}
+				}
+			}
+			if lvl := headingLevel(para.Style); lvl > 0 {
+				return &core.Heading{
+					Level:  lvl,
+					Inline: para.Inline,
+					Style:  para.Style,
+					Props:  para.Props,
+				}
+			}
+			return para
+		}
+		}
+	}
+}
+
+// parseTable 解析 <w:tbl>，返回 *core.Table。容错：未知或残缺元素跳过。
+func parseTable(dec *xml.Decoder) core.Block {
+	tbl := &core.Table{Rows: [][]core.TableCell{}}
+	var curRow []core.TableCell
+	var curCell core.TableCell
+	var curCellInline []core.Inline
+	inTcPr := false
+
+	flushCell := func() {
+		if curCellInline != nil {
+			curCell.Inline = curCellInline
+		}
+		curRow = append(curRow, curCell)
+		curCell = core.TableCell{}
+		curCellInline = nil
+	}
+
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "tr":
+				curRow = []core.TableCell{}
+			case "tc":
+				curCell = core.TableCell{}
+				curCellInline = []core.Inline{}
+			case "tcPr":
+				inTcPr = true
+			case "gridSpan":
+				if inTcPr {
+					for _, a := range t.Attr {
+						if a.Name.Local == "val" {
+							if n, e := strconv.Atoi(a.Value); e == nil {
+								curCell.ColSpan = n
+							}
+						}
+					}
+				}
+			case "vMerge":
+				if inTcPr {
+					val := ""
+					for _, a := range t.Attr {
+						if a.Name.Local == "val" {
+							val = a.Value
+						}
+					}
+					// restart：纵向合并起点；continue：被合并区域（仍保留占位单元格以维持列对齐）
+					if val == "" || val == "restart" {
+						curCell.RowSpan = 1
+					}
+				}
+			case "p":
+				para := parseParagraph(dec)
+				if para != nil {
+					if p, ok := para.(*core.Paragraph); ok {
+						curCellInline = append(curCellInline, p.Inline...)
+					} else if h, ok := para.(*core.Heading); ok {
+						curCellInline = append(curCellInline, h.Inline...)
+					}
+				}
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "tcPr":
+				inTcPr = false
+			case "tc":
+				flushCell()
+			case "tr":
+				tbl.Rows = append(tbl.Rows, curRow)
+			case "tbl":
+				return tbl
+			}
+		}
+	}
+	return tbl
+}
+
+// === OMML → LaTeX 转换（覆盖常见结构）===
+
+func serializeStart(t xml.StartElement) string {
+	var sb strings.Builder
+	sb.WriteString("<" + t.Name.Local)
+	for _, a := range t.Attr {
+		sb.WriteString(" " + a.Name.Local + `="` + a.Value + `"`)
+	}
+	sb.WriteString(">")
+	return sb.String()
+}
+
+// collectElement 从 dec 中消费掉名为 name 的元素（含其全部子节点），
+// 将其完整 XML（含起始标签已由外部写入 mathXML）追加到 out。
+func collectElement(dec *xml.Decoder, out *strings.Builder, name string) {
+	depth := 1
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			out.WriteString(serializeStart(t))
+		case xml.CharData:
+			out.Write(t)
+		case xml.EndElement:
+			out.WriteString("</" + t.Name.Local + ">")
+			depth--
+			if depth == 0 && t.Name.Local == name {
+				return
+			}
+		}
+	}
+}
+
+// ommlToLatex 将 OMML 片段转为 LaTeX。失败返回空字符串。
+func ommlToLatex(omml string) string {
+	dec := xml.NewDecoder(strings.NewReader(omml))
+	dec.Strict = false
+	var sb strings.Builder
+	ok := false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		if start, ok2 := tok.(xml.StartElement); ok2 {
+			if start.Name.Local == "oMath" || start.Name.Local == "oMathPara" {
+				ok = true
+				writeOMMLChildren(dec, &sb)
+			}
+		}
+	}
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// writeOMMLChildren 解析 OMML 子元素直到匹配当前元素的结束标签。
+func writeOMMLChildren(dec *xml.Decoder, sb *strings.Builder) {
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			writeOMMLElement(dec, sb, t)
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
+// writeOMMLElement 转换单个 OMML 元素。子元素文本通过 dec 消费。
+func writeOMMLElement(dec *xml.Decoder, sb *strings.Builder, t xml.StartElement) {
+	switch t.Name.Local {
+	case "oMath", "oMathPara":
+		writeOMMLChildren(dec, sb)
+	case "f": // 分数
+		sb.WriteString("\\frac{")
+		skipTo(dec, sb, "num")
+		skipTo(dec, sb, "den")
+		sb.WriteString("}")
+	case "num":
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}{")
+	case "den":
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}")
+	case "rad": // 根式
+		sb.WriteString("\\sqrt{")
+		skipTo(dec, sb, "deg")
+		skipTo(dec, sb, "e")
+		sb.WriteString("}")
+	case "sqrt": // 简单根号
+		sb.WriteString("\\sqrt{")
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}")
+	case "deg":
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}{")
+	case "e":
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}")
+	case "sup": // 上标
+		sb.WriteString("^{")
+		skipTo(dec, sb, "e")
+		sb.WriteString("}")
+	case "sub": // 下标
+		sb.WriteString("_{")
+		skipTo(dec, sb, "e")
+		sb.WriteString("}")
+	case "sSubSup":
+		sb.WriteString("_{")
+		skipTo(dec, sb, "sub")
+		sb.WriteString("}^{")
+		skipTo(dec, sb, "sup")
+		sb.WriteString("}")
+	case "sSup":
+		sb.WriteString("^{")
+		skipTo(dec, sb, "sup")
+		sb.WriteString("}")
+	case "subArg":
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}{")
+	case "supArg":
+		writeOMMLChildren(dec, sb)
+		sb.WriteString("}")
+	case "d": // 定界符（括号）
+		sb.WriteString("\\left(")
+		skipTo(dec, sb, "e")
+		sb.WriteString("\\right)")
+	case "nary": // 求和/积分等
+		sb.WriteString(naryCmd(t))
+		sb.WriteString("_{")
+		skipTo(dec, sb, "sub")
+		sb.WriteString("}^{")
+		skipTo(dec, sb, "sup")
+		sb.WriteString("}")
+		skipTo(dec, sb, "e")
+	case "acc": // 帽子符号
+		sb.WriteString("\\hat{")
+		skipTo(dec, sb, "e")
+		sb.WriteString("}")
+	case "r": // 公式文本 run
+		writeOMMLChildren(dec, sb)
+	case "t", "i", "lit": // 文本/标识符/字面量
+		sb.WriteString(ommlText(readCharData(dec)))
+	default:
+		writeOMMLChildren(dec, sb)
+	}
+}
+
+// skipTo 跳过直到遇到名为 name 的子元素，然后转换它。
+func skipTo(dec *xml.Decoder, sb *strings.Builder, name string) {
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			if t.Name.Local == name {
+				writeOMMLElement(dec, sb, t)
+			}
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
+func naryCmd(_ xml.StartElement) string { return "\\sum" }
+
+// ommlText 将 OMML 文本中的特殊字符映射为 LaTeX。
+func ommlText(s string) string {
+	repl := map[string]string{
+		"∑": "\\sum", "∫": "\\int", "∏": "\\prod", "√": "\\sqrt",
+		"α": "\\alpha", "β": "\\beta", "γ": "\\gamma", "δ": "\\delta",
+		"θ": "\\theta", "λ": "\\lambda", "μ": "\\mu", "π": "\\pi",
+		"σ": "\\sigma", "φ": "\\phi", "ω": "\\omega", "∞": "\\infty",
+		"≤": "\\le", "≥": "\\ge", "≠": "\\ne", "≈": "\\approx",
+		"×": "\\times", "÷": "\\div", "±": "\\pm", "→": "\\to",
+		"∈": "\\in", "∀": "\\forall", "∃": "\\exists", "∇": "\\nabla",
+	}
+	for k, v := range repl {
+		s = strings.ReplaceAll(s, k, v)
+	}
+	return s
 }
 
 // readCharData 读取元素内的文本

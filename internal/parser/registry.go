@@ -7,11 +7,12 @@ import (
         "strings"
         "sync"
 
-        "github.com/zai/samoffice/internal/core"
-        "github.com/zai/samoffice/internal/parser/docx"
-        "github.com/zai/samoffice/internal/parser/markdown"
-        "github.com/zai/samoffice/internal/parser/pptx"
-        "github.com/zai/samoffice/internal/parser/xlsx"
+	"github.com/zai/samoffice/internal/core"
+	"github.com/zai/samoffice/internal/parser/doc"
+	"github.com/zai/samoffice/internal/parser/docx"
+	"github.com/zai/samoffice/internal/parser/markdown"
+	"github.com/zai/samoffice/internal/parser/pptx"
+	"github.com/zai/samoffice/internal/parser/xlsx"
 )
 
 // Parser 接口：所有格式解析器实现此接口
@@ -30,6 +31,7 @@ type Registry struct {
 func NewRegistry() *Registry {
         r := &Registry{}
         r.Register(&docx.Parser{})
+        r.Register(&doc.Parser{})
         r.Register(&xlsx.Parser{})
         r.Register(&pptx.Parser{})
         r.Register(&markdown.Parser{})

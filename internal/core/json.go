@@ -38,18 +38,20 @@ func (b *Paragraph) UnmarshalJSON(data []byte) error {
 
 // Heading 自定义反序列化：处理 Inline 接口字段
 func (b *Heading) UnmarshalJSON(data []byte) error {
-        type alias struct {
-                Level  int               `json:"level"`
-                Inline []json.RawMessage `json:"inline"`
-                Style  string            `json:"style,omitempty"`
-        }
-        var a alias
-        if err := json.Unmarshal(data, &a); err != nil {
-                return err
-        }
-        b.Level = a.Level
-        b.Style = a.Style
-        b.Inline = make([]Inline, 0, len(a.Inline))
+	type alias struct {
+		Level  int               `json:"level"`
+		Inline []json.RawMessage `json:"inline"`
+		Style  string            `json:"style,omitempty"`
+		Props  map[string]any    `json:"props,omitempty"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	b.Level = a.Level
+	b.Style = a.Style
+	b.Props = a.Props
+	b.Inline = make([]Inline, 0, len(a.Inline))
         for _, raw := range a.Inline {
                 in, err := unmarshalInline(raw)
                 if err != nil {
@@ -247,13 +249,16 @@ func (d *Document) UnmarshalJSON(data []byte) error {
 // unmarshalBlock 根据 JSON 结构特征判断 Block 类型
 func unmarshalBlock(data []byte) (Block, error) {
         var probe struct {
-                Level  *int            `json:"level"`   // Heading
-                Items  json.RawMessage `json:"items"`   // BulletList
-                Rows   json.RawMessage `json:"rows"`    // Table
-                Code   string          `json:"code"`    // CodeBlock
-                Src    string          `json:"src"`     // Image
-                Kind   string          `json:"kind"`    // RawBlock
-                Inline json.RawMessage `json:"inline"`  // Paragraph
+                Level    *int            `json:"level"`    // Heading
+                Items    json.RawMessage `json:"items"`    // BulletList
+                Rows     json.RawMessage `json:"rows"`     // Table
+                Code     string          `json:"code"`     // CodeBlock
+                Src      string          `json:"src"`      // Image
+                Kind     string          `json:"kind"`     // RawBlock
+                Inline   json.RawMessage `json:"inline"`   // Paragraph
+                Formula  string          `json:"formula"`  // Math
+                Restart  *bool           `json:"restart"`  // PageBreak
+                PageNum  *bool           `json:"enabled"`  // 仅 PageNumber 用，block 不会命中
         }
         if err := json.Unmarshal(data, &probe); err != nil {
                 return nil, err
@@ -276,6 +281,10 @@ func unmarshalBlock(data []byte) (Block, error) {
                 var c CodeBlock
                 err := json.Unmarshal(data, &c)
                 return &c, err
+        case probe.Formula != "":
+                var m Math
+                err := json.Unmarshal(data, &m)
+                return &m, err
         case probe.Src != "" && probe.Kind == "":
                 var im Image
                 err := json.Unmarshal(data, &im)
@@ -284,6 +293,10 @@ func unmarshalBlock(data []byte) (Block, error) {
                 var r RawBlock
                 err := json.Unmarshal(data, &r)
                 return &r, err
+        case probe.Restart != nil:
+                var pb PageBreak
+                err := json.Unmarshal(data, &pb)
+                return &pb, err
         case len(probe.Inline) > 0:
                 var p Paragraph
                 err := json.Unmarshal(data, &p)

@@ -8,13 +8,37 @@ package core
 //  2. 双向：UDM 可序列化为 JSON，前后端共用
 //  3. 可扩展：Block/Inline 用 interface，新增类型不破坏旧代码
 type Document struct {
-	Meta     Meta           `json:"meta"`
-	Blocks   []Block        `json:"blocks"`
-	Comments []Comment      `json:"comments,omitempty"`
-	Styles   []StyleDef     `json:"styles,omitempty"`
-	Warnings []Warning      `json:"warnings,omitempty"`
-	Raw      map[string]any `json:"raw,omitempty"`
+	Meta       Meta             `json:"meta"`
+	Blocks     []Block          `json:"blocks"`
+	Comments   []Comment        `json:"comments,omitempty"`
+	Styles     []StyleDef       `json:"styles,omitempty"`
+	PageNumber *PageNumberConfig `json:"pageNumber,omitempty"`
+	Warnings   []Warning        `json:"warnings,omitempty"`
+	Raw        map[string]any   `json:"raw,omitempty"`
 }
+
+// PageNumberConfig 描述页脚中页码字段的样式与格式。
+// 该配置为文档级，导出 docx 时生成带 PAGE 字段的页脚。
+type PageNumberConfig struct {
+	Enabled            bool    `json:"enabled"`
+	Format             string  `json:"format"` // 支持 {n}(当前页) 与 {total}(总页数)，如 "第 {n} 页"、"第 {n} / 共 {total} 页"、"Page {n} of {total}"
+	Align              string  `json:"align,omitempty"`
+	FontFamily         string  `json:"fontFamily,omitempty"`
+	FontSize           float64 `json:"fontSize,omitempty"` // 半磅，9 = 4.5pt
+	FontColor          string  `json:"fontColor,omitempty"`
+	Bold               bool    `json:"bold,omitempty"`
+	Italic             bool    `json:"italic,omitempty"`
+	FirstPageDifferent bool    `json:"firstPageDifferent,omitempty"` // 首页不显示页码
+}
+
+// PageBreak 分页符；restart 为 true 时从此处开始重新计算页码（生成分节 + 重启编号）。
+type PageBreak struct {
+	Restart     bool `json:"restart,omitempty"`
+	StartNumber int  `json:"startNumber,omitempty"`
+}
+
+func (PageBreak) isBlock()         {}
+func (PageBreak) BlockType() string { return "pageBreak" }
 
 type Meta struct {
 	Title       string `json:"title"`
@@ -72,9 +96,10 @@ func (Paragraph) isBlock()        {}
 func (Paragraph) BlockType() string { return "paragraph" }
 
 type Heading struct {
-	Level  int      `json:"level"`
-	Inline []Inline `json:"inline"`
-	Style  string   `json:"style,omitempty"`
+	Level  int             `json:"level"`
+	Inline []Inline        `json:"inline"`
+	Style  string          `json:"style,omitempty"`
+	Props  map[string]any  `json:"props,omitempty"`
 }
 
 func (Heading) isBlock()        {}
@@ -111,6 +136,8 @@ type Image struct {
 	Height  float64  `json:"height,omitempty"`
 	Caption []Inline `json:"caption,omitempty"`
 	Alt     string   `json:"alt,omitempty"`
+	Float   string   `json:"float,omitempty"`
+	Align   string   `json:"align,omitempty"`
 }
 
 func (Image) isBlock()        {}
@@ -123,6 +150,15 @@ type CodeBlock struct {
 
 func (CodeBlock) isBlock()        {}
 func (CodeBlock) BlockType() string { return "codeBlock" }
+
+// Math 数学公式块（LaTeX）。导出 docx 时转为 OMML（m:oMath）。
+type Math struct {
+	Formula string `json:"formula"`
+	Inline  bool   `json:"inline,omitempty"`
+}
+
+func (Math) isBlock()        {}
+func (Math) BlockType() string { return "math" }
 
 type RawBlock struct {
 	Kind string         `json:"kind"`
