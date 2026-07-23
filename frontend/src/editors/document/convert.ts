@@ -74,23 +74,28 @@ function blockToPM(b: Block, schema: Schema): Node {
     }
     case 'table': {
       const tb = b as any
+      const cellToPM = (cell: any) => {
+        let content: Node[]
+        if (cell.blocks && cell.blocks.length) {
+          content = cell.blocks.map((ib: Block) => blockToPM(ib, schema))
+        } else if (cell.inline && cell.inline.length) {
+          content = [schema.node('paragraph', {}, inlineToPM(cell.inline, schema))]
+        } else {
+          content = [schema.node('paragraph', {})]
+        }
+        return schema.node(
+          'table_cell',
+          {
+            colspan: cell.colSpan || 1,
+            rowspan: cell.rowSpan || 1,
+            align: cell.align || '',
+            isHeader: !!cell.isHeader,
+          },
+          content,
+        )
+      }
       const rows = (tb.rows || []).map((row: any[]) =>
-        schema.node(
-          'table_row',
-          {},
-          row.map((cell: any) =>
-            schema.node(
-              'table_cell',
-              {
-                colspan: cell.colSpan || 1,
-                rowspan: cell.rowSpan || 1,
-                align: cell.align || '',
-                isHeader: !!cell.isHeader,
-              },
-              cell.inline && cell.inline.length ? inlineToPM(cell.inline, schema) : schema.text(''),
-            ),
-          ),
-        ),
+        schema.node('table_row', {}, row.map(cellToPM)),
       )
       return schema.node('table', { align: tb.align || '' }, rows)
     }
