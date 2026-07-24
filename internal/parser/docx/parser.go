@@ -203,11 +203,26 @@ func parseParagraph(dec *xml.Decoder) core.Block {
 				if inRun {
 					curText.Italic = readOnOffAttr(t)
 				}
-			case "u":
-				if inRun {
-					curText.Under = true
+		case "u":
+			if inRun {
+				curText.Under = true
+			}
+		case "rFonts": // 字体名：优先 eastAsia（中文字体），其次 ascii/hAnsi
+			if inRun {
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "eastAsia":
+						if a.Value != "" {
+							curText.Font = a.Value
+						}
+					case "ascii", "hAnsi":
+						if curText.Font == "" && a.Value != "" {
+							curText.Font = a.Value
+						}
+					}
 				}
-			case "pStyle": // paragraph style
+			}
+		case "pStyle": // paragraph style
 				for _, a := range t.Attr {
 					if a.Name.Local == "val" {
 						para.Style = a.Value

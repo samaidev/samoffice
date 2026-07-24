@@ -10,6 +10,7 @@ import { AboutPage } from './components/AboutPage'
 import { useI18n } from './i18n'
 import { usePopupAutoFlip } from './hooks/usePopupAutoFlip'
 import { Dropdown } from './components/Dropdown'
+import { decideOpen } from './lib/openroute'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
@@ -23,37 +24,18 @@ function base64ToBlob(b64: string, mime: string): Blob {
   return new Blob([bytes], { type: mime })
 }
 
-// 将 UDM 文档中的表格块（xlsx 每个 sheet 对应一个 Table）转换为表格编辑器所需的 sheet 数据
-function tablesToSheets(doc: any): { name: string; cells: Record<string, any> }[] | null {
-  const blocks: any[] = (doc && doc.blocks) || []
-  const tables = blocks.filter(b => b && (b.type === 'table' || (b.rows && Array.isArray(b.rows))))
-  if (!tables.length) return null
-  return tables.map((tb: any, i: number) => {
-    const cells: Record<string, any> = {}
-    ;(tb.rows || []).forEach((row: any[], r: number) => {
-      ;(row || []).forEach((cell: any, c: number) => {
-        const inline: any[] = (cell && cell.inline) || []
-        const text = inline.map((inl: any) => (inl ? (inl.content ?? inl.text ?? '') : '')).join('')
-        if (text || (cell && cell.isHeader)) {
-          cells[`${r}-${c}`] = { value: text, bold: !!(cell && cell.isHeader) }
-        }
-      })
-    })
-    return { name: (tb && tb.style) || `Sheet${i + 1}`, cells }
-  })
-}
+
 
 function App() {
   const { t, lang, setLang } = useI18n()
   // 全局 popup 自动定位：检测越界并翻转对齐
   usePopupAutoFlip()
 
+  // 默认文档模板：保留一个空段落（ProseMirror 的 doc 节点必须有内容），
+  // 但不带任何欢迎/占位文字，满足“默认模板为空”的需求。
   const emptyDoc = useMemo<Document>(() => ({
-    meta: { title: t('app.untitled') },
-    blocks: [
-      { inline: [{ content: t('app.welcome'), bold: true }], style: '', align: '' },
-      { inline: [{ content: t('app.subtitle') }], style: '', align: '' }
-    ]
+    meta: { title: '' },
+    blocks: [{ inline: [{ content: '' }], style: '', align: '' }]
   }), [t])
 
   const sampleMd = useMemo(() => `${t('sample.md.title')}
@@ -137,8 +119,19 @@ ${t('sample.md.more')}
   // 统一处理打开结果：表格类文件切换到表格视图，其余切换到文档视图
   const openResult = (result: any) => {
     const path: string = result.path || ''
-    const isSheet = /\.(xlsx|xls|csv)$/i.test(path)
-    const sheets = isSheet ? tablesToSheets(result.document) : null
+    const decision = decideOpen(path, result.document)
+    const sheets = decision.sheets
+    const isSheet = decision.tab === 'spreadsheet'
+    // 诊断日志：确认实际路由到了哪个视图（右键打开 xls 却显示 word 的回归验证点）
+    try {
+      const w = (window as any)
+      w.go?.main?.App?.LogError?.(
+        'OPEN_RESULT path=' + path +
+        ' isSheet=' + isSheet +
+        ' sheets=' + (sheets ? sheets.length : 0) +
+        ' tab=' + decision.tab,
+      )
+    } catch {}
     setFilePath(path)
     try {
       const name = path.split(/[\\/]/).pop() || path
@@ -399,9 +392,20 @@ ${t('sample.md.more')}
         const r = await fetch(`${base}/api/doc/open`, { method: 'POST', body: form })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const result = await r.json()
-        setDoc(result.document)
-        setFilePath(file.name)
-        setTab('document')
+        // 与 openResult 保持一致的路由：表格类文件切到表格视图
+        const decision = decideOpen(file.name, result.document)
+        if (decision.tab === 'spreadsheet') {
+          setSheetInitial(decision.sheets)
+          setSheetEpoch(e => e + 1)
+          setFilePath(file.name)
+          setTab('spreadsheet')
+        } else {
+          setSheetInitial(null)
+          setDoc(result.document)
+          setFilePath(file.name)
+          setTab('document')
+          triggerSpellCheck(JSON.stringify(result.document?.blocks || []))
+        }
         // Save to recent files
         try {
           const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')

@@ -143,7 +143,9 @@ func (a *App) GetStartupArgs() []string {
 	for _, arg := range a.startupArgs {
 		lower := strings.ToLower(arg)
 		if strings.HasSuffix(lower, ".docx") || strings.HasSuffix(lower, ".doc") ||
-			strings.HasSuffix(lower, ".xlsx") || strings.HasSuffix(lower, ".pptx") ||
+			strings.HasSuffix(lower, ".xlsx") || strings.HasSuffix(lower, ".xls") ||
+			strings.HasSuffix(lower, ".csv") || strings.HasSuffix(lower, ".tsv") ||
+			strings.HasSuffix(lower, ".pptx") ||
 			strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
 			strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".sam") ||
 			strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") {

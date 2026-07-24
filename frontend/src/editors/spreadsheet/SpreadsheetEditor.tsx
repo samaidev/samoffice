@@ -6,6 +6,8 @@ interface Cell {
   value: string; formula?: string
   bold?: boolean; color?: string; bg?: string
   align?: 'left' | 'center' | 'right'
+  italic?: boolean; under?: boolean; strike?: boolean
+  fontSize?: number; fontFamily?: string
   format?: 'percent' | 'decimal' | 'general'
   // 合并单元格：mergeRange = { rowSpan, colSpan } 表示此单元格是合并区域的左上角
   // 被合并覆盖的单元格用 hiddenBy = "r-c" 标记（指向左上角）
@@ -638,7 +640,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         if (v && v.startsWith('[img]')) {
                           return <img src={v.slice(5)} alt="" className="w-full h-full object-contain pointer-events-none" />
                         }
-                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent text-sm" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, textAlign: cell.align || (mergeRange ? 'center' : 'left') }} />
+                        const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
+                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }} />
                       })()}
                     </td>
                   )

@@ -321,7 +321,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   ]
 
   const editorRef = useRef<HTMLDivElement>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  // 实测编辑器内容高度，用于让“页面”随内容自动增高，避免多页文档被裁切
+  const [pageContentH, setPageContentH] = useState(0)
   // 页底脚注区数据（从 PM 文档提取，避免在正文中渲染脚注）
   const [footnotes, setFootnotes] = useState<{ num: number; text: string; pos: number }[]>([])
   // 右侧批注栏数据（对齐 MS Word：批注锚点在正文，卡片显示在右侧对应位置）
@@ -524,6 +527,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const pageWidthPx = mmToPx(orientation === 'landscape' ? phMm : pwMm)
   const pageHeightPx = mmToPx(orientation === 'landscape' ? pwMm : phMm)
   const [docLineNumbers, setDocLineNumbers] = useState(false)
+
+  // 测量编辑器内容实际高度，使“页面”容器随内容增高（多页文档不再被裁切）。
+  // 同时监听缩放变化后重新测量。
+  useEffect(() => {
+    const el = editorRef.current
+    if (!el) return
+    const measure = () => {
+      // scrollHeight 为内容布局高度（不受 CSS zoom 影响，浏览器以未缩放像素返回）
+      const h = el.scrollHeight
+      setPageContentH((prev) => (Math.abs(prev - h) > 1 ? h : prev))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [document, zoom, pageSize, orientation, pageContentH > 0])
+
 
   useEffect(() => {
     if (!editorRef.current) return
@@ -2079,9 +2099,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${splitWindow ? 'flex' : ''}`}
-        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex' }}
+        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start' }}
       >
         <div
+          ref={pageRef}
           className="max-w-4xl mx-auto animate-fade-in"
           style={{
             boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)',
@@ -2090,8 +2111,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             borderRadius: '8px',
             background: bgColor,
             width: pageWidthPx,
-            minHeight: pageHeightPx,
-            overflow: 'hidden',
+            minHeight: Math.max(pageHeightPx, pageContentH),
+            overflow: 'visible',
             display: 'flex',
             flexDirection: 'column',
           }}
@@ -2157,10 +2178,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <div
               ref={editorRef as any}
               style={{
-                transform: `scale(${zoom / 100})`,
-                transformOrigin: 'top center',
-                width: docLineNumbers ? `calc(${10000 / Math.max(zoom, 1)}% - 40px)` : `${10000 / Math.max(zoom, 1)}%`,
-                maxWidth: `${100 * 100 / Math.max(zoom, 1)}%`,
+                width: '100%',
                 margin: '0 auto',
                 padding: `${docMargins.top}px ${docMargins.right}px ${docMargins.bottom}px ${docMargins.left}px`,
                 columnCount: docColumns > 1 ? docColumns : undefined,

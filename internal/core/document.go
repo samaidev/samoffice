@@ -177,6 +177,14 @@ type Text struct {
 	Under   bool   `json:"under,omitempty"`
 	Strike  bool   `json:"strike,omitempty"`
 	Style   string `json:"style,omitempty"`
+	// 文档内联样式（由 docx 解析器填充，前端 ProseMirror fontFamily mark 消费）
+	Font string `json:"font,omitempty"` // 字体名，如 "宋体"/"Calibri"
+	// 电子表格单元格样式（由 xlsx 解析器填充，前端表格视图消费）
+	Color      string  `json:"color,omitempty"`    // 字体颜色，#RRGGBB
+	Align      string  `json:"align,omitempty"`    // left | center | right
+	Bg         string  `json:"bg,omitempty"`       // 单元格填充色，#RRGGBB
+	FontSize   float64 `json:"fontSize,omitempty"` // 字号（磅）
+	FontFamily string  `json:"fontFamily,omitempty"` // 字体名（xlsx 单元格）
 }
 
 func (Text) isInline()         {}
