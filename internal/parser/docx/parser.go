@@ -91,6 +91,11 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
                 warnings = append(warnings, warns...)
         }
 
+        // 解析页脚中的 PAGE / NUMPAGES 域，生成页码配置
+        if pn := extractPageNumber(files); pn != nil {
+                doc.PageNumber = pn
+        }
+
         return doc, warnings, nil
 }
 
@@ -124,9 +129,10 @@ func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
                         depth++
                         // 进入段落
                         if t.Name.Local == "p" && t.Name.Space == "http://schemas.openxmlformats.org/wordprocessingml/2006/main" {
-                                para := parseParagraph(dec)
-                                if para != nil {
-                                        blocks = append(blocks, para)
+                                for _, b := range parseParagraph(dec) {
+                                        if b != nil {
+                                                blocks = append(blocks, b)
+                                        }
                                 }
                                 depth--
                         }
@@ -163,12 +169,15 @@ func headingLevel(style string) int {
 }
 
 // parseParagraph 解析 <w:p> 段落。若段落内含 OMML 公式，则返回 *core.Math 块。
-func parseParagraph(dec *xml.Decoder) core.Block {
+// 返回 []core.Block：可能包含其前/后的分页符块（pageBreakBefore / w:br type=page）。
+func parseParagraph(dec *xml.Decoder) []core.Block {
 	para := &core.Paragraph{Inline: []core.Inline{}}
 	var inRun bool
 	var curText core.Text
 	hasMath := false
 	var mathXML strings.Builder
+	leadingPageBreak := false  // pageBreakBefore：段前分页
+	trailingPageBreak := false // w:br type="page"：段后分页
 	inPPr := false // 当前是否处于 <w:pPr> 内（用于区分段落属性与 run 属性的同名元素，如 w:spacing）
 	setProp := func(k string, v any) {
 		if para.Props == nil {
@@ -180,7 +189,7 @@ func parseParagraph(dec *xml.Decoder) core.Block {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return para
+			return []core.Block{para}
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
@@ -206,6 +215,14 @@ func parseParagraph(dec *xml.Decoder) core.Block {
 		case "u":
 			if inRun {
 				curText.Under = true
+			}
+		case "br": // 换行；type="page" 表示分页符
+			if inRun {
+				for _, a := range t.Attr {
+					if a.Name.Local == "type" && strings.EqualFold(a.Value, "page") {
+						trailingPageBreak = true
+					}
+				}
 			}
 		case "rFonts": // 字体名：优先 eastAsia（中文字体），其次 ascii/hAnsi
 			if inRun {
@@ -321,6 +338,9 @@ func parseParagraph(dec *xml.Decoder) core.Block {
 			case "pageBreakBefore":
 				if inPPr {
 					setProp("pageBreakBefore", readOnOffAttr(t))
+					if readOnOffAttr(t) {
+						leadingPageBreak = true
+					}
 				}
 			case "outlineLvl":
 				if inPPr {
@@ -348,22 +368,169 @@ func parseParagraph(dec *xml.Decoder) core.Block {
 				inRun = false
 			}
 		if t.Name.Local == "p" {
+			var out []core.Block
+			if leadingPageBreak {
+				out = append(out, &core.PageBreak{})
+			}
 			if hasMath {
 				if latex := ommlToLatex(mathXML.String()); latex != "" {
-					return &core.Math{Formula: latex}
+					out = append(out, &core.Math{Formula: latex})
+					if trailingPageBreak {
+						out = append(out, &core.PageBreak{})
+					}
+					return out
 				}
 			}
 			if lvl := headingLevel(para.Style); lvl > 0 {
-				return &core.Heading{
+				out = append(out, &core.Heading{
 					Level:  lvl,
 					Inline: para.Inline,
 					Style:  para.Style,
 					Props:  para.Props,
+				})
+			} else {
+				out = append(out, para)
+			}
+			if trailingPageBreak {
+				out = append(out, &core.PageBreak{})
+			}
+			return out
+		}
+		}
+	}
+}
+
+// extractPageNumber 扫描 word/footer*.xml，提取页码域（PAGE / NUMPAGES），
+// 还原为 UDM 的 PageNumberConfig。找不到页码域时返回 nil。
+func extractPageNumber(files map[string]*zip.File) *core.PageNumberConfig {
+	for name, f := range files {
+		if !strings.HasPrefix(name, "word/footer") || !strings.HasSuffix(name, ".xml") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		cfg := parseFooterPageNumber(rc)
+		rc.Close()
+		if cfg != nil {
+			return cfg
+		}
+	}
+	return nil
+}
+
+// parseFooterPageNumber 解析单个页脚 XML，构造页码格式模板。
+// 形如「第 」+ PAGE 域 +「 页」拼成 "第 {n} 页"；含 NUMPAGES 则补 {total}。
+func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	dec.AutoClose = xml.HTMLAutoClose
+	dec.Entity = xml.HTMLEntity
+
+	type tok struct {
+		text  string
+		page  bool
+		total bool
+	}
+	var toks []tok
+	var align string
+	inPPr := false
+	fieldDepth := 0 // 进入域（fldSimple / fldChar begin）后跳过其内部的显示文本
+
+	for {
+		t, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch el := t.(type) {
+		case xml.StartElement:
+			switch el.Name.Local {
+			case "pPr":
+				inPPr = true
+			case "jc":
+				if inPPr {
+					for _, a := range el.Attr {
+						if a.Name.Local == "val" {
+							align = a.Value
+						}
+					}
+				}
+			case "fldSimple":
+				for _, a := range el.Attr {
+					if a.Name.Local == "instr" {
+						up := strings.ToUpper(strings.TrimSpace(a.Value))
+						if strings.Contains(up, "NUMPAGES") {
+							toks = append(toks, tok{total: true})
+						} else if strings.Contains(up, "PAGE") {
+							toks = append(toks, tok{page: true})
+						}
+					}
+				}
+				fieldDepth++
+			case "fldChar":
+				ftype := ""
+				for _, a := range el.Attr {
+					if a.Name.Local == "fldCharType" {
+						ftype = a.Value
+					}
+				}
+				if ftype == "begin" {
+					fieldDepth++
+				} else if ftype == "end" {
+					if fieldDepth > 0 {
+						fieldDepth--
+					}
+				}
+			case "instrText":
+				if fieldDepth > 0 {
+					up := strings.ToUpper(strings.TrimSpace(readCharData(dec)))
+					if strings.Contains(up, "NUMPAGES") {
+						toks = append(toks, tok{total: true})
+					} else if strings.Contains(up, "PAGE") {
+						toks = append(toks, tok{page: true})
+					}
+				}
+			case "t":
+				if fieldDepth == 0 {
+					toks = append(toks, tok{text: readCharData(dec)})
 				}
 			}
-			return para
+		case xml.EndElement:
+			if el.Name.Local == "pPr" {
+				inPPr = false
+			} else if el.Name.Local == "fldSimple" {
+				if fieldDepth > 0 {
+					fieldDepth--
+				}
+			}
 		}
+	}
+
+	var sb strings.Builder
+	hasPage := false
+	for _, tk := range toks {
+		if tk.page {
+			sb.WriteString("{n}")
+			hasPage = true
 		}
+		if tk.total {
+			sb.WriteString("{total}")
+		}
+		if tk.text != "" {
+			sb.WriteString(tk.text)
+		}
+	}
+	if !hasPage {
+		return nil
+	}
+	if align == "" {
+		align = "center"
+	}
+	return &core.PageNumberConfig{
+		Enabled: true,
+		Format:  sb.String(),
+		Align:   align,
 	}
 }
 
@@ -423,13 +590,16 @@ func parseTable(dec *xml.Decoder) core.Block {
 					}
 				}
 			case "p":
-				para := parseParagraph(dec)
-				if para != nil {
-					if p, ok := para.(*core.Paragraph); ok {
+				for _, b := range parseParagraph(dec) {
+					if b == nil {
+						continue
+					}
+					if p, ok := b.(*core.Paragraph); ok {
 						curCellInline = append(curCellInline, p.Inline...)
-					} else if h, ok := para.(*core.Heading); ok {
+					} else if h, ok := b.(*core.Heading); ok {
 						curCellInline = append(curCellInline, h.Inline...)
 					}
+					// 表格单元格内的分页符忽略（单元格内不分页）
 				}
 			}
 		case xml.EndElement:

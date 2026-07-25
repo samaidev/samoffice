@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "title": ""
+  },
+  "blocks": [
+    {
+      "inline": [
+        {
+          "content": "第一页：封面与摘要内容"
+        }
+      ]
+    },
+    {
+      "inline": [
+        {
+          "content": "这一段也在第一页。"
+        }
+      ]
+    },
+    {
+      "inline": []
+    },
+    {},
+    {
+      "inline": [
+        {
+          "content": "第二页：正文开始。"
+        }
+      ]
+    },
+    {},
+    {
+      "inline": [
+        {
+          "content": "第三页：按段前分页强制开启。"
+        }
+      ],
+      "props": {
+        "pageBreakBefore": true
+      }
+    }
+  ],
+  "pageNumber": {
+    "enabled": true,
+    "format": "第 {n}页 / 共 {total} 页",
+    "align": "center"
+  }
+}
