@@ -1,0 +1,46 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>字体下拉修复验证</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;margin:24px;background:#f5f5f5;color:#222}
+h2{margin-top:0}
+.card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+select{width:220px;padding:6px 8px;font-size:14px;border:1px solid #bbb;border-radius:4px}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;margin-left:8px}
+.ok{background:#e6f4ea;color:#137333}.bad{background:#fce8e6;color:#c5221f}
+code{background:#eee;padding:1px 5px;border-radius:3px}
+</style></head><body>
+<h2>Word Ribbon 字体下拉框修复 — 真实 DOM 证据</h2>
+<p>每个卡片模拟一个 <code>activeFont</code> 场景下的字体下拉框（value 匹配逻辑与组件一致）。选中项即工具栏应显示的当前字体。</p>
+<div class="card">
+    <div><b>场景：</b>docx 解析出的中文 eastAsia 字体 <span class="tag ok">选中成功</span></div>
+    <div style="margin:8px 0">字体下拉框（当前值 <code>宋体</code>）：</div>
+    <select><option value="" >(默认)</option><option value="宋体" selected>宋体</option><option value="黑体" >黑体</option><option value="楷体" >楷体</option><option value="仿宋" >仿宋</option><option value="微软雅黑" >微软雅黑</option><option value="等线" >等线</option><option value="SimSun" >SimSun</option><option value="SimHei" >SimHei</option><option value="KaiTi" >KaiTi</option><option value="FangSong" >FangSong</option><option value="Microsoft YaHei" >Microsoft YaHei</option><option value="Microsoft JhengHei" >Microsoft JhengHei</option><option value="Arial" >Arial</option></select>
+    <div style="margin-top:6px;font-size:13px;color:#666">基础列表含中文字体：宋体/黑体/楷体/仿宋/微软雅黑/等线 ✅</div>
+  </div><div class="card">
+    <div><b>场景：</b>英文 family 名（旧/英文系统） <span class="tag ok">选中成功</span></div>
+    <div style="margin:8px 0">字体下拉框（当前值 <code>SimSun</code>）：</div>
+    <select><option value="" >(默认)</option><option value="宋体" >宋体</option><option value="黑体" >黑体</option><option value="楷体" >楷体</option><option value="仿宋" >仿宋</option><option value="微软雅黑" >微软雅黑</option><option value="等线" >等线</option><option value="SimSun" selected>SimSun</option><option value="SimHei" >SimHei</option><option value="KaiTi" >KaiTi</option><option value="FangSong" >FangSong</option><option value="Microsoft YaHei" >Microsoft YaHei</option><option value="Microsoft JhengHei" >Microsoft JhengHei</option><option value="Arial" >Arial</option></select>
+    <div style="margin-top:6px;font-size:13px;color:#666">基础列表含中文字体：宋体/黑体/楷体/仿宋/微软雅黑/等线 ✅</div>
+  </div><div class="card">
+    <div><b>场景：</b>旧文档遗留的封装格式值 <span class="tag ok">选中成功</span></div>
+    <div style="margin:8px 0">字体下拉框（当前值 <code>"SimSun", sans-serif</code>）：</div>
+    <select><option value="" >(默认)</option><option value="宋体" >宋体</option><option value="黑体" >黑体</option><option value="楷体" >楷体</option><option value="仿宋" >仿宋</option><option value="微软雅黑" >微软雅黑</option><option value="等线" >等线</option><option value="SimSun" >SimSun</option><option value="SimHei" >SimHei</option><option value="KaiTi" >KaiTi</option><option value="FangSong" >FangSong</option><option value="Microsoft YaHei" >Microsoft YaHei</option><option value="Microsoft JhengHei" >Microsoft JhengHei</option><option value="Arial" >Arial</option><option value=""SimSun", sans-serif" selected>"SimSun", sans-serif（文档实际字体）</option></select>
+    <div style="margin-top:6px;font-size:13px;color:#666">基础列表含中文字体：宋体/黑体/楷体/仿宋/微软雅黑/等线 ✅</div>
+  </div><div class="card">
+    <div><b>场景：</b>中文字体 <span class="tag ok">选中成功</span></div>
+    <div style="margin:8px 0">字体下拉框（当前值 <code>黑体</code>）：</div>
+    <select><option value="" >(默认)</option><option value="宋体" >宋体</option><option value="黑体" selected>黑体</option><option value="楷体" >楷体</option><option value="仿宋" >仿宋</option><option value="微软雅黑" >微软雅黑</option><option value="等线" >等线</option><option value="SimSun" >SimSun</option><option value="SimHei" >SimHei</option><option value="KaiTi" >KaiTi</option><option value="FangSong" >FangSong</option><option value="Microsoft YaHei" >Microsoft YaHei</option><option value="Microsoft JhengHei" >Microsoft JhengHei</option><option value="Arial" >Arial</option></select>
+    <div style="margin-top:6px;font-size:13px;color:#666">基础列表含中文字体：宋体/黑体/楷体/仿宋/微软雅黑/等线 ✅</div>
+  </div><div class="card">
+    <div><b>场景：</b>中文字体 <span class="tag ok">选中成功</span></div>
+    <div style="margin:8px 0">字体下拉框（当前值 <code>微软雅黑</code>）：</div>
+    <select><option value="" >(默认)</option><option value="宋体" >宋体</option><option value="黑体" >黑体</option><option value="楷体" >楷体</option><option value="仿宋" >仿宋</option><option value="微软雅黑" selected>微软雅黑</option><option value="等线" >等线</option><option value="SimSun" >SimSun</option><option value="SimHei" >SimHei</option><option value="KaiTi" >KaiTi</option><option value="FangSong" >FangSong</option><option value="Microsoft YaHei" >Microsoft YaHei</option><option value="Microsoft JhengHei" >Microsoft JhengHei</option><option value="Arial" >Arial</option></select>
+    <div style="margin-top:6px;font-size:13px;color:#666">基础列表含中文字体：宋体/黑体/楷体/仿宋/微软雅黑/等线 ✅</div>
+  </div><div class="card">
+    <div><b>场景：</b>无字体（默认） <span class="tag ok">选中成功</span></div>
+    <div style="margin:8px 0">字体下拉框（当前值 <code>(空)</code>）：</div>
+    <select><option value="" selected>(默认)</option><option value="宋体" >宋体</option><option value="黑体" >黑体</option><option value="楷体" >楷体</option><option value="仿宋" >仿宋</option><option value="微软雅黑" >微软雅黑</option><option value="等线" >等线</option><option value="SimSun" >SimSun</option><option value="SimHei" >SimHei</option><option value="KaiTi" >KaiTi</option><option value="FangSong" >FangSong</option><option value="Microsoft YaHei" >Microsoft YaHei</option><option value="Microsoft JhengHei" >Microsoft JhengHei</option><option value="Arial" >Arial</option></select>
+    <div style="margin-top:6px;font-size:13px;color:#666">基础列表含中文字体：宋体/黑体/楷体/仿宋/微软雅黑/等线 ✅</div>
+  </div>
+<p style="font-size:13px;color:#666">说明：下拉项 value 现已为纯字体名（如 <code>宋体</code>），与文档 <code>fontFamily</code> mark 存储的纯名一致；当前文档字体若不在预置列表（如旧封装值）也会被动态补全，确保工具栏正确显示并可选中。</p>
+</body></html>

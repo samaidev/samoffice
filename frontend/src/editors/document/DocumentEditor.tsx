@@ -295,6 +295,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   // 系统字体库 — 通过 queryLocalFonts() 加载 (Chrome/Edge 支持), 回退到常用字体列表
   const [systemFonts, setSystemFonts] = useState<string[]>([
+    '宋体', '黑体', '楷体', '仿宋', '微软雅黑', '等线',
     'SimSun', 'SimHei', 'KaiTi', 'FangSong', 'Microsoft YaHei', 'Microsoft JhengHei',
     'Arial', 'Times New Roman', 'Calibri', 'Cambria', 'Georgia', 'Verdana',
     'Tahoma', 'Trebuchet MS', 'Courier New', 'Consolas', 'Lucida Console',
@@ -313,7 +314,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   const FONTS = [
     { name: t('doc.font.default'), value: '' },
-    ...systemFonts.slice(0, 80).map(f => ({ name: f, value: `"${f}", sans-serif` })),
+    ...systemFonts.slice(0, 120).map(f => ({ name: f, value: f })),
   ]
   const FONT_SIZES = [
     { name: t('doc.size.small'), value: '12px' }, { name: t('doc.size.body'), value: '15px' },
@@ -1511,7 +1512,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 style={{ width: 110, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
                 value={activeFont}
                 onChange={v => setFont(v)}
-                options={FONTS.map(f => ({ label: f.name, value: f.value }))}
+                options={(() => {
+                  const opts = FONTS.map(f => ({ label: f.name, value: f.value }))
+                  // 文档里实际使用的字体（可能不在预置列表，如解析进来的中文/旧格式值）也要能选中显示
+                  if (activeFont && !opts.some(o => o.value === activeFont)) {
+                    opts.push({ label: activeFont, value: activeFont })
+                  }
+                  return opts
+                })()}
               />
                 <Dropdown
                   className="text-xs rounded-md px-2 ribbon-input"
