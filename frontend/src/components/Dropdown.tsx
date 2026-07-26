@@ -35,6 +35,11 @@ export function Dropdown({ value, onChange, options, className, style, title, pl
   const boxRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  // 可编辑输入框的本地缓冲：输入过程中以缓冲为准，避免输入 "1.5" 时
+  // 中间态 "1." 被实时规整成 "1" 而打断小数输入；失焦或外部更新时再同步。
+  const [inputBuffer, setInputBuffer] = useState(inputValue ?? '')
+  const inputFocused = useRef(false)
+  useEffect(() => { if (!inputFocused.current) setInputBuffer(inputValue ?? '') }, [inputValue])
   const selected = options.find(o => o.value === value)
 
   const updateCoords = () => {
@@ -85,12 +90,13 @@ export function Dropdown({ value, onChange, options, className, style, title, pl
         >
           <input
             type="text"
-            value={inputValue ?? ''}
+            value={inputBuffer}
             placeholder={placeholder}
             inputMode={inputMode}
-            onChange={(e) => onInputChange?.(e.target.value)}
+            onFocus={() => { inputFocused.current = true }}
+            onChange={(e) => { setInputBuffer(e.target.value); onInputChange?.(e.target.value) }}
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            onBlur={() => onInputBlur?.()}
+            onBlur={() => { inputFocused.current = false; onInputBlur?.() }}
             className="dropdown-input"
             style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', color: 'inherit', outline: 'none', fontSize: 'inherit', textAlign: 'left' }}
           />

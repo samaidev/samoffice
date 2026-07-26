@@ -76,6 +76,7 @@ export const schema = new Schema({
         if (a.keepLines) s.push('break-inside: avoid')
         if (a.pageBreakBefore) s.push('break-before: page')
         const domAttrs: any = { style: s.join('; ') }
+        if (a.pageBreakBefore) domAttrs.class = 'pm-break-before'
         if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
         return ['p', domAttrs, 0]
       },
@@ -151,6 +152,7 @@ export const schema = new Schema({
         if (a.keepLines) s.push('break-inside: avoid')
         if (a.pageBreakBefore) s.push('break-before: page')
         const domAttrs: any = { style: s.join('; ') }
+        if (a.pageBreakBefore) domAttrs.class = 'pm-break-before'
         if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
         return ['h' + node.attrs.level, domAttrs, 0]
       },

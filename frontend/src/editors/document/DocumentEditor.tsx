@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
 import { schema } from './schema'
+import { createPaginationPlugin } from './pagination'
 import { keymap } from 'prosemirror-keymap'
 import { baseKeymap, toggleMark, setBlockType, wrapIn } from 'prosemirror-commands'
 import { history, undo, redo } from 'prosemirror-history'
@@ -323,6 +324,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   const editorRef = useRef<HTMLDivElement>(null)
   const pageRef = useRef<HTMLDivElement>(null)
+  const sheetsLayerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   // 实测编辑器内容高度，用于让“页面”随内容自动增高，避免多页文档被裁切
   const [pageContentH, setPageContentH] = useState(0)
@@ -529,6 +531,20 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const pageHeightPx = mmToPx(orientation === 'landscape' ? pwMm : phMm)
   const [docLineNumbers, setDocLineNumbers] = useState(false)
 
+  // ===== 页面视图（Word 式独立纸页 + 页间留白 + 内容自动顺次流到下一页）=====
+  const [pageCount, setPageCount] = useState(1)
+  const [bodyTop, setBodyTop] = useState(0)
+  // 由分页引擎回报的每张纸页矩形（编辑器相对坐标），用于绘制背景纸页层，保证与内容严格对齐
+  const [pageRects, setPageRects] = useState<{ top: number; height: number }[]>([])
+  const pageContentPerPage = Math.max(50, pageHeightPx - docMargins.top - docMargins.bottom)
+  const pageGap = Math.max(16, Math.round(pageHeightPx * 0.03))
+  const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx })
+  metricsRef.current = { pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx }
+  // 容器高度随纸页与留白自动增高，避免多页文档被裁切
+  const pageRefMinH = pageRects.length
+    ? Math.max(...pageRects.map((r) => bodyTop + r.top + r.height)) + 24
+    : pageHeightPx
+
   // 测量编辑器内容实际高度，使“页面”容器随内容增高（多页文档不再被裁切）。
   // 同时监听缩放变化后重新测量。
   useEffect(() => {
@@ -544,6 +560,31 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     ro.observe(el)
     return () => ro.disconnect()
   }, [document, zoom, pageSize, orientation, pageContentH > 0])
+
+  // 测量编辑器正文区域相对“页面”容器的顶部偏移，用于对齐背景纸页层
+  useEffect(() => {
+    const pr = pageRef.current
+    const er = editorRef.current
+    if (!pr || !er) return
+    const measureTop = () => {
+      const a = pr.getBoundingClientRect()
+      const b = er.getBoundingClientRect()
+      const t = b.top - a.top
+      setBodyTop((prev) => (Math.abs(prev - t) > 0.5 ? t : prev))
+    }
+    const id = requestAnimationFrame(measureTop)
+    return () => cancelAnimationFrame(id)
+  }, [document, zoom, pageSize, orientation, pageWidthPx, pageHeightPx, docMargins, showRuler, docHeader, docColumns])
+
+  // 边距 / 缩放 / 分栏等影响分页的布局变化后，强制重新计算分页
+  useEffect(() => {
+    const v = viewRef.current
+    if (!v) return
+    const id = requestAnimationFrame(() =>
+      v.dispatch(v.state.tr.setMeta('forcePaginate', true).setMeta('addToHistory', false)),
+    )
+    return () => cancelAnimationFrame(id)
+  }, [zoom, pageSize, orientation, docMargins, pageWidthPx, pageHeightPx, docColumns])
 
 
   useEffect(() => {
@@ -564,6 +605,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
+        createPaginationPlugin(() => metricsRef.current, setPageCount, setPageRects),
       ]
     })
     const view = new EditorView(editorRef.current, {
@@ -1595,6 +1637,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <Dropdown
                   className="text-xs rounded-md px-2 py-1 ribbon-input"
                   style={{ width: 92, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  editable
+                  inputValue={activeAttrs.lineHeight || ''}
+                  title={t('doc.lineSpacing')}
+                  placeholder="1.5"
+                  inputMode="text"
+                  onInputChange={(raw) => {
+                    const v = raw.trim()
+                    if (v === '') { setParaAttr('lineHeight', ''); return }
+                    // 带单位（pt/px）：固定值行距，如 28pt
+                    if (/^\d+(?:\.\d+)?\s*(pt|px)$/i.test(v)) {
+                      setParaAttr('lineHeight', v.replace(/\s+/g, '').toLowerCase())
+                      return
+                    }
+                    // 纯数字：倍数行距，如 1.5、2
+                    const num = parseFloat(v)
+                    if (!isNaN(num) && num > 0) setParaAttr('lineHeight', String(num))
+                  }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
                   value={activeAttrs.lineHeight || ''}
                   onChange={v => setParaAttr('lineHeight', v)}
                   options={[{ label: t('doc.lineSpacing'), value: '' }, ...LINE_HEIGHTS.map(l => ({ label: l.name, value: l.value }))]}
@@ -2109,22 +2169,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${splitWindow ? 'flex' : ''}`}
         style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start' }}
       >
-        <div
-          ref={pageRef}
-          className="max-w-4xl mx-auto animate-fade-in"
-          style={{
-            boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)',
-            marginTop: '24px',
-            marginBottom: '24px',
-            borderRadius: '8px',
-            background: bgColor,
-            width: pageWidthPx,
-            minHeight: Math.max(pageHeightPx, pageContentH),
-            overflow: 'visible',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
+      <div
+        ref={pageRef}
+        className="max-w-4xl mx-auto animate-fade-in"
+        style={{
+          position: 'relative',
+          marginTop: '24px',
+          marginBottom: '24px',
+          borderRadius: '8px',
+          background: 'transparent',
+          width: pageWidthPx,
+          minHeight: pageRefMinH,
+          overflow: 'visible',
+        }}
+      >
+        {/* 纸页背景层：每张纸依据分页引擎算出的实际内容位置绘制，与内容严格对齐 */}
+        <div ref={sheetsLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
+          {pageRects.map((p, i) => (
+            <div key={i} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, background: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }} />
+          ))}
+        </div>
+        <div style={{ position: 'relative', zIndex: 1 }}>
           {/* 水平标尺（Word 风格：厘米刻度 + 页边距 + 可拖拽缩进滑块） */}
           {showRuler && (
             <Ruler
@@ -2188,11 +2253,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               style={{
                 width: '100%',
                 margin: '0 auto',
-                padding: `${docMargins.top}px ${docMargins.right}px ${docMargins.bottom}px ${docMargins.left}px`,
+                padding: `${docMargins.top}px ${docMargins.right}px 0px ${docMargins.left}px`,
                 columnCount: docColumns > 1 ? docColumns : undefined,
                 columnGap: docColumns > 1 ? '32px' : undefined,
                 columnRule: docColumns > 1 ? '1px solid var(--color-border)' : undefined,
-                background: bgColor,
+                background: 'transparent',
                 minHeight: '100%',
                 position: 'relative',
               }}
@@ -2236,6 +2301,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               {previewPageNumber(pageNumber.format)}
             </div>
           )}
+        </div>
         </div>
 
         {/* 右侧批注栏（对齐 MS Word 审阅窗格：批注卡片显示在正文右侧，与批注锚点对应） */}

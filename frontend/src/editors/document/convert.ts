@@ -111,6 +111,10 @@ function blockType(b: Block): string {
   if ('formula' in b) return 'math'
   if ('src' in b && 'caption' in b) return 'image'
   if ('rows' in b) return 'table'
+  // 分页符：core.PageBreak 序列化后为空对象 {}，或带 restart/startNumber 字段，
+  // 没有其它块级字段，必须在此显式识别，否则会被 blockToPM 当成普通段落吞掉。
+  if ('restart' in b || 'startNumber' in b) return 'pageBreak'
+  if (Object.keys(b).length === 0) return 'pageBreak'
   return 'paragraph'
 }
 
