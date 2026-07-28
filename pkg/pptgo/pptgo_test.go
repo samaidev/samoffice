@@ -2,6 +2,7 @@ package pptgo
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )

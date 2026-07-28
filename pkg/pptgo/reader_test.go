@@ -4,6 +4,7 @@ package pptgo
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 

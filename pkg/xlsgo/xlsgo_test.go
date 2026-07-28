@@ -2,6 +2,7 @@ package xlsgo
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestCreateAndSave(t *testing.T) {
 	ws.SetCellNumber("B1", 42)
 	ws.SetCellFormula("C1", "=B1*2")
 
-	tmpFile := "/tmp/xlsgo-test.xlsx"
+	tmpFile := filepath.Join(t.TempDir(), "xlsgo-test.xlsx")
 	if err := wb.Save(tmpFile); err != nil {
 		t.Fatal(err)
 	}
