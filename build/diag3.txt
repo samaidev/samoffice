@@ -1,0 +1,6 @@
+=== RUN   TestScanFibForPlcf
+    tmp_diag_test.go:74: ccpText=7216 table.len=22607
+    tmp_diag_test.go:90: scan done found=0
+--- PASS: TestScanFibForPlcf (0.00s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.045s

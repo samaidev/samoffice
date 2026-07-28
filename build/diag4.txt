@@ -1,0 +1,8 @@
+=== RUN   TestFootnote2
+    tmp_diag_test.go:99: fcMin=0x800 ccpText=7216 ccpFtn=58 len=36419
+    tmp_diag_test.go:118: UTF16 BODY_TAIL="脈ᬀᲰ\x00᳆\x00\u1cc8\x00᳴\x00᳸\x00ᴀ\x00ᵀ\x00ᵄ\x00ᵘ\x00ᶆ\x00ᶈ\x00ᶐ\x00ᶒ\x00ᶘ\x00ᶞ\x00ᶠ\x00ᶢ\x00ᶤ\x00ᶬ\x00Ẓ\x00Ẕ\x00ẘ\x00ẚ\x00Ấ\x00"
+    tmp_diag_test.go:119: UTF16 FOOTNOTE="Ầ\x00퇨믆냆ꋆ낗뮗뮗覗鞻粉孪䥪\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00ᔢ륨뵀ᘀ㡨桡㔀脈䩃\x18䩏\x06䩑\x06\u085c憁ᡊ\x00ᘝ둨줺䌀ᡊ伀ي儀ي帀ي愀ᡊ漀Ĩ"
+    tmp_diag_test.go:134: GBK runes len=6342 < ccpText=7216
+--- PASS: TestFootnote2 (0.00s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.048s

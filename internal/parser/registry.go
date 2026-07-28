@@ -1,13 +1,15 @@
 package parser
 
 import (
-        "fmt"
-        "io"
-        "path/filepath"
-        "strings"
-        "sync"
+	"bytes"
+	"fmt"
+	"io"
+	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/zai/samoffice/internal/core"
+	"github.com/zai/samoffice/internal/parser/conv"
 	"github.com/zai/samoffice/internal/parser/csv"
 	"github.com/zai/samoffice/internal/parser/doc"
 	"github.com/zai/samoffice/internal/parser/docx"
@@ -63,18 +65,34 @@ func (r *Registry) PickByPath(path string) Parser {
 
 // ParseBytes 解析字节流，自动选择解析器
 func (r *Registry) ParseBytes(path string, data []byte) (*core.Document, []core.Warning, error) {
-        p := r.PickByPath(path)
-        if p == nil {
-                return nil, nil, fmt.Errorf("unsupported format: %s", path)
-        }
-        return p.Parse(strings.NewReader(string(data)))
+	return r.parsePathData(path, data)
 }
 
 // ParseReader 解析 io.Reader
 func (r *Registry) ParseReader(path string, reader io.Reader) (*core.Document, []core.Warning, error) {
-        p := r.PickByPath(path)
-        if p == nil {
-                return nil, nil, fmt.Errorf("unsupported format: %s", path)
-        }
-        return p.Parse(reader)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return r.parsePathData(path, data)
+}
+
+// parsePathData 中央解析入口：对 .doc 优先用 LibreOffice 渲染为 .docx 再走 docx
+// 解析器（表格/列宽/合并/页码全支持）；转换不可用时回退到内置 .doc 解析。
+func (r *Registry) parsePathData(path string, data []byte) (*core.Document, []core.Warning, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".doc" {
+		if docxData, ok, convErr := conv.ConvertDocToDocx(path, data); ok && convErr == nil {
+			dp := &docx.Parser{}
+			return dp.Parse(bytes.NewReader(docxData))
+		}
+		// 转换不可用/失败：回退到内置 .doc 解析（简易网格，无页码）
+		p := &doc.Parser{}
+		return p.Parse(bytes.NewReader(data))
+	}
+	p := r.PickByPath(path)
+	if p == nil {
+		return nil, nil, fmt.Errorf("unsupported format: %s", path)
+	}
+	return p.Parse(bytes.NewReader(data))
 }

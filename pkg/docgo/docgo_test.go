@@ -2,6 +2,7 @@ package docgo
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ func TestCreateAndSave(t *testing.T) {
 	doc.AddTable([][]string{{"A", "B"}, {"1", "2"}})
 	doc.AddCodeBlock("go", `fmt.Println("hi")`)
 
-	tmpFile := "/tmp/docgo-test.docx"
+	tmpFile := filepath.Join(t.TempDir(), "docgo-test.docx")
 	if err := doc.Save(tmpFile); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestOpenAndRead(t *testing.T) {
 	doc.AddParagraph("段落一")
 	doc.AddParagraph("段落二")
 
-	tmpFile := "/tmp/docgo-read-test.docx"
+	tmpFile := filepath.Join(t.TempDir(), "docgo-read-test.docx")
 	doc.Save(tmpFile)
 	defer os.Remove(tmpFile)
 

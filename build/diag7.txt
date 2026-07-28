@@ -1,0 +1,6 @@
+=== RUN   TestDiagFtnBrute
+    tmp_diag_test.go:70: bestOff=0x6D12 score=56 ftn="积极倡导低碳生活。由于中国碳排放高速增长区的人口规模一直在不断扩大，人口增加对该地区二氧化碳排放产生明显的正向驱动效"
+    tmp_diag_test.go:79: STREAMS=[Data 1Table CompObj MsoDataStore ÍPY02Â4ÊYÄGHÌPGÝA5LÅÏQ== Item Properties WordDocument SummaryInformation DocumentSummaryInformation]
+--- PASS: TestDiagFtnBrute (0.01s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.052s

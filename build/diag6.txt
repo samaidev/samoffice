@@ -1,0 +1,7 @@
+=== RUN   TestDiagFtnRegion
+    tmp_diag_test.go:47: base=0x800 ccpText=7216 ccpFtn=58 len=36419
+    tmp_diag_test.go:57: UTF16_FTN@0x4060="Ầ\x00퇨믆냆ꋆ낗뮗뮗覗鞻粉孪䥪\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00ᔢ륨뵀ᘀ㡨桡㔀脈䩃\x18䩏\x06䩑\x06\u085c憁ᡊ\x00ᘝ둨줺䌀ᡊ伀ي儀ي帀ي愀ᡊ漀Ĩ"
+    tmp_diag_test.go:63: GBK_FTN@0x2430=" \x00 \x00轛R_剉觺済h�\x0ef\f�硏抍>e貧\x1f悶X\x7f�0W:S\x0eN\x13\x7f\x1f悶X\x7f�0W:S剉硏抍"
+--- PASS: TestDiagFtnRegion (0.00s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.040s

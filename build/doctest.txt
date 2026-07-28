@@ -1,0 +1,50 @@
+input doc bytes=76800
+ConvertDocToDocx ok=true err=<nil> outBytes=24071
+wrote c:\Users\Administrator\samoffice\build\real_converted.docx
+docx paragraphs=77 warnings=[]
+PageNumber: enabled=true format="{n}{n}" align="center"
+alignment distribution: map[:45 center:14 start:12]
+headings=0 footnoteSection=1 footnoteItems=1
+
+--- first 8 blocks ---
+[P] align="center" style="Normal" inline=1
+      text "中国区域碳排放影..." bold=true italic=false fontSize=16.0
+[P] align="center" style="Normal" inline=6
+      text "崔佳" bold=false italic=false fontSize=10.5
+      text "1" bold=false italic=false fontSize=10.5
+      text "，孔英" bold=false italic=false fontSize=10.5
+      text "2" bold=false italic=false fontSize=10.5
+      text "，陆强" bold=false italic=false fontSize=10.5
+      text "1" bold=false italic=false fontSize=10.5
+[P] align="center" style="Normal" inline=5
+      text "（" bold=false italic=false fontSize=10.5
+      text "1." bold=false italic=false fontSize=10.5
+      text "哈尔滨工业大学深..." bold=false italic=false fontSize=10.5
+      text "518055" bold=false italic=false fontSize=10.5
+      text "；" bold=false italic=false fontSize=10.5
+[P] align="center" style="Normal" inline=11
+      text "  " bold=false italic=false fontSize=10.5
+      text "2." bold=false italic=false fontSize=10.5
+      text "清华" bold=false italic=false fontSize=10.5
+      text "-" bold=false italic=false fontSize=10.5
+      text "伯克利学院，  " bold=false italic=false fontSize=10.5
+      text " " bold=false italic=false fontSize=10.5
+      text " " bold=false italic=false fontSize=10.5
+      text "       " bold=false italic=false fontSize=10.5
+      text "深圳 广东 " bold=false italic=false fontSize=10.5
+      text "518055" bold=false italic=false fontSize=10.5
+      text "）" bold=false italic=false fontSize=10.5
+[P] align="" style="Normal" inline=0
+[P] align="" style="Normal" inline=6
+      text "【摘要】：" bold=false italic=false fontSize=10.5
+      text "目前，中国已成为..." bold=false italic=false fontSize=10.5
+      text "1998-2012" bold=false italic=false fontSize=10.5
+      text "年" bold=false italic=false fontSize=10.5
+      text "27" bold=false italic=false fontSize=10.5
+      text "省两大区域的碳排..." bold=false italic=false fontSize=10.5
+[P] align="" style="Normal" inline=0
+[P] align="" style="Normal" inline=4
+      text "关键词：" bold=false italic=false fontSize=10.5
+      text "区域碳排放；影响..." bold=false italic=false fontSize=10.5
+      text "STIRPAT" bold=false italic=false fontSize=10.5
+      text "模型；系统聚类分..." bold=false italic=false fontSize=10.5

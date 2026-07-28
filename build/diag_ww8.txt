@@ -1,0 +1,2 @@
+# github.com/zai/samoffice/tools/docdiag2
+tools\docdiag2\main.go:285:1: syntax error: non-declaration statement outside function body

@@ -39,11 +39,11 @@ function blockToPM(b: Block, schema: Schema): Node {
   switch (t) {
     case 'heading': {
       const h = b as any
-      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '' }), inlineToPM(h.inline, schema))
+      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '', align: h.align || '' }), inlineToPM(h.inline, schema))
     }
     case 'paragraph': {
       const p = b as any
-      return schema.node('paragraph', applyParaAttrsFromProps(p, {}), inlineToPM(p.inline, schema))
+      return schema.node('paragraph', applyParaAttrsFromProps(p, { align: p.align || '' }), inlineToPM(p.inline, schema))
     }
     case 'codeBlock': {
       const c = b as any
@@ -71,6 +71,17 @@ function blockToPM(b: Block, schema: Schema): Node {
     case 'pageBreak': {
       const pb = b as any
       return schema.node('page_break', { restart: !!pb.restart, startNumber: Number(pb.startNumber) || 1 })
+    }
+    case 'footnote_section': {
+      const fs = b as any
+      const items = (fs.items || []).map((item: any) =>
+        schema.node(
+          'footnote_item',
+          { num: Number(item.num) || 1 },
+          inlineToPM(item.inline, schema),
+        ),
+      )
+      return schema.node('footnote_section', {}, items)
     }
     case 'table': {
       const tb = b as any
@@ -105,6 +116,8 @@ function blockToPM(b: Block, schema: Schema): Node {
 }
 
 function blockType(b: Block): string {
+  // 显式 type 字段优先（脚注区等），且不影响无 type 的既有块
+  if ((b as any).type) return (b as any).type
   if ('level' in b) return 'heading'
   if ('code' in b) return 'codeBlock'
   if ('items' in b) return 'bulletList'
@@ -122,7 +135,10 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
   if (!inlines || inlines.length === 0) return []
   const result: Node[] = []
   for (const inline of inlines) {
-    if ('url' in inline) {
+    if ((inline as any).type === 'footnote') {
+      const fn = inline as any
+      result.push(schema.node('footnote', { num: Number(fn.num) || 1, content: fn.content || '' }))
+    } else if ('url' in inline) {
       const h = inline as any
       const mark = schema.marks.link.create({ href: h.url })
       const inner = inlineToPM(h.text, schema)
@@ -141,7 +157,10 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
       if (t.superscript) marks.push(schema.marks.superscript.create())
       if (t.subscript) marks.push(schema.marks.subscript.create())
       if (t.font) marks.push(schema.marks.fontFamily.create({ font: t.font }))
-      if (t.size) marks.push(schema.marks.fontSize.create({ size: t.size }))
+      // 字号：优先后端 fontSize（单位：磅），兼容旧 size（CSS 字符串）
+      const fs = (t as any).fontSize
+      if (fs) marks.push(schema.marks.fontSize.create({ size: `${fs}pt` }))
+      else if (t.size) marks.push(schema.marks.fontSize.create({ size: t.size }))
       if (t.color) marks.push(schema.marks.textColor.create({ color: t.color }))
       if (t.highlight) marks.push(schema.marks.highlight.create({ color: t.highlight }))
       if (t.content) result.push(schema.text(t.content, marks))
@@ -194,6 +213,15 @@ function pmToBlock(node: Node): Block | null {
       return { restart: !!node.attrs.restart, startNumber: Number(node.attrs.startNumber) || 1 }
     case 'math':
       return { formula: node.attrs.latex || '', inline: !!node.attrs.inline }
+    case 'footnote':
+      return { type: 'footnote', num: Number(node.attrs.num) || 1, content: node.attrs.content || '' } as any
+    case 'footnote_section': {
+      const items = node.children.map((item: any) => ({
+        num: Number(item.attrs.num) || 1,
+        inline: item.childCount > 0 ? pmToInline(item) : [],
+      }))
+      return { type: 'footnote_section', items } as any
+    }
     case 'table': {
       const rows = node.children.map((row: any) =>
         row.children.map((cell: any) => ({

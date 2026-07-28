@@ -1,0 +1,326 @@
+file size=76800 head=D0 CF 11 E0 A1 B1 1A E1 00 00 00 00 00 00 00 00
+isOLE=true
+sector0 (off=0): D0 CF 11 E0 A1 B1 1A E1 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 3E 00 03 00 FE FF 09 00
+sector1 (off=512): EC A5 C1 00 67 C0 09 04 00 00 F0 52 BF 00 00 00 00 00 00 10 00 00 00 00 00 08 00 00 86 81 00 00
+sector2 (off=1024): 00 00 00 00 00 00 00 00 00 00 AB 38 00 00 00 00 00 00 AB 38 00 00 00 00 00 00 C1 3A 00 00 00 00
+sector3 (off=1536): 00 00 3A 4E 00 00 14 00 00 00 2F 58 00 00 00 00 00 00 00 00 00 00 00 00 00 00 FB 38 00 00 00 00
+  stream: "Data" size=4096
+  stream: "1Table" size=22607
+  stream: "CompObj" size=110
+  stream: "MsoDataStore" size=0
+  stream: "ÍPY02Â4ÊYÄGHÌPGÝA5LÅÏQ==" size=0
+  stream: "Item" size=218
+  stream: "Properties" size=341
+  stream: "WordDocument" size=36419
+  stream: "SummaryInformation" size=4096
+  stream: "DocumentSummaryInformation" size=4096
+nFib=0x00C1 wdLen=36419 tblLen=22607
+
+scan: PJc(0x2461/0x2403) occurrences=74, CHps(0x4A43/0x4A41) occurrences=98
+  jc value distribution (0=L,1=C,2=R): map[0:22 1:52]
+  first 20 jc: [0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1]
+  hps (half-pt) distribution: map[18:7 21:68 22:3 24:6 28:12 32:2]
+PlcfBte candidates (exact signature): 60
+
+[PlcfBte #0] at off=0x393B segments=15 firstBTE=40
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+  raw FKP page@0x5000: 0C 20 00 00 18 20 00 00 2E 20 00 00 46 20 00 00 48 20 00 00 ED 00 00 00 00 00 00 00 00 00 00 00 00 ED 00 00 00 00 00 00 00 00 00 00 00 00 ED 00 00 00 00 00 00 00 00 00 00 00 00 26 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C7 00 00 6B 64 E0 03 00 00 16 24 01 17 24 01 49 66 01 00 00 00 00 54 01 00 05 D6 18 0C 01 00 00 00 00 00 00 0C 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08 D6 88 00 06 94 FF F9 03 F5 08 F1 0D 08 14 04 19 ED 1F 00 06 65 04 FF FF FF FF 00 00 00 00 04 01 00 00 00 00 00 00 00 06 FC 04 FF FF FF FF 00 00 00 00 04 01 00 00 00 00 00 00 00 06 FC 04 00 00 00 00 00 00 00 00 04 01 00 00 00 00 00 00 00 06 17 06 00 00 00 00 00 00 00 00 04 01 00 00 00 00 00 00 00 06 FC 04 00 00 00 00 00 00 00 00 04 01 00 00 00 00 00 00 00 06 E9 06 00 00 00 00 00 00 00 00 04 01 00 00 00 00 00 00 13 D6 30 00 00 00 FF 0C 01 00 00 00 00 00 FF 00 00 00 00 00 00 00 FF 0C 01 00 00 00 00 00 FF 00 00 00 00 00 00 00 FF 00 00 00 00 00 00 00 FF 00 00 00 00 14 F6 01 00 00 17 F6 03 00 00 18 F6 03 00 00 1A D6 18 FF FF FF FF FF FF FF FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 1B D6 18 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 1C D6 18 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 1D D6 18 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 00 00 00 FF 34 D6 06 00 01 05 03 00 00 34 D6 06 00 01 0A 03 6C 00 61 F6 03 00 00 79 74 76 5A 27 00 8A 54 01 00 12 98 00 03 24 01 11 84 00 00 16 24 01 49 66 01 00 00 00 57 44 00 00 60 84 00 00 61 24 01 67 64 76 5A 27 00 00 04
+
+[PlcfBte #1] at off=0x393F segments=15 firstBTE=228
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #2] at off=0x3943 segments=18 firstBTE=134
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #3] at off=0x3997 segments=19 firstBTE=176
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #4] at off=0x399B segments=21 firstBTE=156
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #5] at off=0x399F segments=22 firstBTE=252
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #6] at off=0x39A3 segments=23 firstBTE=72
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #7] at off=0x39A7 segments=24 firstBTE=160
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #8] at off=0x39AB segments=26 firstBTE=56
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #9] at off=0x39AF segments=27 firstBTE=124
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #10] at off=0x39B3 segments=28 firstBTE=224
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #11] at off=0x39B7 segments=29 firstBTE=134
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #12] at off=0x3A37 segments=20 firstBTE=192
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #13] at off=0x3A3B segments=25 firstBTE=25
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #14] at off=0x3D09 segments=1 firstBTE=3
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #15] at off=0x3F6D segments=1 firstBTE=4
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #16] at off=0x3F71 segments=2 firstBTE=6
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #17] at off=0x3F75 segments=3 firstBTE=8
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #18] at off=0x3F79 segments=4 firstBTE=10
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #19] at off=0x3F7D segments=5 firstBTE=12
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #20] at off=0x3F81 segments=6 firstBTE=14
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #21] at off=0x3F85 segments=7 firstBTE=16
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #22] at off=0x3F89 segments=8 firstBTE=88
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #23] at off=0x4001 segments=13 firstBTE=81
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #24] at off=0x4005 segments=14 firstBTE=96
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #25] at off=0x4009 segments=16 firstBTE=176
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #26] at off=0x400D segments=17 firstBTE=192
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #27] at off=0x4011 segments=20 firstBTE=14
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #28] at off=0x4015 segments=21 firstBTE=26
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #29] at off=0x4019 segments=22 firstBTE=33
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #30] at off=0x401D segments=29 firstBTE=198
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #31] at off=0x4021 segments=45 firstBTE=139
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #32] at off=0x4025 segments=55 firstBTE=181
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #33] at off=0x4029 segments=56 firstBTE=159
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #34] at off=0x402D segments=61 firstBTE=4
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #35] at off=0x4031 segments=63 firstBTE=12
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #36] at off=0x4035 segments=64 firstBTE=44
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #37] at off=0x4039 segments=69 firstBTE=74
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #38] at off=0x403D segments=81 firstBTE=7
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #39] at off=0x4041 segments=83 firstBTE=94
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #40] at off=0x4045 segments=96 firstBTE=96
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #41] at off=0x4049 segments=101 firstBTE=118
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #42] at off=0x404D segments=175 firstBTE=223
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #43] at off=0x4051 segments=176 firstBTE=229
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #44] at off=0x4055 segments=178 firstBTE=247
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #45] at off=0x4059 segments=192 firstBTE=62
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #46] at off=0x405D segments=245 firstBTE=0
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #47] at off=0x4061 segments=249 firstBTE=128
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #48] at off=0x4065 segments=267 firstBTE=202
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #49] at off=0x4069 segments=270 firstBTE=211
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #50] at off=0x406D segments=280 firstBTE=9
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #51] at off=0x4071 segments=282 firstBTE=34
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #52] at off=0x4075 segments=286 firstBTE=66
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #53] at off=0x4079 segments=289 firstBTE=86
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #54] at off=0x407D segments=300 firstBTE=49
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #55] at off=0x4081 segments=312 firstBTE=117
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #56] at off=0x4845 segments=22 firstBTE=102
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #57] at off=0x4849 segments=24 firstBTE=115
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #58] at off=0x4975 segments=14 firstBTE=219
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+
+[PlcfBte #59] at off=0x4979 segments=26 firstBTE=122
+  decoded runs=0 jc dist(0=L,1=C,2=R,-1=none): map[]
+  hps dist(half-pt,-1=none): map[]
+  first jc: []
+CHPX FKP pages found: 0
+hps (half-points) distribution: map[]

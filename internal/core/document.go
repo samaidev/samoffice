@@ -40,6 +40,33 @@ type PageBreak struct {
 func (PageBreak) isBlock()         {}
 func (PageBreak) BlockType() string { return "pageBreak" }
 
+// FootnoteRef 正文中的脚注引用标记（上标编号，如 [1]）。
+// 渲染时由前端 schema 的 footnote 节点显示，并携带 content 供 hover 提示。
+type FootnoteRef struct {
+	Type    string `json:"type"`    // "footnote"
+	Num     int    `json:"num"`     // 引用顺序编号（从 1 开始）
+	Content string `json:"content"` // 对应脚注正文
+}
+
+func (FootnoteRef) isInline()          {}
+func (FootnoteRef) InlineType() string { return "footnote" }
+
+// FootnoteItem 单条脚注内容。
+type FootnoteItem struct {
+	Num    int      `json:"num"`
+	Inline []Inline `json:"inline"`
+}
+
+// FootnoteSection 文档底部的脚注区，通常位于所有正文块之后。
+// 由前端 schema 的 footnote_section / footnote_item 节点渲染（分隔线 + 编号列表）。
+type FootnoteSection struct {
+	Type  string         `json:"type"` // "footnote_section"
+	Items []FootnoteItem `json:"items"`
+}
+
+func (FootnoteSection) isBlock()         {}
+func (FootnoteSection) BlockType() string { return "footnote_section" }
+
 type Meta struct {
 	Title       string `json:"title"`
 	Author      string `json:"author,omitempty"`

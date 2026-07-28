@@ -1,0 +1,7 @@
+=== RUN   TestDiagParse
+    tmp_diag_test.go:46: BLOCKS para=27 head=0 table=0 warns=[{info parse .doc 为旧版二进制格式，已提取正文文本（含简易表格网格）用于查看；该文件不含列宽/合并单元格/页脚页码等排版信息，仅能提供页码占位符，精确排版需另存为 .docx }]
+    tmp_diag_test.go:47: TEXTLEN=8278
+    tmp_diag_test.go:49: TAIL400="域的碳排放影响因素进行STIRPAT模型回归分析\x02。\n回归的结果表明，碳排放高速增长地区与缓速增长地区的碳排放影响因素存在一定差异，具体情况如下：\n（1）在两区域内，即碳排放高速增长区和低速增长区内，显著影响碳排放水平的因素（对碳排放贡献率绝对值由大到小）为：人均GDP、外商直接投资以及城市化水平，且这三个指标都显著正向影响碳排放，只在高速增长区显著的指标有能源结构与碳排放密度，只在缓速增长区显著的指标有人口总量；\n"
+--- PASS: TestDiagParse (0.00s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.039s

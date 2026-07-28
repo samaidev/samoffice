@@ -81,15 +81,30 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
                 }
         }
 
-        // 解析 document.xml
-        if rc, err := docFile.Open(); err != nil {
-                return nil, warnings, fmt.Errorf("open document.xml: %w", err)
-        } else {
-                defer rc.Close()
-                blocks, warns := parseDocumentXML(rc)
-                doc.Blocks = blocks
-                warnings = append(warnings, warns...)
-        }
+		// 解析脚注（word/footnotes.xml），id -> 文本
+		footnotes := parseFootnotes(files)
+
+		// 解析 document.xml
+		if rc, err := docFile.Open(); err != nil {
+			return nil, warnings, fmt.Errorf("open document.xml: %w", err)
+		} else {
+			defer rc.Close()
+			blocks, warns, fn, ntf := parseDocumentXML(rc, footnotes)
+			doc.Blocks = blocks
+			warnings = append(warnings, warns...)
+			// 文档含脚注引用时，在正文末尾追加脚注区
+			if len(fn) > 0 {
+				items := make([]core.FootnoteItem, 0, len(fn))
+				for num := 1; num <= len(fn); num++ {
+					fid := ntf[num]
+					items = append(items, core.FootnoteItem{
+						Num:    num,
+						Inline: []core.Inline{core.Text{Content: footnotes[fid]}},
+					})
+				}
+				doc.Blocks = append(doc.Blocks, &core.FootnoteSection{Type: "footnote_section", Items: items})
+			}
+		}
 
         // 解析页脚中的 PAGE / NUMPAGES 域，生成页码配置
         if pn := extractPageNumber(files); pn != nil {
@@ -101,15 +116,17 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 
 // parseDocumentXML 宽松解析 document.xml，提取块级内容
 // 容错：用 encoding/xml 的 Token 模式，未知元素跳过而不报错
-func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
-        dec := xml.NewDecoder(r)
-        dec.Strict = false
-        dec.AutoClose = xml.HTMLAutoClose
-        dec.Entity = xml.HTMLEntity
+func parseDocumentXML(r io.Reader, footnotes map[string]string) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
+	dec := xml.NewDecoder(r)
+	dec.Strict = false
+	dec.AutoClose = xml.HTMLAutoClose
+	dec.Entity = xml.HTMLEntity
 
-        var blocks []core.Block
-        var warnings []core.Warning
-        depth := 0
+	var blocks []core.Block
+	var warnings []core.Warning
+	fn := map[string]int{}
+	ntf := map[int]string{}
+	depth := 0
 
         for {
                 tok, err := dec.Token()
@@ -129,7 +146,7 @@ func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
                         depth++
                         // 进入段落
                         if t.Name.Local == "p" && t.Name.Space == "http://schemas.openxmlformats.org/wordprocessingml/2006/main" {
-                                for _, b := range parseParagraph(dec) {
+                                for _, b := range parseParagraph(dec, footnotes, fn, ntf) {
                                         if b != nil {
                                                 blocks = append(blocks, b)
                                         }
@@ -137,7 +154,7 @@ func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
                                 depth--
                         }
                         if t.Name.Local == "tbl" && t.Name.Space == "http://schemas.openxmlformats.org/wordprocessingml/2006/main" {
-                                tbl := parseTable(dec)
+                                tbl := parseTable(dec, footnotes, fn, ntf)
                                 if tbl != nil {
                                         blocks = append(blocks, tbl)
                                 }
@@ -146,8 +163,62 @@ func parseDocumentXML(r io.Reader) ([]core.Block, []core.Warning) {
                 case xml.EndElement:
                         depth--
                 }
-        }
-        return blocks, warnings
+   		}
+	return blocks, warnings, fn, ntf
+	}
+
+// parseFootnotes 从 word/footnotes.xml 提取脚注 id -> 文本。
+// 分隔符脚注（id 为 -1 / 0）会被跳过。
+func parseFootnotes(files map[string]*zip.File) map[string]string {
+	result := map[string]string{}
+	f, ok := files["word/footnotes.xml"]
+	if !ok {
+		return result
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return result
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	dec.AutoClose = xml.HTMLAutoClose
+	dec.Entity = xml.HTMLEntity
+	var curID string
+	var curText strings.Builder
+	inFootnote := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "footnote" {
+				curID = ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "id" {
+						curID = a.Value
+					}
+				}
+				curText.Reset()
+				inFootnote = true
+			} else if t.Name.Local == "t" && inFootnote {
+				curText.WriteString(readCharData(dec))
+			}
+		case xml.EndElement:
+			if t.Name.Local == "footnote" && inFootnote {
+				if curID != "-1" && curID != "0" {
+					result[curID] = strings.TrimSpace(curText.String())
+				}
+				inFootnote = false
+			}
+		}
+	}
+	return result
 }
 
 // headingLevel 根据 Word 内置标题样式 ID（Heading1..Heading9）推断标题级别，
@@ -170,7 +241,7 @@ func headingLevel(style string) int {
 
 // parseParagraph 解析 <w:p> 段落。若段落内含 OMML 公式，则返回 *core.Math 块。
 // 返回 []core.Block：可能包含其前/后的分页符块（pageBreakBefore / w:br type=page）。
-func parseParagraph(dec *xml.Decoder) []core.Block {
+func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string]int, ntf map[int]string) []core.Block {
 	para := &core.Paragraph{Inline: []core.Inline{}}
 	var inRun bool
 	var curText core.Text
@@ -199,11 +270,29 @@ func parseParagraph(dec *xml.Decoder) []core.Block {
 			case "r": // <w:r> run
 				inRun = true
 				curText = core.Text{}
-			case "t": // <w:t> text
-				if inRun {
-					text := readCharData(dec)
-					curText.Content += text
+		case "t": // <w:t> text
+			if inRun {
+				text := readCharData(dec)
+				curText.Content += text
+			}
+		case "footnoteReference": // 脚注引用标记 <w:footnoteReference w:id=".."/>
+			if inRun && curText.Content != "" {
+				// 先flush 已在 run 内的文本，保证引用标记顺序正确
+				para.Inline = append(para.Inline, curText)
+				curText = core.Text{}
+			}
+			var fid string
+			for _, a := range t.Attr {
+				if a.Name.Local == "id" {
+					fid = a.Value
 				}
+			}
+			if _, ok := fn[fid]; !ok {
+				fn[fid] = len(fn) + 1
+				ntf[fn[fid]] = fid
+			}
+			num := fn[fid]
+			para.Inline = append(para.Inline, &core.FootnoteRef{Type: "footnote", Num: num, Content: footnotes[fid]})
 			case "b": // bold
 				if inRun {
 					curText.Bold = readOnOffAttr(t)
@@ -235,6 +324,16 @@ func parseParagraph(dec *xml.Decoder) []core.Block {
 					case "ascii", "hAnsi":
 						if curText.Font == "" && a.Value != "" {
 							curText.Font = a.Value
+						}
+					}
+				}
+			}
+		case "sz", "szCs": // 字号（半磅 → 磅）
+			if inRun {
+				for _, a := range t.Attr {
+					if a.Name.Local == "val" && a.Value != "" {
+						if v, err := strconv.ParseFloat(a.Value, 64); err == nil && v > 0 {
+							curText.FontSize = v / 2
 						}
 					}
 				}
@@ -400,11 +499,29 @@ func parseParagraph(dec *xml.Decoder) []core.Block {
 	}
 }
 
-// extractPageNumber 扫描 word/footer*.xml，提取页码域（PAGE / NUMPAGES），
-// 还原为 UDM 的 PageNumberConfig。找不到页码域时返回 nil。
+// extractPageNumber 扫描 word/footer*.xml 与 word/header*.xml，提取页码域
+// （PAGE / NUMPAGES），还原为 UDM 的 PageNumberConfig。
+// 页码通常在页脚，少数字档放在页眉，故 footer 优先、header 兜底。
+// 找不到任何页码域时返回 nil。
 func extractPageNumber(files map[string]*zip.File) *core.PageNumberConfig {
-	for name, f := range files {
-		if !strings.HasPrefix(name, "word/footer") || !strings.HasSuffix(name, ".xml") {
+	candidates := make([]string, 0, len(files))
+	for name := range files {
+		if strings.HasSuffix(name, ".xml") {
+			if strings.HasPrefix(name, "word/footer") {
+				candidates = append(candidates, name) // 页脚优先
+			}
+		}
+	}
+	for name := range files {
+		if strings.HasSuffix(name, ".xml") {
+			if strings.HasPrefix(name, "word/header") {
+				candidates = append(candidates, name) // 页眉兜底
+			}
+		}
+	}
+	for _, name := range candidates {
+		f, ok := files[name]
+		if !ok {
 			continue
 		}
 		rc, err := f.Open()
@@ -535,7 +652,7 @@ func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
 }
 
 // parseTable 解析 <w:tbl>，返回 *core.Table。容错：未知或残缺元素跳过。
-func parseTable(dec *xml.Decoder) core.Block {
+func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int, ntf map[int]string) core.Block {
 	tbl := &core.Table{Rows: [][]core.TableCell{}}
 	var curRow []core.TableCell
 	var curCell core.TableCell
@@ -590,7 +707,7 @@ func parseTable(dec *xml.Decoder) core.Block {
 					}
 				}
 			case "p":
-				for _, b := range parseParagraph(dec) {
+				for _, b := range parseParagraph(dec, footnotes, fn, ntf) {
 					if b == nil {
 						continue
 					}

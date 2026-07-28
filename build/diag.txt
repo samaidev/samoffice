@@ -1,0 +1,18 @@
+=== RUN   TestDiagRealDoc
+    tmp_diag_test.go:33: USED=D:\个人\文章投稿\中国区域碳排放影响因素研究20160818.doc size=76800
+    tmp_diag_test.go:55: STREAMS=[Data 1Table CompObj MsoDataStore ÍPY02Â4ÊYÄGHÌPGÝA5LÅÏQ== Item Properties WordDocument SummaryInformation DocumentSummaryInformation]
+    tmp_diag_test.go:56: wordDoc.len=36419 table.len=22607
+    tmp_diag_test.go:69: nFib=0xA5EC flags=0x52F0 fWhichTbl=512 fcMin=0x800
+    tmp_diag_test.go:70: ccpText=7216 ccpFtn=58 ccpHdd=16 ccpEdn=0 ccpAtn=0
+    tmp_diag_test.go:97: PlcfBteChpx pair=21 fc=0x38FB0000 lcb=1310720 valid=false
+    tmp_diag_test.go:97: PlcfBtePapx pair=25 fc=0x390F0000 lcb=0 valid=false
+    tmp_diag_test.go:97: PlcfBteTapx pair=29 fc=0x390F0000 lcb=0 valid=false
+    tmp_diag_test.go:97: PlcfFldMom pair=33 fc=0x3AC10000 lcb=0 valid=false
+    tmp_diag_test.go:97: PlcfFldHdr pair=37 fc=0x3F1D0000 lcb=9699328 valid=false
+    tmp_diag_test.go:97: PlcfFldFtn pair=53 fc=0x0 lcb=0 valid=false
+    tmp_diag_test.go:97: PlcfFldEdn pair=57 fc=0x3FFD0000 lcb=0 valid=false
+    tmp_diag_test.go:97: PlcfHdd pair=61 fc=0x38AB0000 lcb=0 valid=false
+    tmp_diag_test.go:97: PlcfBtePapx_alt pair=26 fc=0x390F0000 lcb=3670016 valid=false
+--- PASS: TestDiagRealDoc (0.00s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.039s

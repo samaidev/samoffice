@@ -1,0 +1,217 @@
+=== RUN   TestDiagRealDoc
+    tmp_diag_real_test.go:21: file size = 76800
+    tmp_diag_real_test.go:22: header bytes = D0 CF 11 E0 A1 B1 1A E1 00 00 00 00 00 00 00 00
+    tmp_diag_real_test.go:47: streams: "Data" size=4096, "1Table" size=22607, "CompObj" size=110, "MsoDataStore" size=0, "ÍPY02Â4ÊYÄGHÌPGÝA5LÅÏQ==" size=0, "Item" size=218, "Properties" size=341, "WordDocument" size=36419, "SummaryInformation" size=4096, "DocumentSummaryInformation" size=4096
+    tmp_diag_real_test.go:48: wordDoc len=36419 table len=22607
+    tmp_diag_real_test.go:55: fcClx=0x0 lcbClx=0x0 fcDop=0x0 lcbDop=0x0 ccpText=7216
+    tmp_diag_real_test.go:66: === PieceTable text (first 600 runes) ===
+    tmp_diag_real_test.go:67: 
+    tmp_diag_real_test.go:70: === extractTextFIB text (first 600 runes) ===
+    tmp_diag_real_test.go:71: 中国区域碳排放影响因素研究
+        崔佳1，孔英2，陆强1
+        （1.哈尔滨工业大学深圳研究生院，深圳 广东 518055；
+          2.清华-伯克利学院，           深圳 广东 518055）
+        
+        【摘要】：目前，中国已成为世界最大碳排放国，有必要加强对碳排放的相关研究。基于过往相关研究的总结，笔者从人口、经济等七个方面较全面研究了中国1998-2012年27省两大区域的碳排放影响因素。研究结果表明：改善经济增长方式，建立新型考核指标，优化能源结构，提升能源效率将有利于区域碳排放的减少。
+        
+        关键词：区域碳排放；影响因素；STIRPAT模型；系统聚类分析法
+        
+        
+        作者简介：
+        崔佳（1980-01-14），性别：女，籍贯：加拿大多伦多，作者单位：哈尔滨工业大学深圳研究生院，职称/职务：博士研究生。地址：广东省深圳市南山区西丽大学城哈尔滨工业大学，邮箱： HYPERLINK "mailto:13825216099@139.com。（通讯作者" 13825216099@139.com。（通讯作者）。 电话：13825216099
+        
+        孔英（1960-08-18），性别：男，籍贯：加拿大多伦多，作者单位：清华-伯克利学院、约克大学，职称/职务：特聘教授/教授。地址：广东省深圳市南山区西丽大学城清华大学，邮箱： HYPERLINK "mailto:kongying@sz.tsinghua.edu
+    tmp_diag_real_test.go:74: === scanText text (first 600 runes) ===
+    tmp_diag_real_test.go:75: ì¥Á
+        gÀ	
+        ðR¿
+        bjbj
+        V
+        V
+        C
+        r<
+        r<
+        0
+        :
+        ÿÿ
+        ÿÿ
+        ÿÿ
+        ·
+        ,+
+        ,+
+        8
+        8
+         
+        û8
+        û8
+        û8
+        ÿÿÿÿ
+        9
+        9
+        9
+        8
+        G9
+        ã9
+        ¤
+        9
+        GR
+        ú
+        :
+        :
+        Á:
+        Á:
+        Á:
+        ×:
+        /=
+        î
+        ?
+        ±?
+        L
+        ~Q
+        Q
+        Q
+        Q
+        Q
+        Q
+        Q
+        $
+        AU
+        ²
+        óW
+        <
+        ¤Q
+        ]
+        û8
+        ý?
+        =
+        =
+        "
+        ý?
+        ý?
+        ¤Q
+        «8
+        «8
+        Á:
+        ×:
+        6
+        R
+        ;J
+        ;J
+        ;J
+        ý?
+        D
+        «8
+        Á:
+        «8
+        8
+        Á:
+        ~Q
+        ;J
+        ý?
+        ~Q
+        ;J
+        ;J
+        M
+        h
+        ã8
+        :N
+        Á:
+        ÿÿÿÿ
+        ¥
+        ËþøÑ
+        ÿÿÿÿ
+        AH
+        0
+        öM
+        jQ
+        R
+        0
+        GR
+        N
+        4
+        /X
+        qI
+        Ê
+        /X
+         
+        :N
+        :N
+        /X
+        û8
+        NN
+        ý?
+        ý?
+        ;J
+        ý?
+        ý?
+        ý?
+        ý?
+        ý?
+        ¤Q
+        ¤Q
+        ;J
+        ý?
+        ý?
+        ý?
+        GR
+        ý?
+        ý?
+        ý?
+        ý?
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        ÿÿÿÿ
+        /X
+        ý?
+        ý?
+        ý?
+        ý?
+        ý?
+        ý?
+        ý?
+        ý?
+        ý?
+        ,+
+        / 
+        [7
+        :
+        	
+        -NýV:SßW³x
+        c>eq_ÍTàV }
+        xvz
+        ]sO1
+         ÿT[ñ
+        2
+         ÿF
+        :_1
+        ÿ1
+        .
+        ÈT
+        \ènå]
+        N'Yf[ñm3W
+        xvz
+        ub
+         ÿñm3W 
+        ^
+        N 
+        5
+        1
+        8
+        0
+--- PASS: TestDiagRealDoc (0.00s)
+PASS
+ok  	github.com/zai/samoffice/internal/parser/doc	0.042s

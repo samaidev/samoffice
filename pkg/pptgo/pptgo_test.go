@@ -21,7 +21,7 @@ func TestCreateAndSave(t *testing.T) {
 	s2.AddTitle("内容页")
 	s2.AddBullets([]string{"要点1", "要点2"})
 
-	tmpFile := "/tmp/pptgo-test.pptx"
+	tmpFile := filepath.Join(t.TempDir(), "pptgo-test.pptx")
 	if err := prs.Save(tmpFile); err != nil {
 		t.Fatal(err)
 	}
