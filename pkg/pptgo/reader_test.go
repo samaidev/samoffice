@@ -100,7 +100,7 @@ func TestOpenFile(t *testing.T) {
 	s.AddTitle("文件打开测试")
 	s.AddBullet("要点A")
 
-	tmpFile := "/tmp/test_pptgo_open.pptx"
+	tmpFile := filepath.Join(t.TempDir(), "test_pptgo_open.pptx")
 	defer os.Remove(tmpFile)
 
 	if err := prs.Save(tmpFile); err != nil {

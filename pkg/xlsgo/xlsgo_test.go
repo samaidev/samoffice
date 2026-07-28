@@ -26,7 +26,7 @@ func TestOpenAndRead(t *testing.T) {
 	ws.SetCell("A1", "Hello")
 	ws.SetCellInt("A2", 123)
 
-	tmpFile := "/tmp/xlsgo-read-test.xlsx"
+	tmpFile := filepath.Join(t.TempDir(), "xlsgo-read-test.xlsx")
 	wb.Save(tmpFile)
 	defer os.Remove(tmpFile)
 	wb.Close()
