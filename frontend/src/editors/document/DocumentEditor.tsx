@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state'
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { EditorState, NodeSelection, TextSelection, Plugin } from 'prosemirror-state'
+import { DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
 import { EditorView } from 'prosemirror-view'
 import { schema } from './schema'
 import { createPaginationPlugin } from './pagination'
@@ -276,14 +277,25 @@ function extractComments(doc: any): { id: string; author: string; text: string; 
   return out
 }
 
-// 从 PM 文档中提取脚注数据（脚注区在编辑器内隐藏渲染，这里仅取数据用于页底脚注区展示/编辑）
-function extractFootnotes(doc: any): { num: number; text: string; pos: number }[] {
-  const out: { num: number; text: string; pos: number }[] = []
+// 从 PM 文档中提取脚注数据（脚注区在编辑器内隐藏渲染，这里仅取数据用于页底脚注区展示/编辑）。
+// sectionPos：隐藏脚注区中 footnote_item 的位置（用于编辑/删除）；
+// refPos：正文中 footnote 引用标记的位置（用于判断脚注应显示在哪一页）。
+type FootnoteData = { num: number; text: string; sectionPos: number; refPos: number }
+function extractFootnotes(doc: any): FootnoteData[] {
+  const refs: Record<number, number> = {}
+  doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'footnote') {
+      const num = Number(node.attrs.num) || 0
+      if (num > 0) refs[num] = pos
+    }
+  })
+  const out: FootnoteData[] = []
   doc.descendants((node: any, pos: number) => {
     if (node.type.name === 'footnote_section') {
       node.forEach((child: any, offset: number) => {
         if (child.type.name === 'footnote_item') {
-          out.push({ num: child.attrs.num, text: child.textContent || '', pos: pos + 1 + offset })
+          const num = Number(child.attrs.num) || 1
+          out.push({ num, text: child.textContent || '', sectionPos: pos + 1 + offset, refPos: refs[num] ?? -1 })
         }
       })
     }
@@ -326,30 +338,124 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const pageRef = useRef<HTMLDivElement>(null)
   const sheetsLayerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  // 当前选区是否包含可选中文本（用于右键菜单复制/剪切的可用态）
+  const hasSelection = () => {
+    const v = viewRef.current
+    if (!v) return false
+    const sel = v.state.selection
+    if (sel.empty) return false
+    return !(sel instanceof NodeSelection)
+  }
+  // 读取选区/光标处生效的字符格式标记（供格式刷暂存）
+  const getActiveMarks = (): Record<string, any> => {
+    const v = viewRef.current; if (!v) return {}
+    const { state } = v
+    const marks: Record<string, any> = {}
+    const from = state.selection.from
+    const $from = state.doc.resolve(from)
+    const stored = state.storedMarks || ($from.marks && $from.marks())
+    if (stored) { stored.forEach((m: any) => { marks[m.type.name] = m.attrs }) }
+    return marks
+  }
+  // 格式刷：暂存源格式标记，等待应用到下一次选区
+  const [formatPainter, setFormatPainter] = useState<Record<string, any> | null>(null)
+  // 将当前选区序列化为 HTML 并写入系统剪贴板（HTML + 纯文本双格式）；cut=true 时同时删除选区
+  const serializeSelectionToClipboard = (v: any, cut: boolean) => {
+    const sel = v.state.selection
+    if (sel.empty) return
+    // 优先用原生 DOM Selection 克隆选中片段，避免 ProseMirror DOMSerializer
+    // 在个别节点 toDOM 下触发 document.createElement 异常（见复制报错）。
+    let html = ''
+    let plain = ''
+    try {
+      const domSel = (window as any).getSelection()
+      if (domSel && domSel.rangeCount > 0) {
+        const range = domSel.getRangeAt(0)
+        const clone = range.cloneContents()
+        const div = (window as any).document.createElement('div')
+        div.appendChild(clone)
+        html = div.innerHTML
+        plain = range.toString()
+      }
+    } catch { /* ignore */ }
+    // 兜底：用 ProseMirror 文本区间取纯文本
+    if (!plain) {
+      plain = v.state.doc.textBetween(sel.from, sel.to, '\n\n')
+    }
+    try {
+      (window as any).runtime.SetClipboardHtml(html, plain)
+    } catch { /* ignore */ }
+    if (cut) { v.dispatch(v.state.tr.delete(sel.from, sel.to).scrollIntoView()) }
+  }
   // 实测编辑器内容高度，用于让“页面”随内容自动增高，避免多页文档被裁切
   const [pageContentH, setPageContentH] = useState(0)
   // 页底脚注区数据（从 PM 文档提取，避免在正文中渲染脚注）
-  const [footnotes, setFootnotes] = useState<{ num: number; text: string; pos: number }[]>([])
+  const [footnotes, setFootnotes] = useState<FootnoteData[]>([])
+  // 每个顶级块所在的页码（由分页引擎回报），用于把脚注显示在引用所在页底部
+  const [blockPages, setBlockPages] = useState<number[]>([])
+  // 将脚注按“引用所在页”分组，使脚注显示在对应页底部而非文档末尾
+  const footnotesByPage = useMemo(() => {
+    const map: Record<number, FootnoteData[]> = {}
+    const view = viewRef.current
+    if (!view || blockPages.length === 0) return map
+    const froms: number[] = []
+    view.state.doc.forEach((_n: any, from: number) => froms.push(from))
+    for (const f of footnotes) {
+      if (f.refPos < 0) continue
+      let k = 0
+      for (let i = 0; i < froms.length; i++) {
+        if (froms[i] <= f.refPos) k = i
+        else break
+      }
+      const pg = blockPages[k] ?? 0
+      ;(map[pg] ||= []).push(f)
+    }
+    return map
+  }, [footnotes, blockPages])
   // 右侧批注栏数据（对齐 MS Word：批注锚点在正文，卡片显示在右侧对应位置）
   const [comments, setComments] = useState<{ id: string; author: string; text: string; pos: number }[]>([])
   const [activeComment, setActiveComment] = useState<string | null>(null)
 
-  const editFootnote = (f: { num: number; text: string; pos: number }) => {
+  const editFootnote = (f: FootnoteData) => {
     const v = viewRef.current
     if (!v) return
     const newText = prompt(t('doc.prompt.footnote') || '编辑脚注内容：', f.text)
     if (newText === null) return
-    const node = v.state.doc.nodeAt(f.pos)
+    const node = v.state.doc.nodeAt(f.sectionPos)
     if (!node || node.type.name !== 'footnote_item') return
     const item = schema.nodes.footnote_item.create({ num: f.num }, newText ? schema.text(newText) : null)
-    v.dispatch(v.state.tr.replaceWith(f.pos, f.pos + node.nodeSize, item))
+    v.dispatch(v.state.tr.replaceWith(f.sectionPos, f.sectionPos + node.nodeSize, item))
   }
-  const deleteFootnote = (f: { num: number; text: string; pos: number }) => {
+  const deleteFootnote = (f: FootnoteData) => {
     const v = viewRef.current
     if (!v) return
-    const node = v.state.doc.nodeAt(f.pos)
+    const node = v.state.doc.nodeAt(f.sectionPos)
     if (!node || node.type.name !== 'footnote_item') return
-    v.dispatch(v.state.tr.delete(f.pos, f.pos + node.nodeSize))
+    v.dispatch(v.state.tr.delete(f.sectionPos, f.sectionPos + node.nodeSize))
+  }
+  // 复制脚注内容到剪贴板（优先 Clipboard API，回退 execCommand）
+  const copyFootnote = (f: FootnoteData) => {
+    const text = `${f.num}. ${f.text || ''}`
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text))
+      } else {
+        fallbackCopy(text)
+      }
+    } catch {
+      fallbackCopy(text)
+    }
+  }
+  const fallbackCopy = (text: string) => {
+    const docAny = document as any
+    const ta = docAny.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    docAny.body.appendChild(ta)
+    ta.select()
+    try { docAny.execCommand('copy') } catch { /* ignore */ }
+    docAny.body.removeChild(ta)
   }
   // 批注卡片编辑态：正在编辑的批注 id（null 表示只读查看）
   const [editingComment, setEditingComment] = useState<string | null>(null)
@@ -605,7 +711,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
-        createPaginationPlugin(() => metricsRef.current, setPageCount, setPageRects),
+        createPaginationPlugin(() => metricsRef.current, setPageCount, setPageRects, setBlockPages),
+        // 格式刷：暂存源格式后，下一次选区变化时自动套用并解除
+        new Plugin({
+          appendTransaction: (_transactions: any, _oldState: any, newState: any) => {
+            if (!formatPainter) return null
+            const sel = newState.selection
+            if (sel.empty || sel instanceof NodeSelection) return null
+            const store: any[] = []
+            for (const [name, attrs] of Object.entries(formatPainter)) {
+              const m = (schema.marks as any)[name]; if (!m) continue
+              store.push(m.create(attrs || {}))
+            }
+            if (store.length === 0) { setFormatPainter(null); return null }
+            const tr = newState.tr.setStoredMarks(store)
+            setFormatPainter(null)
+            return tr
+          },
+        }),
       ]
     })
     const view = new EditorView(editorRef.current, {
@@ -775,6 +898,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           return false
         },
         contextmenu: (view: any, e: any) => { e.preventDefault(); setShowContextMenu(true); setContextMenuPos({ x: e.clientX, y: e.clientY }); return false },
+
         click: (_view: any, event: any) => {
           const el = event.target as HTMLElement
           const link = el?.closest?.('.sam-toc-link') as HTMLElement | null
@@ -1095,10 +1219,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     return parts.join(' · ')
   }
 
-  // 预览页码文本（将模板中的 {n}/{total} 替换为示例值）
-  const previewPageNumber = (fmt?: string) => {
+  // 将页码模板中的占位符替换为真实页码：{n}/{N}→当前页，{total}/{NUMPAGES}/{TOTAL}→总页数
+  const fillPageNumber = (fmt: string | undefined, n: number, total: number) => {
     const f = fmt || '第 {n} 页'
-    return f.replace('{n}', '1').replace('{total}', '3')
+    return f
+      .replace(/\{n\}/gi, String(n))
+      .replace(/\{total\}/gi, String(total))
+      .replace(/\{NUMPAGES\}/gi, String(total))
   }
 
   // 主动向外 emit 当前文档（携带最新页码配置）。
@@ -1134,6 +1261,34 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'codeBlock': setBlockType(schema.nodes.code_block)(v.state, v.dispatch); break
       case 'undo': undo(v.state, v.dispatch); break
       case 'redo': redo(v.state, v.dispatch); break
+      case 'copy': { v.focus(); serializeSelectionToClipboard(v, false); setShowContextMenu(false); break }
+      case 'cut': { v.focus(); serializeSelectionToClipboard(v, true); setShowContextMenu(false); break }
+      case 'paste': {
+        v.focus()
+        ;(async () => {
+          try {
+            const html = await (window as any).runtime.GetClipboardHtml()
+            if (html && html.trim()) {
+              const nativeDoc = new DOMParser().parseFromString('<body>' + html + '</body>', 'text/html')
+              const slice = PMDOMParser.fromSchema(schema).parseSlice(nativeDoc.body)
+              v.dispatch(v.state.tr.replaceSelection(slice).scrollIntoView())
+            } else {
+              const t2 = await (window as any).runtime.ClipboardGetText()
+              if (t2) v.dispatch(v.state.tr.insertText(t2).scrollIntoView())
+            }
+          } catch { /* ignore */ }
+        })()
+        setShowContextMenu(false); break
+      }
+      case 'formatPainter': { setFormatPainter(getActiveMarks()); break }
+      case 'clearFormat': {
+        const { state, dispatch } = v
+        const { from, to } = state.selection
+        const tr = state.tr
+        const markNames = ['bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'code', 'fontSize', 'fontFamily', 'fontColor', 'highlight', 'comment_mark']
+        markNames.forEach((n) => { const m = (state.schema.marks as any)[n]; if (m) tr.removeMark(from, to, m) })
+        dispatch(tr); v.focus(); break
+      }
       case 'pageBreak': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create({ restart: false, startNumber: 1 }))); break
       case 'pageBreakRestart': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create({ restart: true, startNumber: 1 }))); break
       case 'horizontalRule': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.horizontal_rule.create())); break
@@ -1540,7 +1695,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       )}
 
       {/* Ribbon 内容区 */}
-      <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 45, '--wails-draggable': 'drag' as any } as any}>
+      <div
+        className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll"
+        style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 45, '--wails-draggable': 'drag' as any } as any}
+        // 点击功能区按钮时不要抢走编辑器的焦点，否则选中的文本选区会被清空，
+        // 导致无法对同一段选中文本连续执行多次操作（加粗后再改字号/颜色等）。
+        onMouseDown={(e) => { const el = e.target as HTMLElement; if (el.closest('button')) e.preventDefault() }}
+      >
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
@@ -1863,6 +2024,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               )}
             </div>
           </RibbonGroup>
+          <RibbonGroup label={t('doc.clipboard')}>
+            <RibbonButton icon="🖌" label={t('doc.formatPainter')} onClick={() => exec('formatPainter')} active={!!formatPainter} title={t('doc.formatPainter')} />
+            <RibbonButton icon="⌫" label={t('doc.clearFormat')} onClick={() => exec('clearFormat')} title={t('doc.clearFormat')} />
+          </RibbonGroup>
           <RibbonGroup label={t('doc.layout')}>
             <RibbonButton icon="🅰" label={t('doc.dropCap')} onClick={() => exec('dropCap')} active={activeAttrs.dropCap} />
             <RibbonButton icon="⇄" label="RTL" onClick={() => exec('toggleRTL')} active={activeAttrs.rtl} />
@@ -2129,6 +2294,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowContextMenu(false)} />
           <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: cx, top: cy, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}>
+            <button onClick={() => exec('undo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↶ {t('doc.undo')}</button>
+            <button onClick={() => exec('redo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↷ {t('doc.redo')}</button>
+            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+            <button onClick={() => exec('cut')} disabled={!hasSelection()} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>✂ {t('doc.cut')}</button>
+            <button onClick={() => exec('copy')} disabled={!hasSelection()} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>⧉ {t('doc.copy')}</button>
+            <button onClick={() => exec('paste')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📋 {t('doc.paste')}</button>
+            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
             <button onClick={() => exec('bold')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><b>B</b> {t('doc.bold')}</button>
             <button onClick={() => exec('italic')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><i>I</i> {t('doc.italic')}</button>
             <button onClick={() => exec('underline')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><u>U</u> {t('doc.underline')}</button>
@@ -2186,7 +2358,59 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         {/* 纸页背景层：每张纸依据分页引擎算出的实际内容位置绘制，与内容严格对齐 */}
         <div ref={sheetsLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
           {pageRects.map((p, i) => (
-            <div key={i} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, background: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }} />
+            <Fragment key={i}>
+              <div style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, background: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
+                {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾 */}
+                {(footnotesByPage[i] || []).length > 0 && (
+                  <div style={{
+                    position: 'absolute',
+                    left: docMargins.left,
+                    right: docMargins.right,
+                    bottom: Math.round(docMargins.bottom * 0.55) + 18,
+                    borderTop: '1px solid var(--color-border)',
+                    padding: '4px 0',
+                    fontSize: '0.82em',
+                    lineHeight: 1.5,
+                    color: 'var(--color-text-muted)',
+                    background: 'rgba(255,255,255,0.92)',
+                    pointerEvents: 'auto',
+                  }}>
+                    {(footnotesByPage[i] || []).map((f) => (
+                      <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
+                           onDoubleClick={() => editFootnote(f)} title={t('doc.prompt.footnote') || '双击编辑脚注'}>
+                        <span style={{ flex: 1, wordBreak: 'break-word' }}>
+                          <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
+                        </span>
+                        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); copyFootnote(f) }}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '12px', lineHeight: 1, padding: '0 4px' }}
+                                title="复制脚注">复制</button>
+                        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); deleteFootnote(f) }}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '14px', lineHeight: 1, padding: '0 4px' }}
+                                title="删除脚注">×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {/* 每页底部页码（预览）：按真实页码填充模板 */}
+              {pageNumber?.enabled && (
+                <div style={{
+                  position: 'absolute',
+                  top: bodyTop + p.top + p.height - Math.round(docMargins.bottom * 0.55) - 8,
+                  left: 0,
+                  width: pageWidthPx,
+                  textAlign: (pageNumber.align as any) || 'center',
+                  fontSize: `${((pageNumber.fontSize || 18) / 2)}px`,
+                  color: pageNumber.fontColor || 'var(--color-text-muted)',
+                  fontFamily: pageNumber.fontFamily || undefined,
+                  fontWeight: pageNumber.bold ? 700 : 400,
+                  fontStyle: pageNumber.italic ? 'italic' : 'normal',
+                  pointerEvents: 'none',
+                }}>
+                  {fillPageNumber(pageNumber.format, i + 1, pageRects.length)}
+                </div>
+              )}
+            </Fragment>
           ))}
         </div>
         <div style={{ position: 'relative', zIndex: 1 }}>
@@ -2261,11 +2485,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 minHeight: '100%',
                 position: 'relative',
               }}
-              className={`${showRuler ? 'show-ruler' : ''} ${showGridlines ? 'show-gridlines' : ''} ${eyeCareMode ? 'eye-care-mode' : ''}`}
+              className={`${showRuler ? 'show-ruler' : ''} ${showGridlines ? 'show-gridlines' : ''} ${eyeCareMode ? 'eye-care-mode' : ''} ${showMarks ? 'show-marks' : ''}`}
             />
           </div>
-          {/* 页底脚注区：脚注引用在正文，脚注文本统一显示在页底 */}
-          {footnotes.length > 0 && (
+          {/* 页底脚注区兜底：分页引擎尚未回报页码时（首帧）仍统一显示在页底，避免闪烁丢失 */}
+          {blockPages.length === 0 && footnotes.length > 0 && (
             <div style={{
               borderTop: '1px solid var(--color-border)',
               padding: `${Math.round(docMargins.bottom * 0.3)}px ${docMargins.right}px ${Math.round(docMargins.bottom * 0.3)}px ${docMargins.left}px`,
@@ -2274,11 +2498,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               background: bgColor,
             }}>
               {footnotes.map((f) => (
-                <div key={f.pos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
+                <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
                      onDoubleClick={() => editFootnote(f)} title={t('doc.prompt.footnote') || '双击编辑脚注'}>
                   <span style={{ flex: 1, wordBreak: 'break-word', lineHeight: 1.5 }}>
                     <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
                   </span>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); copyFootnote(f) }}
+                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '12px', lineHeight: 1, padding: '0 4px' }}
+                          title="复制脚注">复制</button>
                   <button type="button" onClick={(e) => { e.stopPropagation(); deleteFootnote(f) }}
                           style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '14px', lineHeight: 1, padding: '0 4px' }}
                           title="删除脚注">×</button>
@@ -2286,21 +2513,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               ))}
             </div>
           )}
-          {/* 页脚（页码预览，真实页码/分节在导出 docx 时生成） */}
-          {pageNumber?.enabled && (
-            <div style={{
-              padding: `${Math.round(docMargins.bottom * 0.3)}px ${docMargins.right}px ${Math.round(docMargins.bottom * 0.3)}px ${docMargins.left}px`,
-              borderTop: '1px solid var(--color-border)',
-              fontSize: `${((pageNumber.fontSize || 18) / 2)}px`,
-              color: pageNumber.fontColor || 'var(--color-text-muted)',
-              fontFamily: pageNumber.fontFamily || undefined,
-              fontWeight: pageNumber.bold ? 700 : 400,
-              fontStyle: pageNumber.italic ? 'italic' : 'normal',
-              textAlign: (pageNumber.align as any) || 'center',
-            }}>
-              {previewPageNumber(pageNumber.format)}
-            </div>
-          )}
+          {/* 页脚（每页真实页码由纸页层按页码渲染，见上方 sheetsLayerRef 层） */}
         </div>
         </div>
 

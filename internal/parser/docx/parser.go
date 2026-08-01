@@ -480,14 +480,15 @@ func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string
 					return out
 				}
 			}
-			if lvl := headingLevel(para.Style); lvl > 0 {
-				out = append(out, &core.Heading{
-					Level:  lvl,
-					Inline: para.Inline,
-					Style:  para.Style,
-					Props:  para.Props,
-				})
-			} else {
+		if lvl := headingLevel(para.Style); lvl > 0 {
+			out = append(out, &core.Heading{
+				Level:  lvl,
+				Inline: para.Inline,
+				Style:  para.Style,
+				Align:  para.Align,
+				Props:  para.Props,
+			})
+		} else {
 				out = append(out, para)
 			}
 			if trailingPageBreak {

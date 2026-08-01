@@ -808,19 +808,20 @@ table td, table th {
   border-collapse: collapse;
   width: 100%;
   margin: 12px 0;
+  position: relative; /* 作为列宽手柄等绝对定位子元素的定位上下文 */
 }
 .ProseMirror table.pm-table td,
 .ProseMirror table.pm-table th {
   border: 1px solid #cbd5e1;
   padding: 6px 10px;
   vertical-align: top;
-  position: relative;
 }
 .ProseMirror table.pm-table th {
   background: #f1f5f9;
   font-weight: 600;
 }
 .ProseMirror table.pm-table .selectedCell {
+  position: relative;
   background: rgba(79, 70, 229, 0.15);
   box-shadow: inset 0 0 0 2px rgba(79, 70, 229, 0.3);
 }
@@ -1173,6 +1174,63 @@ table td, table th {
 /* TOC 标题块（保留样式名，避免被目录清理误删时仍能识别） */
 .ProseMirror p[style] { /* 占位，保持样式块可见 */ }
 
+/* === 分页符节点：默认不显示任何标记线，仅在显示编辑标记时显示虚线/文字 === */
+.page-break {
+  page-break-after: always;
+  margin: 16px 0;
+  text-align: center;
+}
+.page-break-label {
+  display: none;
+  font-size: 11px;
+  color: #94a3b8;
+  letter-spacing: 2px;
+}
+.show-marks .page-break-label {
+  display: inline;
+  padding: 0 8px;
+}
+
+/* === 参考文献列表：序号渲染为 [1] [2] ... === */
+ol.ref-list {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 2.6em;
+  counter-reset: ref;
+}
+ol.ref-list > li {
+  position: relative;
+  margin: 2px 0;
+}
+ol.ref-list > li::before {
+  content: '[' counter(ref) ']';
+  counter-increment: ref;
+  position: absolute;
+  left: -2.6em;
+  width: 2.3em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* === 中文序号列表（一、二、三、…）：对齐 MS Word 标准，补上“、” === */
+.ProseMirror ol.cn-list {
+  list-style: none;
+  margin-left: 1.6em;
+  padding-left: 0;
+}
+.ProseMirror ol.cn-list > li {
+  position: relative;
+  margin: 5px 0;
+  counter-increment: cn;
+}
+.ProseMirror ol.cn-list > li::before {
+  content: counter(cn, cjk-ideographic) '、';
+  position: absolute;
+  left: -1.6em;
+  font: inherit;
+  color: inherit;
+}
+
 /* === 数学公式节点 === */
 .sam-math {
   display: block;
@@ -1186,6 +1244,10 @@ table td, table th {
 }
 .sam-math-inline { display: inline-block; margin: 0 2px; vertical-align: middle; text-align: left; }
 .sam-math-error { color: #dc2626; font-family: monospace; }
+
+/* OLE .doc 内嵌图片（inlineImage 节点）：学术文档图片默认居中，最大宽 100% */
+.sam-inline-image { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+img[data-float="center"] { display: block; margin: 0 auto; }
 
 /* === 页码设置对话框 === */
 .pn-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }

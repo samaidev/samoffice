@@ -22,7 +22,7 @@ func TestBlocksFromRaw(t *testing.T) {
 		"x\x07y\x07z\x07\r" + // 表2 行1：x | y | z
 		"\r" // 表尾空段落
 
-	blocks := blocksFromRaw(raw)
+	blocks := blocksFromRaw(raw, nil)
 
 	var tables []*core.Table
 	var paras []string
@@ -79,13 +79,20 @@ func TestRealDocTableSmoke(t *testing.T) {
 	var nTable int
 	var foundProvince bool
 	for _, b := range doc.Blocks {
-		if tbl, ok := b.(core.Table); ok {
-			nTable++
-			for _, row := range tbl.Rows {
-				for _, cell := range row {
-					if strings.Contains(cellText(cell), "省份") {
-						foundProvince = true
-					}
+		var rows [][]core.TableCell
+		switch tbl := b.(type) {
+		case core.Table:
+			rows = tbl.Rows
+		case *core.Table:
+			rows = tbl.Rows
+		default:
+			continue
+		}
+		nTable++
+		for _, row := range rows {
+			for _, cell := range row {
+				if strings.Contains(cellText(cell), "省份") {
+					foundProvince = true
 				}
 			}
 		}

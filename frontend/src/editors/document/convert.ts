@@ -31,7 +31,11 @@ function applyParaAttrsFromProps(b: any, base: any): any {
 // UDM → ProseMirror 转换
 export function udmToProseMirror(udm: Document, schema: Schema): Node {
   const blocks: Node[] = (udm.blocks || []).map((b) => blockToPM(b, schema))
-  return schema.node('doc', {}, blocks)
+  const attrs: any = {}
+  if (udm.pageNumber) {
+    attrs.pageNumber = udm.pageNumber
+  }
+  return schema.node('doc', attrs, blocks)
 }
 
 function blockToPM(b: Block, schema: Schema): Node {
@@ -51,10 +55,18 @@ function blockToPM(b: Block, schema: Schema): Node {
     }
     case 'bulletList': {
       const l = b as any
-      const items = (l.items || []).map((item: Block[]) =>
-        schema.node('list_item', {}, item.map((ib) => blockToPM(ib, schema)))
+      const items = (l.items || []).map((item: any) =>
+        schema.node(
+          'list_item',
+          {},
+          (Array.isArray(item) ? item : [item]).map((ib: any) => blockToPM(ib, schema)),
+        )
       )
-      return schema.node(l.ordered ? 'ordered_list' : 'bullet_list', {}, items)
+      return schema.node(
+        l.ordered ? 'ordered_list' : 'bullet_list',
+        l.ordered ? { style: l.style || '', start: Number(l.start) || 1 } : {},
+        items,
+      )
     }
     case 'image': {
       const im = b as any
@@ -78,7 +90,7 @@ function blockToPM(b: Block, schema: Schema): Node {
         schema.node(
           'footnote_item',
           { num: Number(item.num) || 1 },
-          inlineToPM(item.inline, schema),
+          inlineToPM(Array.isArray(item.inline) ? item.inline : (item.inline ? [item.inline] : []), schema),
         ),
       )
       return schema.node('footnote_section', {}, items)
@@ -101,13 +113,16 @@ function blockToPM(b: Block, schema: Schema): Node {
             rowspan: cell.rowSpan || 1,
             align: cell.align || '',
             isHeader: !!cell.isHeader,
+            borderW: tb.border || 0,
           },
           content,
         )
       }
-      const rows = (tb.rows || []).map((row: any[]) =>
-        schema.node('table_row', {}, row.map(cellToPM)),
-      )
+      const rows = (tb.rows || [])
+        .filter((row: any[]) => row && row.length > 0)
+        .map((row: any[]) =>
+          schema.node('table_row', {}, row.map(cellToPM)),
+        )
       return schema.node('table', { align: tb.align || '' }, rows)
     }
     default:
@@ -138,10 +153,19 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
     if ((inline as any).type === 'footnote') {
       const fn = inline as any
       result.push(schema.node('footnote', { num: Number(fn.num) || 1, content: fn.content || '' }))
+    } else if ('src' in inline) {
+      // 内联图片（如 OLE .doc 提取的 PICF 图片，base64 data URI）。
+      // 必须用 inline 原子节点 inlineImage（schema.image 是 block 节点，
+      // 塞进段落会触发 ProseMirror 内容校验崩溃）。块级图片仍由 blockToPM 处理。
+      const im = inline as any
+      const attrs: any = { src: im.src }
+      if (im.width) attrs.width = im.width
+      if (im.height) attrs.height = im.height
+      result.push(schema.node('inlineImage', attrs))
     } else if ('url' in inline) {
       const h = inline as any
       const mark = schema.marks.link.create({ href: h.url })
-      const inner = inlineToPM(h.text, schema)
+      const inner = inlineToPM(Array.isArray(h.text) ? h.text : (h.text ? [h.text] : []), schema)
       inner.forEach((n) => {
         if (n.isText) result.push(schema.text(n.text!, [mark]))
         else result.push(n)
@@ -198,7 +222,7 @@ function pmToBlock(node: Node): Block | null {
         })
         items.push(itemBlocks)
       })
-      return { items, ordered: node.type.name === 'ordered_list' }
+      return { items, ordered: node.type.name === 'ordered_list', style: node.attrs.style || '' }
     }
     case 'code_block':
       return { code: node.textContent, language: '' }

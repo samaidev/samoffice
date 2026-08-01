@@ -3,7 +3,12 @@ import { Schema } from 'prosemirror-model'
 // ProseMirror schema - 完整排版支持，对标 MS Word 核心功能
 export const schema = new Schema({
   nodes: {
-    doc: { content: 'block+' },
+    doc: {
+      content: 'block+',
+      attrs: {
+        pageNumber: { default: null }, // 页脚页码配置（来自 UDM doc.pageNumber）
+      },
+    },
 
     // === 段落 ===
     paragraph: {
@@ -197,10 +202,13 @@ export const schema = new Schema({
         rowspan: { default: 1 },
         align: { default: '' },
         isHeader: { default: false },
+        borderW: { default: 0 },
       },
       toDOM: (node) => {
         const tag = node.attrs.isHeader ? 'th' : 'td'
-        const s: string[] = ['border: 1px solid #cbd5e1', 'padding: 6px 10px', 'vertical-align: top']
+        const bw = node.attrs.borderW
+        const border = bw && bw > 0 ? `${bw}pt solid #cbd5e1` : '1px solid #cbd5e1'
+        const s: string[] = [`border: ${border}`, 'padding: 6px 10px', 'vertical-align: top']
         if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
         const attrs: any = { style: s.join('; ') }
         if (node.attrs.colspan > 1) attrs.colspan = node.attrs.colspan
@@ -214,6 +222,7 @@ export const schema = new Schema({
           rowspan: parseInt(dom.getAttribute('rowspan') || '1'),
           align: dom.style.textAlign || '',
           isHeader: dom.tagName === 'TH',
+          borderW: 0,
         })
       }]
     },
@@ -228,7 +237,20 @@ export const schema = new Schema({
     ordered_list: {
       content: 'list_item+',
       group: 'block',
-      toDOM: () => ['ol', 0],
+      attrs: { style: { default: '' }, start: { default: 1 } },
+      toDOM: (node) => {
+        // 参考文献列表渲染为 [1] [2] ... 的序号样式
+        if (node.attrs.style === 'references') return ['ol', { class: 'ref-list' }, 0]
+        // 中文序号（一、二、三）使用自定义计数器，补上 Word 标准的“、”
+        if (node.attrs.style === 'cjk-ideographic') {
+          const s = Number(node.attrs.start) || 1
+          return ['ol', { class: 'cn-list', style: 'counter-reset: cn ' + (s - 1) }, 0]
+        }
+        const attrs: any = {}
+        if (node.attrs.start && node.attrs.start !== 1) attrs.start = String(node.attrs.start)
+        if (node.attrs.style) attrs.style = 'list-style-type: ' + node.attrs.style
+        return ['ol', attrs, 0]
+      },
       parseDOM: [{ tag: 'ol' }]
     },
     list_item: {
@@ -273,8 +295,9 @@ export const schema = new Schema({
       toDOM: (node) => {
         const restart = node.attrs.restart ? 'true' : 'false'
         const start = String(node.attrs.startNumber || 1)
-        const label = node.attrs.restart ? `— 分页并重启页码 (从 ${start}) —` : '— 分页 —'
-        return ['div', { style: 'page-break-after: always; border-top: 1px dashed #94a3b8; margin: 16px 0; text-align: center', 'data-page-break': 'true', 'data-restart': restart, 'data-start': start }, label]
+        // 标签仅在“显示编辑标记”时可见；默认只保留一条细虚线作为分页位置提示
+        return ['div', { class: 'page-break', 'data-page-break': 'true', 'data-restart': restart, 'data-start': start },
+          ['span', { class: 'page-break-label' }, node.attrs.restart ? `— 分页并重启页码 (从 ${start}) —` : '— 分页 —']]
       },
       parseDOM: [{
         tag: 'div[data-page-break]',
@@ -330,11 +353,12 @@ export const schema = new Schema({
       toDOM: (node) => {
         const attrs: any = { src: node.attrs.src, alt: node.attrs.alt, title: node.attrs.title }
         const styles: string[] = []
+        styles.push('display: block', 'margin: 0 auto') // 默认居中（学术文档图片通常居中）
         if (node.attrs.width) styles.push(`width: ${node.attrs.width}px`, 'max-width: 100%')
-        if (node.attrs.float === 'left') { styles.push('float: left', 'margin: 0 16px 8px 0') }
-        else if (node.attrs.float === 'right') { styles.push('float: right', 'margin: 0 0 8px 16px') }
-        else if (node.attrs.float === 'center') { styles.push('display: block', 'margin: 0 auto') }
-        if (styles.length) attrs.style = styles.join('; ')
+        if (node.attrs.height) styles.push(`height: ${node.attrs.height}px`)
+        if (node.attrs.float === 'left') { styles.length = 0; styles.push('float: left', 'margin: 0 16px 8px 0') }
+        else if (node.attrs.float === 'right') { styles.length = 0; styles.push('float: right', 'margin: 0 0 8px 16px') }
+        attrs.style = styles.join('; ')
         attrs['data-float'] = node.attrs.float || 'none'
         attrs['data-wrap'] = node.attrs.wrap ? 'true' : 'false'
         return ['img', attrs]
@@ -351,6 +375,36 @@ export const schema = new Schema({
           wrap: dom.getAttribute('data-wrap') !== 'false',
         })
       }]
+    },
+
+    // === 行内图片（OLE .doc 提取的 PICF 内联图片） ===
+    // 与 block 的 image 不同：这是 inline 原子节点，可放入段落/标题等
+    // inline 上下文，避免把 block 节点塞进段落导致 ProseMirror 校验崩溃。
+    inlineImage: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: {
+        src: { default: '' },
+        width: { default: 0 },
+        height: { default: 0 },
+      },
+      toDOM: (node) => {
+        const attrs: any = { src: node.attrs.src, class: 'sam-inline-image' }
+        const styles: string[] = ['display: block', 'margin: 0 auto', 'max-width: 100%']
+        if (node.attrs.width) styles.push(`width: ${node.attrs.width}px`)
+        if (node.attrs.height) styles.push(`height: ${node.attrs.height}px`)
+        attrs.style = styles.join('; ')
+        return ['img', attrs]
+      },
+      parseDOM: [{
+        tag: 'img.sam-inline-image',
+        getAttrs: (dom: HTMLElement) => ({
+          src: dom.getAttribute('src') || '',
+          width: parseInt(dom.style.width) || 0,
+          height: parseInt(dom.style.height) || 0,
+        }),
+      }],
     },
 
     // === 文本框 / 形状（P2） ===

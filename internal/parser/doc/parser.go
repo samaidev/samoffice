@@ -60,13 +60,24 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 		return nil, warnings, fmt.Errorf("read doc: %w", err)
 	}
 
+	// 兼容 SamOffice 自身导出的 .doc：实际写入的是 RTF 文本（见
+	// internal/server/api/handler.go 的 generateRTF）。RTF（{\rtf...）不是 OLE
+	// 容器，直接走 OLE 解析会失败。这里嗅探内容并分发到 RTF 解析路径，保证
+	// "保存后重新打开" 的闭环一致；真实二进制 OLE .doc 仍走下方原路径。
+	if isRTFContent(data) {
+		doc, rtfWarnings := rtfToUDM(data)
+		warnings = append(warnings, rtfWarnings...)
+		return doc, warnings, nil
+	}
+
 	cfb, err := mscfb.New(bytes.NewReader(data))
 	if err != nil {
 		return nil, warnings, fmt.Errorf("open ole container: %w", err)
 	}
 
-	// 1. 定位 WordDocument 流与 Table 流（1Table/0Table，含 CLX/Piece Table）
-	var wordDoc, tableStream []byte
+	// 1. 定位 WordDocument 流、Table 流（1Table/0Table，含 CLX/Piece Table）
+	//    与 Data 流（内嵌图片 PICF 数据所在）
+	var wordDoc, tableStream, dataStrm []byte
 	hasSummary := false
 	for entry, err := cfb.Next(); err == nil; entry, err = cfb.Next() {
 		switch strings.ToLower(entry.Name) {
@@ -82,6 +93,11 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 				if len(tableStream) == 0 || strings.EqualFold(entry.Name, "1table") {
 					tableStream = buf
 				}
+			}
+		case "data":
+			buf := make([]byte, entry.Size)
+			if _, rerr := entry.ReadAt(buf, 0); rerr == nil || rerr == io.EOF {
+				dataStrm = buf
 			}
 		case "\x05summaryinformation", "summaryinformation":
 			hasSummary = true
@@ -114,21 +130,27 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 		})
 	}
 
-	// 3. 按段落/表格切分（表格依据单元格标记 0x07 拼出简易网格）
-	doc.Blocks = extractBlocks(wordDoc, tableStream)
+	// 3. 按段落/表格切分，并尽量还原字符/段落格式（CHP/PAP）；
+	//    同时解析页脚中的 PAGE 域以产出页码配置。
+	var pn *core.PageNumberConfig
+	doc.Blocks, pn = extractFormattedBlocks(wordDoc, tableStream, dataStrm)
 
-	// 4. 页码：.doc 为连续文本流，文件层面不含分页/页脚定义（见下方 warning）。
-	//    此处产出默认页码配置，使前端页脚显示页码占位符（与 .docx 一致的预览行为）。
-	doc.PageNumber = &core.PageNumberConfig{
-		Enabled: true,
-		Format:  "第 {n} 页",
-		Align:   "center",
+	// 4. 页码：优先使用从页脚 PAGE 域解析出的真实页码；否则给出默认配置。
+	if pn != nil {
+		pn.Enabled = true
+		doc.PageNumber = pn
+	} else {
+		doc.PageNumber = &core.PageNumberConfig{
+			Enabled: true,
+			Format:  "第 {n} 页",
+			Align:   "center",
+		}
 	}
 
 	warnings = append(warnings, core.Warning{
 		Level:   "info",
 		Stage:   "parse",
-		Message: ".doc 为旧版二进制格式，已提取正文文本（含简易表格网格）用于查看；该文件不含列宽/合并单元格/页脚页码等排版信息，仅能提供页码占位符，精确排版需另存为 .docx",
+		Message: ".doc 为旧版二进制格式，已原生还原字体/字号/加粗/颜色/对齐、缩进/行距/段距、表格列宽/合并单元格、内嵌图片、列表、分页以及页脚页码；页眉/浮动图形等暂不支持，如需完全保真可另存为 .docx",
 	})
 
 	return doc, warnings, nil
@@ -228,15 +250,57 @@ func extractTextRaw(wordDoc, table []byte) string {
 // 这是"简易网格"：能还原行列结构与单元格文本，但不含列宽、合并单元格等高级属性。
 func extractBlocks(wordDoc, table []byte) []core.Block {
 	raw := extractTextRaw(wordDoc, table)
-	return blocksFromRaw(raw)
+	aligns := extractAlignments(wordDoc, table)
+	if aligns != nil {
+		nSeg := len(strings.Split(raw, "\r"))
+		// 段落索引可能对不齐（非标准 .doc 的 FKP 页数与文本段数差异大），
+		// 此时放弃对齐，避免误判导致正文段落被错误居中。
+		if nSeg == 0 || absInt(len(aligns)-nSeg) > nSeg/3 {
+			aligns = nil
+		}
+	}
+	return blocksFromRaw(raw, aligns)
 }
 
 // blocksFromRaw 将保留标记的原始文本（0x07 单元格、0x0D 段落）转换为
 // 段落与表格块。单独抽出以便单元测试（避免依赖真实 .doc 文件）。
-func blocksFromRaw(raw string) []core.Block {
+//
+// 保留原始文本所有字符不变；仅将 0x02 脚注引用标记转为上标编号
+// (core.FootnoteRef)，即"参考文献序号"。其它控制字符（0x01/0x03/0x05 等）
+// 保持原样逐字保留（兼容原版行为，前端自行处理渲染）。
+// aligns 为非标准 .doc 尽力从 PAPX FKP 提取的段落对齐（索引对齐时生效）。
+func blocksFromRaw(raw string, aligns []string) []core.Block {
 	segs := strings.Split(raw, "\r")
 	var blocks []core.Block
 	var cur *core.Table
+
+	fnNum := 0
+	// buildInlines 将段文字符串转为 Inline 列表，0x02 替换为 FootnoteRef。
+	buildInlines := func(s string) []core.Inline {
+		var inls []core.Inline
+		var buf strings.Builder
+		flushText := func() {
+			if buf.Len() > 0 {
+				inls = append(inls, core.Text{Content: buf.String()})
+				buf.Reset()
+			}
+		}
+		for _, r := range s {
+			if r == 0x02 {
+				flushText()
+				fnNum++
+				inls = append(inls, core.FootnoteRef{Type: "footnote", Num: fnNum})
+			} else {
+				buf.WriteRune(r)
+			}
+		}
+		flushText()
+		if len(inls) == 0 {
+			return nil
+		}
+		return inls
+	}
+
 	flush := func() {
 		if cur != nil && len(cur.Rows) > 0 {
 			// 首行标记为表头（与 xlsx 解析一致）
@@ -247,6 +311,7 @@ func blocksFromRaw(raw string) []core.Block {
 			cur = nil
 		}
 	}
+	idx := 0
 	for _, seg := range segs {
 		if strings.Contains(seg, "\x07") {
 			if cur == nil {
@@ -259,27 +324,124 @@ func blocksFromRaw(raw string) []core.Block {
 			}
 			row := make([]core.TableCell, 0, len(cells))
 			for _, c := range cells {
-				row = append(row, core.TableCell{
-					Inline: []core.Inline{core.Text{Content: strings.TrimSpace(c)}},
-				})
+				row = append(row, core.TableCell{Inline: buildInlines(c)})
 			}
 			if len(row) > 0 {
 				cur.Rows = append(cur.Rows, row)
 			}
+			idx++
 			continue
 		}
 		// 非表格段
 		if strings.TrimSpace(seg) == "" {
-			// 可能是表尾空段落（保持表格打开）或正文空行（忽略）
+			idx++
 			continue
 		}
 		flush()
-		blocks = append(blocks, &core.Paragraph{
-			Inline: []core.Inline{core.Text{Content: strings.TrimSpace(seg)}},
-		})
+		para := &core.Paragraph{Inline: buildInlines(seg)}
+		if idx < len(aligns) && aligns[idx] != "" {
+			para.Align = aligns[idx]
+		}
+		idx++
+		blocks = append(blocks, para)
 	}
 	flush()
 	return blocks
+}
+
+// extractAlignments 尽力从 PAPX FKP 提取段落对齐（居中/右/两端对齐）。
+// 仅在能可靠解析的 FKP 页生效；非标准页（偏移表指向 rgfc 或越界）整页跳过，
+// 对应段落保持默认左对齐，避免误判。Word 95 等非标准 .doc 大量页无法解析，
+// 此时返回的对齐数组多为空，blocksFromRaw 仅对非空项生效。
+func extractAlignments(wordDoc, table []byte) []string {
+	if len(wordDoc) < 0xA0 || len(table) == 0 {
+		return nil
+	}
+	const base = 0x9A // fibRgFcLcbBlob 起点（93 条目布局），覆盖 Word95/97+
+	fcPapx := binary.LittleEndian.Uint32(wordDoc[base+13*8 : base+13*8+4])
+	lcbPapx := binary.LittleEndian.Uint32(wordDoc[base+13*8+4 : base+13*8+8])
+	if fcPapx == 0 || int(fcPapx)+int(lcbPapx) > len(table) {
+		return nil
+	}
+	plcf := table[fcPapx : fcPapx+lcbPapx]
+	n2 := (int(lcbPapx) - 4) / 8
+	if n2 < 1 {
+		return nil
+	}
+	aData := func(i int) uint32 {
+		return binary.LittleEndian.Uint32(plcf[4*(n2+1)+4*i : 4*(n2+1)+4*i+4])
+	}
+	var aligns []string
+	for i := 0; i < n2; i++ {
+		pn := aData(i)
+		fb := pn * 512
+		if fb+512 > uint32(len(wordDoc)) {
+			continue
+		}
+		cpara := int(wordDoc[fb+511])
+		if cpara <= 0 || cpara > 250 {
+			continue
+		}
+		rgfcEnd := 4 * (cpara + 1)
+		tailOff := 511 - cpara
+		// 先校验整页偏移表，任一 PAPX 非法则整页跳过（不误判）
+		valid := true
+		for k := 0; k < cpara; k++ {
+			bOffset := uint32(wordDoc[fb+uint32(tailOff)+uint32(k)])
+			bx := int(fb) + int(bOffset)
+			if bOffset == 0 || bx < int(fb)+rgfcEnd || bx+1 >= int(fb)+512 {
+				valid = false
+				break
+			}
+			cb := int(wordDoc[bx])
+			if cb < 2 || bx+cb > int(fb)+512 {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			for k := 0; k < cpara; k++ {
+				aligns = append(aligns, "")
+			}
+			continue
+		}
+		for k := 0; k < cpara; k++ {
+			bOffset := uint32(wordDoc[fb+uint32(tailOff)+uint32(k)])
+			bx := int(fb) + int(bOffset)
+			cb := int(wordDoc[bx])
+			grp := wordDoc[bx+3 : bx+cb]
+			jc := -1
+			for m := 0; m+2 < len(grp); m++ {
+				if grp[m] == 0x1C && grp[m+1] == 0x00 { // sprmPJc
+					jc = int(grp[m+2])
+				}
+			}
+			aligns = append(aligns, jcToAlign(jc))
+		}
+	}
+	return aligns
+}
+
+func jcToAlign(jc int) string {
+	switch jc {
+	case 1:
+		return "center"
+	case 2:
+		return "right"
+	case 3:
+		return "justify"
+	case 4:
+		return "distribute"
+	default:
+		return ""
+	}
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // extractTextPieceTable 解析 CLX 中的 PlcPcd，逐 piece 提取正文。
@@ -294,39 +456,7 @@ func extractTextPieceTable(wordDoc, table []byte, ccpText uint32) string {
 		return ""
 	}
 	clx := table[fcClx : fcClx+lcbClx]
-
-	// 解析 Pcdt：CLX 由若干 clxt 条目组成，文本提取需要 clxtPcd(0x01)
-	var plcPcd []byte
-	i := 0
-	for i < len(clx) {
-		clxt := clx[i]
-		i++
-		switch clxt {
-		case 0x01: // clxtPcd：后接 4 字节 lcb 与 PlcPcd
-			if i+4 > len(clx) {
-				return ""
-			}
-			lcb := binary.LittleEndian.Uint32(clx[i : i+4])
-			i += 4
-			if lcb == 0 || i+int(lcb) > len(clx) {
-				return ""
-			}
-			plcPcd = clx[i : i+int(lcb)]
-			i += int(lcb)
-		case 0x02: // clxtGrpprl：后接 2 字节 cb 与 grpprl，跳过
-			if i+2 > len(clx) {
-				return ""
-			}
-			cb := int(binary.LittleEndian.Uint16(clx[i : i+2]))
-			i += 2
-			if cb < 0 || i+cb > len(clx) {
-				return ""
-			}
-			i += cb
-		default:
-			i = len(clx) // 未知类型，停止
-		}
-	}
+	plcPcd := findPlcPcd(clx)
 	if len(plcPcd) < 12 {
 		return ""
 	}
@@ -412,6 +542,240 @@ func extractTextPieceTable(wordDoc, table []byte, ccpText uint32) string {
 		}
 	}
 	return sb.String()
+}
+
+// findPlcPcd 从 CLX 字节中解析出 clxtPcd(0x01) 条目所含的 PlcPcd。
+func findPlcPcd(clx []byte) []byte {
+	var plcPcd []byte
+	i := 0
+	for i < len(clx) {
+		clxt := clx[i]
+		i++
+		switch clxt {
+		case 0x01: // clxtPcd：后接 4 字节 lcb 与 PlcPcd
+			if i+4 > len(clx) {
+				return nil
+			}
+			lcb := binary.LittleEndian.Uint32(clx[i : i+4])
+			i += 4
+			if lcb == 0 || i+int(lcb) > len(clx) {
+				return nil
+			}
+			plcPcd = clx[i : i+int(lcb)]
+			i += int(lcb)
+		case 0x02: // clxtGrpprl：后接 2 字节 cb 与 grpprl，跳过
+			if i+2 > len(clx) {
+				return nil
+			}
+			cb := int(binary.LittleEndian.Uint16(clx[i : i+2]))
+			i += 2
+			if cb < 0 || i+cb > len(clx) {
+				return nil
+			}
+			i += cb
+		default:
+			i = len(clx) // 未知类型，停止
+		}
+	}
+	return plcPcd
+}
+
+// extractPlcPcdText 根据 PlcPcd 逐 piece 提取 [cpLo, cpHi) 区间的文本。
+// cpLo/cpHi 为字符位置（CP）区间；正文故事用 [0, ccpText)，各附属故事用其自身 CP 区间。
+func extractPlcPcdText(wordDoc, table, plcPcd []byte, cpLo, cpHi uint32) string {
+	if len(plcPcd) < 12 {
+		return ""
+	}
+	// PlcPcd 结构：n = (lcb - 4) / 12；前 4*(n+1) 为 aCp 数组，其后为 n 个 Pcd（各 8 字节）
+	n := (len(plcPcd) - 4) / 12
+	if n < 1 {
+		return ""
+	}
+	aCp := make([]uint32, n+1)
+	for k := 0; k <= n; k++ {
+		if 4*(k+1) > len(plcPcd) {
+			return ""
+		}
+		aCp[k] = binary.LittleEndian.Uint32(plcPcd[4*k : 4*k+4])
+	}
+
+	codepage := detectDocCodepage(wordDoc, table)
+	var sb strings.Builder
+	for k := 0; k < n; k++ {
+		cpStart := aCp[k]
+		cpEnd := aCp[k+1]
+		if cpEnd <= cpStart {
+			continue
+		}
+		// 仅取 [cpLo, cpHi) 区间，排除其它附属故事文本
+		lo := cpStart
+		if lo < cpLo {
+			lo = cpLo
+		}
+		hi := cpEnd
+		if hi > cpHi {
+			hi = cpHi
+		}
+		if hi <= lo {
+			continue
+		}
+		pcdOff := 4*(n+1) + k*8
+		if pcdOff+8 > len(plcPcd) {
+			break
+		}
+		// Pcd 内 FcCompressed 位于偏移 2 起的 4 字节
+		fcc := binary.LittleEndian.Uint32(plcPcd[pcdOff+2 : pcdOff+6])
+		fCompressed := (fcc & 0x40000000) != 0
+		fc := fcc & 0x3FFFFFFF
+		// 本片字节起点
+		var base int
+		if fCompressed {
+			base = int(fc / 2)
+		} else {
+			base = int(fc)
+		}
+		// 本片字节终点 = 下一片字节起点（跨压缩/非压缩均适用）
+		var pieceEnd int
+		if k+1 < n {
+			nextPcdOff := 4*(n+1) + (k+1)*8
+			if nextPcdOff+8 > len(plcPcd) {
+				pieceEnd = len(wordDoc)
+			} else {
+				nextFcc := binary.LittleEndian.Uint32(plcPcd[nextPcdOff+2 : nextPcdOff+6])
+				nextFc := nextFcc & 0x3FFFFFFF
+				if (nextFcc & 0x40000000) != 0 {
+					pieceEnd = int(nextFc / 2)
+				} else {
+					pieceEnd = int(nextFc)
+				}
+			}
+		} else {
+			pieceEnd = len(wordDoc)
+		}
+		if base < 0 || pieceEnd > len(wordDoc) || pieceEnd < base {
+			continue
+		}
+		rawPiece := wordDoc[base:pieceEnd]
+		if fCompressed {
+			runes := []rune(decodeANSI(rawPiece, codepage))
+			sb.WriteString(clampRunes(runes, int(lo-cpStart), int(hi-cpStart)))
+		} else {
+			runes := []rune(utf16leToString(rawPiece))
+			sb.WriteString(clampRunes(runes, int(lo-cpStart), int(hi-cpStart)))
+		}
+	}
+	return sb.String()
+}
+
+// extractFootnotes 从 .doc 的脚注（Footnote）附属文本故事中提取各条脚注正文，
+// 返回顺序与正文中的脚注引用（0x02）顺序一致。脚注正文位于主 WordDocument 流的
+// CP 区间 [ccpText, ccpText+ccpFtn)，与主文本共用同一 piece table（或同一 UTF-16LE 片段）。
+func extractFootnotes(wordDoc, table []byte) []string {
+	if len(wordDoc) < 0x68 {
+		return nil
+	}
+	ccpText := binary.LittleEndian.Uint32(wordDoc[0x4C:0x50])
+	ccpFtn := binary.LittleEndian.Uint32(wordDoc[0x50:0x54])
+	if ccpFtn == 0 {
+		return nil
+	}
+	fnEnd := ccpText + ccpFtn
+	fcClx := binary.LittleEndian.Uint32(wordDoc[0x2AA:0x2AE])
+	lcbClx := binary.LittleEndian.Uint32(wordDoc[0x2AE:0x2B2])
+
+	// 优先走标准 piece table（处理压缩/多片段，且可用 PlcfFlnTxt 精确切分）
+	if lcbClx != 0 && int(fcClx)+int(lcbClx) <= len(table) {
+		if plcPcd := findPlcPcd(table[fcClx : fcClx+lcbClx]); len(plcPcd) >= 12 {
+			if bounds := findFootnoteBounds(wordDoc, table, ccpText, fnEnd); bounds != nil {
+				out := make([]string, 0, len(bounds)-1)
+				for i := 0; i+1 < len(bounds); i++ {
+					out = append(out, cleanFootnoteText(extractPlcPcdText(wordDoc, table, plcPcd, bounds[i], bounds[i+1])))
+				}
+				return out
+			}
+			blob := extractPlcPcdText(wordDoc, table, plcPcd, ccpText, fnEnd)
+			if blob != "" {
+				return splitFootnoteBlob(blob)
+			}
+		}
+	}
+	// 回退：单一未压缩 UTF-16LE 片段（CP i -> fcMin + i*2），本文档即为此情形
+	fcMin := binary.LittleEndian.Uint32(wordDoc[0x18:0x1C])
+	all := utf16leToString(wordDoc[fcMin:])
+	lo, hi := int(ccpText), int(fnEnd)
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(all) {
+		hi = len(all)
+	}
+	if lo >= hi {
+		return nil
+	}
+	blob := all[lo:hi]
+	return splitFootnoteBlob(blob)
+}
+
+// findFootnoteBounds 遍历 FIB 的 fc/lcb 对，定位 PlcfFlnTxt。
+// 脚注文本位于主 WordDocument 流的 CP 区间 [ccpText, ccpText+ccpFtn)，
+// 且 PlcfFlnTxt 的 aCP 为绝对 CP：首元素==ccpText，末元素==ccpText+ccpFtn。
+// 返回逐项脚注的 CP 边界（n+1 个），失败返回 nil。
+func findFootnoteBounds(wordDoc, table []byte, ccpText, fnEnd uint32) []uint32 {
+	const base = 0x9A
+	for idx := 0; idx < 130; idx++ {
+		if int(base)+idx*8+8 > len(wordDoc) {
+			break
+		}
+		fc := binary.LittleEndian.Uint32(wordDoc[base+idx*8 : base+idx*8+4])
+		lcb := binary.LittleEndian.Uint32(wordDoc[base+idx*8+4 : base+idx*8+8])
+		if lcb == 0 || int(fc)+int(lcb) > len(table) {
+			continue
+		}
+		plcf := table[fc : fc+lcb]
+		n := (len(plcf) - 4) / 8
+		if n < 1 {
+			continue
+		}
+		aCp := make([]uint32, n+1)
+		for k := 0; k <= n; k++ {
+			if 4*(k+1) > len(plcf) {
+				break
+			}
+			aCp[k] = binary.LittleEndian.Uint32(plcf[4*k : 4*k+4])
+		}
+		if aCp[0] == ccpText && aCp[n] == fnEnd {
+			return aCp
+		}
+	}
+	return nil
+}
+
+// splitFootnoteBlob 将脚注子文档文本切分为各条脚注。
+// Word 的脚注子文档以单列表格存储：每条脚注为若干行，行间以单元格标记 0x07 分隔；
+// 不同脚注之间通常以连续两个 0x07（单元格标记 + 行标记）分隔。
+// 因此先按双 0x07 切分各条脚注，再将每条脚注内的多行用空格合并为一条正文。
+func splitFootnoteBlob(blob string) []string {
+	rawNotes := strings.Split(blob, "\x07\x07")
+	out := make([]string, 0, len(rawNotes))
+	for _, rn := range rawNotes {
+		cells := strings.Split(rn, "\x07")
+		joined := strings.Join(cells, " ")
+		if t := cleanFootnoteText(joined); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// cleanFootnoteText 清理脚注正文：去除表格/段落/分页等控制字符并规整空白。
+func cleanFootnoteText(s string) string {
+	repl := strings.NewReplacer(
+		"\x01", "", "\x02", "", "\x03", "", "\x05", "", "\x07", "",
+		"\x08", "", "\x0B", " ", "\x0C", " ", "\x0D", " ", "\x14", "",
+	)
+	s = repl.Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.TrimSpace(s)
 }
 
 // clampRunes 安全截取 rune 切片 [lo, hi)

@@ -37,11 +37,13 @@ export function createPaginationPlugin(
   getMetrics: () => PageMetrics,
   onCount: (n: number) => void,
   onPages?: (rects: PageRect[]) => void,
+  onBlockPages?: (pages: number[]) => void,
 ) {
   let scheduled = false
   // 上一次已应用的断页节点位置集合（from 位置），用于还原自然位置
   let appliedBreaks = new Set<number>()
   let lastPageSig = ''
+  let lastBlockPagesSig = ''
 
   const recompute = (view: EditorView) => {
     scheduled = false
@@ -156,6 +158,20 @@ export function createPaginationPlugin(
           onPages(rects)
         }
         onCount(rects.length)
+        // 回报每个顶级块所在的页码，供脚注按引用所在页显示在页底
+        if (onBlockPages) {
+          const bp: number[] = []
+          let pg = 0
+          for (let k = 0; k < children.length; k++) {
+            if (k > 0 && breaks[k]) pg++
+            bp.push(pg)
+          }
+          const bpsig = bp.join(',')
+          if (!lastBlockPagesSig || lastBlockPagesSig !== bpsig) {
+            lastBlockPagesSig = bpsig
+            onBlockPages(bp)
+          }
+        }
       } else {
         onCount(breaks.filter(Boolean).length + 1)
       }

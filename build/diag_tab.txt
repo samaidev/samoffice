@@ -1,0 +1,228 @@
+=== c:\Users\Administrator\samoffice\build\test.doc : 45 blocks ===
+PAGENUMBER enabled=true format="第 {n} 页" align="center"
+[0] PARA align="center" props=map[lineHeight:1.5]
+  TEXT[B] font="华文新魏" size=16.0 color= content="中国区域碳排放影响因素研究"
+[1] PARA align="center" props=map[lineHeight:1]
+  TEXT[] font="楷体" size=10.5 color= content="崔佳1，孔英2，陆强1"
+[2] PARA align="center" props=map[lineHeight:1]
+  TEXT[] font="楷体" size=9.0 color= content="（1.哈尔滨工业大学深圳研究生院，深圳 广东 518055；"
+[3] PARA align="center" props=map[lineHeight:1]
+  TEXT[] font="楷体" size=9.0 color= content="  2.清华-伯克利学院，           深圳 广东 518055）"
+[4] PARA align="justify" props=map[lineHeight:1]
+  TEXT[] font="黑体" size=10.5 color= content="【摘要】："
+  TEXT[] font="楷体" size=10.5 color= content="目前，中国已成为世界最大碳排放国，有必要加强对碳排放的相关研究。基于过往相关研究..."
+[5] PARA align="justify"
+  TEXT[] font="黑体" size=10.5 color= content="关键词："
+  TEXT[] font="楷体" size=10.5 color= content="区域碳排放；影响因素；STIRPAT模型；系统聚类分析法"
+[6] PARA align="justify"
+  TEXT[] font="黑体" size=10.5 color= content="作者简介："
+[7] PARA align="justify" props=map[lineHeight:1]
+  TEXT[] font="楷体" size=10.5 color= content="崔佳（1980-01-14），性别：女，籍贯：加拿大多伦多，作者单位：哈尔滨工业..."
+[8] PARA align="justify" props=map[lineHeight:1]
+  TEXT[] font="楷体" size=10.5 color= content="孔英（1960-08-18），性别：男，籍贯：加拿大多伦多，作者单位：清华-伯克..."
+  TEXT[] font="Times New Roman" size=10.5 color= content="kongying@sz.tsinghua.edu.ca"
+  TEXT[] font="楷体" size=10.5 color= content="。"
+[9] PARA align="justify" props=map[lineHeight:1]
+  TEXT[] font="楷体" size=10.5 color= content="陆强（1964-01-01），性别：男，籍贯：中国深圳，作者单位：哈尔滨工业大学..."
+[10] PAGEBREAK
+[11] PARA align="justify" props=map[lineHeight:1]
+  TEXT[] font="Times New Roman" size=16.0 color= content="An Empirical Research on the Determinant..."
+[12] PARA align="center" props=map[lineHeight:1]
+  TEXT[] font="Times New Roman" size=14.0 color= content="Jia Cui1, Ying Kong2, Qiang Lu1"
+[13] PARA align="center"
+  TEXT[] font="Times New Roman" size=12.0 color=333333 content="(1.Harbin Institute of Technology"
+  TEXT[] font="楷体" size=12.0 color= content="；"
+  TEXT[] font="Times New Roman" size=12.0 color=333333 content="2.Tsinghua University"
+  TEXT[] font="楷体" size=12.0 color= content="）"
+[14] PARA align="justify" props=map[lineHeight:1]
+  TEXT[B] font="Times New Roman" size=10.5 color= content="[Abstract]:"
+  TEXT[] font="黑体" size=10.5 color= content=" Nowadays, China has become the world’s ..."
+  TEXT[] font="Times New Roman" size=12.0 color= content="R"
+  TEXT[] font="Times New Roman" size=10.5 color= content="esearch results: improvement of the econ..."
+[15] PARA align="justify" props=map[lineHeight:1]
+  TEXT[B] font="Times New Roman" size=10.5 color= content="Keywords:"
+  TEXT[] font="Times New Roman" size=10.5 color= content=" Regional Carbon Emissions; Determinants..."
+[16] PAGEBREAK
+[17] LIST ordered=true items=1
+   item 0:
+      TEXT[B] font="仿宋" size=14.0 color= content="碳排放影响因素研究现状"
+[18] PARA align="justify" props=map[firstLine:2 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="全球环境变化是由自然和人为因素引起的，影响全球系统功能的全球尺度变化。针对全球环..."
+  TEXT[] font="宋体" size=12.0 color= content="葛全胜,2011)"
+  TEXT[] font="宋体" size=12.0 color= content="。"
+[19] PARA align="justify" props=map[firstLine:2 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="随着气候变化的影响，国内外学者对碳排放的影响因素研究也逐渐增多。Shafik和B..."
+[20] PARA align="justify" props=map[firstLine:2 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="学者对碳排放影响因素研究模型主要集中在EKC、LMDI、KAYA和 STIRPA..."
+  TEXT[] font="宋体" size=12.0 color= content="虽然这些模型研究的目标相同，但是这些模型的侧重点各不相同。"
+  TEXT[] font="宋体" size=12.0 color= content="其中，环境库兹涅茨曲线模型（EKC）研究的侧重点在经济增长与碳排放的倒U型关系，..."
+  TEXT[] font="宋体" size=12.0 color= content="张佳丽（2010）"
+  TEXT[] font="宋体" size=12.0 color= content="。同时，这个模型着眼于国家层面衡量碳排放，既可以分析一国经济体内部完全的碳排放影..."
+[21] PARA align="justify" props=map[firstLine:2 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="综上所述，我们可以看到，目前针对中国的区域碳排放影响因素的研究尚不充分，有必要对..."
+[22] LIST ordered=true items=1
+   item 0:
+      TEXT[B] font="仿宋" size=14.0 color= content="中国区域碳排放影响因素"
+[23] PARA align="justify" props=map[firstLine:1.9 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="为了研究不同因素对区域碳排放增长速度的影响，我们首先需要进行区域分类。简单的使用..."
+[24] PARA align="center" props=map[lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="\u3000表1：聚类结果"
+[25] TABLE rows=5 width=[23.365290068829893 76.63470993117011]
+   row 0 cells=2
+     cell 0:
+      TEXT[] font="宋体" size=10.5 color= content="分类"
+     cell 1:
+      TEXT[] font="宋体" size=10.5 color= content="省份"
+   row 1 cells=2
+     cell 0: rowspan=1
+      TEXT[] font="宋体" size=10.5 color= content="碳排放高速增长区"
+      TEXT[] font="宋体" size=10.5 color= content="（9个）"
+     cell 1: rowspan=1
+      TEXT[] font="宋体" size=10.5 color= content="福建、山东、河南、内蒙古、广西、云南、陕西、新疆、青海"
+   row 2 cells=2
+     cell 0:
+     cell 1:
+   row 3 cells=2
+     cell 0: rowspan=1
+      TEXT[] font="宋体" size=10.5 color= content="碳排放缓速增长区"
+      TEXT[] font="宋体" size=10.5 color= content="（18个）"
+     cell 1: rowspan=1
+      TEXT[] font="宋体" size=10.5 color= content="北京、天津、河北、辽宁、上海、江苏、浙江、广东、吉林、黑龙江、安徽、江西、湖北、..."
+   row 4 cells=2
+     cell 0:
+     cell 1:
+[26] PARA align="center" props=map[lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="表2：聚类区域情况比较"
+[27] TABLE rows=6 width=[13.58531578311798 15.408767057118705 15.408767057118705 18.826228716338605 15.408767057118705 21.362154329187295]
+   row 0 cells=6
+     cell 0:
+      TEXT[] font="宋体" size=10.5 color= content="分类"
+     cell 1:
+      TEXT[] font="宋体" size=10.5 color= content="项目"
+     cell 2:
+      TEXT[] font="宋体" size=10.5 color= content="碳排放总量"
+     cell 3:
+      TEXT[] font="宋体" size=10.5 color= content="人均碳排放量"
+     cell 4:
+      TEXT[] font="宋体" size=10.5 color= content="碳排放强度"
+     cell 5:
+      TEXT[] font="宋体" size=10.5 color= content="碳排放密度"
+   row 1 cells=6
+     cell 0:
+     cell 1:
+     cell 2:
+      TEXT[] font="宋体" size=10.5 color= content="108t"
+     cell 3:
+      TEXT[] font="宋体" size=10.5 color= content="t-CO2"
+     cell 4:
+      TEXT[] font="宋体" size=10.5 color= content="kg-CO2／RMB"
+     cell 5:
+      TEXT[] font="宋体" size=10.5 color= content="kg-CO2/kgce"
+   row 2 cells=6
+     cell 0: rowspan=1
+      TEXT[] font="宋体" size=10.5 color= content="碳排放高速增长区"
+     cell 1:
+      TEXT[] font="宋体" size=10.5 color= content="总量均值"
+     cell 2:
+      TEXT[] font="宋体" size=10.5 color= content="2.1829"
+     cell 3:
+      TEXT[] font="宋体" size=10.5 color= content="4.8572"
+     cell 4:
+      TEXT[] font="宋体" size=10.5 color= content="0.3584"
+     cell 5:
+      TEXT[] font="宋体" size=10.5 color= content="2.7092"
+   row 3 cells=6
+     cell 0:
+     cell 1:
+      TEXT[] font="宋体" size=10.5 color= content="增长率均值"
+     cell 2:
+      TEXT[] font="宋体" size=10.5 color= content="11.56%"
+     cell 3:
+      TEXT[] font="宋体" size=10.5 color= content="11.04%"
+     cell 4:
+      TEXT[] font="宋体" size=10.5 color= content="-0.5%"
+     cell 5:
+      TEXT[] font="宋体" size=10.5 color= content="-0.03%"
+   row 4 cells=6
+     cell 0: rowspan=1
+      TEXT[] font="宋体" size=10.5 color= content="碳排放缓速增长区"
+     cell 1:
+      TEXT[] font="宋体" size=10.5 color= content="总量均值"
+     cell 2:
+      TEXT[] font="宋体" size=10.5 color= content="2.1090"
+     cell 3:
+      TEXT[] font="宋体" size=10.5 color= content="4.4727"
+     cell 4:
+      TEXT[] font="宋体" size=10.5 color= content="0.2883"
+     cell 5:
+      TEXT[] font="宋体" size=10.5 color= content="2.6455"
+   row 5 cells=6
+     cell 0:
+     cell 1:
+      TEXT[] font="宋体" size=10.5 color= content="增长率均值"
+     cell 2:
+      TEXT[] font="宋体" size=10.5 color= content="7.65%"
+     cell 3:
+      TEXT[] font="宋体" size=10.5 color= content="6.92%"
+     cell 4:
+      TEXT[] font="宋体" size=10.5 color= content="-3.72%"
+     cell 5:
+      TEXT[] font="宋体" size=10.5 color= content="-0.22%"
+[28] PARA align="justify" props=map[firstLine:1.9 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="聚类完以后，我们需要重点筛选几个有可能影响区域碳排放量的因素。韩文科等指出，从中..."
+  FN[1]
+  TEXT[] font="宋体" size=12.0 color= content="。"
+[29] PARA align="justify" props=map[lineHeight:1.5]
+  TEXT[B] font="Times New Roman" size=12.0 color= content="  "
+  TEXT[] font="Times New Roman" size=12.0 color= content=" "
+  TEXT[] font="宋体" size=12.0 color= content=" 回归的结果表明，碳排放高速增长地区与缓速增长地区的碳排放影响因素存在一定差异，..."
+[30] PARA align="justify" props=map[lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="    （1）在两区域内，即碳排放高速增长区和低速增长区内，显著影响碳排放水平的..."
+[31] PARA align="justify" props=map[lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="    （2）碳排放高速增长区内，显著影响碳排放水平的因素（对碳排放贡献率绝对值..."
+[32] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="（3）碳排放缓速增长区内，显著影响碳排放水平的因素（对碳排放贡献率绝对值由大到小..."
+[33] PARA align="center" props=map[lineHeight:1.5]
+  TEXT[B] font="仿宋" size=14.0 color= content="三．政策建议"
+[34] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="基于以上实证结果，本文认为中国两大区域应从以下七个方面制定碳减排政策："
+[35] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="1.改善经济增长方式，建立新型考核指标。一方面，碳排放高速增长区经济增长严重依赖..."
+[36] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="2.合理贯彻人口政策，积极倡导低碳生活。由于中国碳排放高速增长区的人口规模一直在..."
+[37] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="3.发展新型城市化，建设低碳新城镇。城市化的消极效应在碳排放高速增长区和缓速增长..."
+[38] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="4.调整产业结构，发展低碳产业。由实证分析可得，“不断改进碳排放高速增长区和缓速..."
+[39] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="5.优化能源结构，提升能源效率。能源结构与碳排放缓速增长区碳排放显著正相关，煤炭..."
+[40] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="6.建立企业奖惩制度，加强节能技术开发 。碳排放密度显著正向影响缓速增长区的碳排..."
+[41] PARA align="justify" props=map[firstLine:1.75 lineHeight:1.5]
+  TEXT[] font="宋体" size=12.0 color= content="7.建立碳交易制度，实现市场化减排。在控制碳排放的过程中，不仅要依靠政府政策支持..."
+[42] PAGEBREAK
+[43] PARA align="center" props=map[lineHeight:13pt]
+  TEXT[] font="黑体" size=11.0 color= content="参考文献"
+[44] LIST ordered=true items=11
+   item 0:
+      TEXT[] font="宋体" size=12.0 color= content="葛全胜, 方修. 中国碳排放的历史与现状[M]. 气象出版社, 2011. "
+   item 1:
+      TEXT[] font="宋体" size=12.0 color= content="韩文科, 康艳兵, 刘强. 中国2020年温室气体控制目标的实现路径与对策[M]..."
+   item 2:
+      TEXT[] font="宋体" size=12.0 color= content="张佳丽. 基于STIRPAT模型的我国二氧化碳排放研究[D]. 湖南: 湖南大学..."
+   item 3:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Birdsall H H, Lane C, Ramser M N, et al...."
+   item 4:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Copeland B R, Taylor M S. North-South Tr..."
+   item 5:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Dietz T, Rosa E A. Effects of Population..."
+   item 6:
+      TEXT[] font="Times New Roman" size=12.0 color= content="He K, Lei Y, Pan X, et al. Co-benefits f..."
+   item 7:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Kuznets S. International Differences in ..."
+   item 8:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Shafik N, Bandyopadhyay S. Economic Grow..."
+   item 9:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Wing I S, Eckaus R S. The implications o..."
+   item 10:
+      TEXT[] font="Times New Roman" size=12.0 color= content="Xu, G. Jiang, Z.. The relationship among..."

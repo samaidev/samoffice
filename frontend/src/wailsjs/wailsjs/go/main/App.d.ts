@@ -3,6 +3,8 @@
 import {dict} from '../models';
 import {core} from '../models';
 
+export function GetClipboardHtml():Promise<string>;
+
 export function GetStartupArgs():Promise<Array<string>>;
 
 export function HTTPPort():Promise<number>;
@@ -20,6 +22,8 @@ export function OpenFileDialog():Promise<string>;
 export function ReadFile(arg1:string):Promise<string>;
 
 export function SaveFileDialog(arg1:string,arg2:string):Promise<string>;
+
+export function SetClipboardHtml(arg1:string,arg2:string):Promise<void>;
 
 export function SpellCheck(arg1:string,arg2:string):Promise<Array<dict.SpellError>>;
 

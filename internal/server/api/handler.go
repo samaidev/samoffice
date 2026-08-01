@@ -83,8 +83,17 @@ func RenderToBytes(doc *core.Document, format string) ([]byte, string, error) {
 		}
 		return data, "." + strings.ToLower(format), nil
 	case "doc":
-		// .doc 为二进制 OLE 格式，这里用 Word/WPS 均可打开的 RTF 包裹。
-		return []byte(generateRTF(doc)), ".doc", nil
+		// .doc 以 OOXML (docx) 内容写出：项目已有完整的 docx 双向解析/渲染
+		// 能力，可保留图片、公式、脚注、表格与段落样式，避免老 RTF 导出把
+		// 整篇文档格式丢弃的问题。docx 是 ZIP(PK) 容器，registry 打开端会按
+		// 内容嗅探（PK 头）走 docx 解析，因此 ".doc 扩展名 + docx 内容" 在
+		// SamOffice 内可正常打开且格式完整。
+		r := docx.New()
+		data, err := r.Render(doc)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, ".doc", nil
 	case "pdf":
 		r := pdf.New()
 		data, err := r.Render(doc)

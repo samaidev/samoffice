@@ -331,7 +331,6 @@ func renderDocumentXML(doc *core.Document, images []*embedImage, footers []footR
   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
   xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
 <w:body>
-<w:body>
 `)
 	for _, b := range doc.Blocks {
 		renderBlock(&sb, b, imageMap)
@@ -381,6 +380,19 @@ func renderBlock(sb *strings.Builder, b core.Block, images map[string]*embedImag
                 renderImage(sb, v, images)
         case *core.Math:
                 renderMath(sb, v)
+        case *core.FootnoteSection:
+                // 脚注区：docx 导出时以文末段落组呈现（保证保存后不丢失
+                // 脚注正文，如作者简介）。每条写成 "n. 内容" 的段落。
+                for _, it := range v.Items {
+                        sb.WriteString("<w:p>")
+                        sb.WriteString(`<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t xml:space="preserve">`)
+                        sb.WriteString(escapeXML(fmt.Sprintf("%d. ", it.Num)))
+                        sb.WriteString("</w:t></w:r>")
+                        for _, in := range it.Inline {
+                                renderInline(sb, in)
+                        }
+                        sb.WriteString("</w:p>\n")
+                }
         case *core.RawBlock:
                 // 跳过
         default:

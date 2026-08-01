@@ -126,6 +126,7 @@ type Heading struct {
 	Level  int             `json:"level"`
 	Inline []Inline        `json:"inline"`
 	Style  string          `json:"style,omitempty"`
+	Align  string          `json:"align,omitempty"` // left | center | right | justify
 	Props  map[string]any  `json:"props,omitempty"`
 }
 
@@ -135,6 +136,9 @@ func (Heading) BlockType() string { return "heading" }
 type BulletList struct {
 	Items  [][]Block `json:"items"`
 	Ordered bool     `json:"ordered"`
+	Start  int       `json:"start,omitempty"` // 列表起始序号；用于被正文隔开的同列表项续号
+	Style  string    `json:"style,omitempty"` // "references"：参考文献列表 [n]；否则为 CSS list-style-type（如 decimal/cjk-ideographic）
+	Ilfo   int       `json:"-"`               // 内部：所属 Word 列表 id，用于跨段落续号判断
 }
 
 func (BulletList) isBlock()        {}
@@ -144,6 +148,8 @@ type Table struct {
 	Rows  [][]TableCell `json:"rows"`
 	Width []float64     `json:"width,omitempty"`
 	Style string        `json:"style,omitempty"`
+	// Border 为表格边框线宽（点，pt）。<=0 表示未解析到，由前端回退到默认 1px。
+	Border float64 `json:"border,omitempty"`
 }
 
 func (Table) isBlock()        {}
@@ -155,6 +161,8 @@ type TableCell struct {
 	RowSpan  int      `json:"rowSpan,omitempty"`
 	ColSpan  int      `json:"colSpan,omitempty"`
 	IsHeader bool     `json:"isHeader,omitempty"`
+	// VMerge 为垂直合并中间态（不进 JSON）：0=不合并 1=被合并占位 3=合并起点。
+	VMerge int `json:"-"`
 }
 
 type Image struct {
