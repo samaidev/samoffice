@@ -15,9 +15,16 @@ export type OpenTab =
   | 'pdf'
   | 'about'
 
+export interface SlideData {
+  title: string
+  content: string
+  notes?: string
+}
+
 export interface OpenDecision {
   tab: OpenTab
   sheets: SheetData[] | null
+  slides: SlideData[] | null
 }
 
 // 将 UDM 文档中的表格块（xlsx 每个 sheet 对应一个 Table，序列化后只有 rows/style，无 type）转换为表格编辑器所需的 sheet 数据
@@ -63,12 +70,64 @@ export function isSpreadsheetPath(path: string): boolean {
   return /\.(xlsx|xls|csv)$/i.test(path || '')
 }
 
-// 统一的打开决策：表格类文件（xlsx/csv/xls）→ 一律走 spreadsheet 视图
-// （即便解析没有产出表格块，也显示空网格，绝不放回文档模板，保证选项卡切换）
+// Markdown 文件 → MD 标签页（分屏编辑 + 实时预览）
+export function isMarkdownPath(path: string): boolean {
+  return /\.(md|markdown|mdx)$/i.test(path || '')
+}
+
+// HTML 文件 → HTML 标签页
+export function isHtmlPath(path: string): boolean {
+  return /\.(html?|htm)$/i.test(path || '')
+}
+
+// PDF 文件 → PDF 标签页（用 blob URL 由 PdfViewer 加载）
+export function isPdfPath(path: string): boolean {
+  return /\.pdf$/i.test(path || '')
+}
+
+// 演示文稿文件 → slide 视图
+export function isSlidePath(path: string): boolean {
+  return /\.(pptx|ppt|ppsx|pps|potx|pot|pptm|ppsm)$/i.test(path || '')
+}
+
+// 从 UDM 文档的 RawBlock(kind==='slide') 中提取幻灯片数据。
+// pptx 解析器会把每张幻灯片存为 RawBlock{Data:{title,bullets,notes}}。
+export function rawBlocksToSlides(doc: any): SlideData[] | null {
+  const blocks: any[] = (doc && doc.blocks) || []
+  const slides: SlideData[] = []
+  for (const b of blocks) {
+    // RawBlock 序列化后只有 kind/data 字段（无 type 字段），故用 b.kind 判断
+    if (b && b.kind === 'slide' && b.data) {
+      const d = b.data
+      const bullets: string[] = Array.isArray(d.bullets) ? d.bullets : []
+      slides.push({
+        title: typeof d.title === 'string' ? d.title : '',
+        content: bullets.join('\n'),
+        notes: typeof d.notes === 'string' ? d.notes : '',
+      })
+    }
+  }
+  return slides.length ? slides : null
+}
+
+// 统一的打开决策：
+//  - 表格类文件（xlsx/csv/xls）→ spreadsheet 视图
+//  - 演示文稿（pptx/ppt 等）→ slide 视图
+//  - Markdown（.md/.markdown/.mdx）→ markdown 视图
+//  - HTML（.html/.htm）→ html 视图
+//  - PDF → pdf 视图
+//  - 其余（docx/doc/rtf 等）→ document 视图
 export function decideOpen(path: string, document: any): OpenDecision {
   if (isSpreadsheetPath(path)) {
     const sheets = tablesToSheets(document)
-    return { tab: 'spreadsheet', sheets: sheets || [{ name: 'Sheet1', cells: {} }] }
+    return { tab: 'spreadsheet', sheets: sheets || [{ name: 'Sheet1', cells: {} }], slides: null }
   }
-  return { tab: 'document', sheets: null }
+  if (isSlidePath(path)) {
+    const slides = rawBlocksToSlides(document)
+    return { tab: 'slide', sheets: null, slides: slides || [] }
+  }
+  if (isMarkdownPath(path)) return { tab: 'markdown', sheets: null, slides: null }
+  if (isHtmlPath(path)) return { tab: 'html', sheets: null, slides: null }
+  if (isPdfPath(path)) return { tab: 'pdf', sheets: null, slides: null }
+  return { tab: 'document', sheets: null, slides: null }
 }

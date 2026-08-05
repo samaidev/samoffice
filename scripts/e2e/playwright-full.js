@@ -1,4 +1,4 @@
-// GoOffice 全面 Playwright E2E 测试脚本
+// SamOffice 全面 Playwright E2E 测试脚本
 // 对应《测试方案.md》8 大模块，桌面端 + 移动端
 const { firefox, devices } = require('playwright')
 const fs = require('fs')
@@ -43,7 +43,7 @@ async function testShell(page) {
     await page.waitForTimeout(800)
     const title = await page.title()
     const pm = await page.locator('.ProseMirror').isVisible()
-    log('S1', '首页加载', title.includes('GoOffice') && pm ? 'PASS' : 'FAIL', `title="${title}"`)
+    log('S1', '首页加载', title.includes('SamOffice') && pm ? 'PASS' : 'FAIL', `title="${title}"`)
     await shot(page, '01-home')
   }, 'S1', '首页加载')
 
@@ -118,7 +118,7 @@ async function testDocument(page) {
   await safe(async () => {
     await page.click('.ProseMirror')
     await page.keyboard.press('Control+a')
-    await page.keyboard.type('Hello GoOffice test content')
+    await page.keyboard.type('Hello SamOffice test content')
     await page.waitForTimeout(300)
     const txt = await page.locator('.ProseMirror').textContent()
     log('D2', '输入文本', txt.includes('Hello') ? 'PASS' : 'FAIL', `len=${txt.length}`)
@@ -239,14 +239,14 @@ async function testDocument(page) {
     // 先输入含可搜索关键词的文本
     await page.click('.ProseMirror')
     await page.keyboard.press('Control+a')
-    await page.keyboard.type('Hello GoOffice and more GoOffice text here')
+    await page.keyboard.type('Hello SamOffice and more SamOffice text here')
     await page.waitForTimeout(250)
     await page.locator('.toolbar-btn[title="查找 (Ctrl+F)"]').first().click()
     await page.waitForTimeout(300)
     const bar = page.locator('input[placeholder="查找..."]').first()
     const visible = await bar.isVisible().catch(() => false)
     if (visible) {
-      await bar.fill('GoOffice')
+      await bar.fill('SamOffice')
       await page.keyboard.press('Enter')
       await page.waitForTimeout(500)
       // 用"全部替换"按钮是否可用作为找到匹配的证据（无匹配时按钮禁用）
@@ -269,7 +269,7 @@ async function testDocument(page) {
         await repBtn.click()
         await page.waitForTimeout(500)
         const txt = await page.locator('.ProseMirror').textContent()
-        log('D14', '全部替换', txt.includes('OFFICE') && !txt.includes('GoOffice') ? 'PASS' : 'FAIL', txt.includes('OFFICE') ? '已替换' : '未替换')
+        log('D14', '全部替换', txt.includes('OFFICE') && !txt.includes('SamOffice') ? 'PASS' : 'FAIL', txt.includes('OFFICE') ? '已替换' : '未替换')
       } else {
         log('D14', '全部替换', 'PASS', '替换按钮在有匹配时可用(当前无匹配则禁用,符合预期)')
       }
@@ -662,7 +662,7 @@ async function testMobile(page) {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 })
     await page.waitForTimeout(800)
     const title = await page.title()
-    log('R1', '移动端首页', title.includes('GoOffice') ? 'PASS' : 'FAIL', title)
+    log('R1', '移动端首页', title.includes('SamOffice') ? 'PASS' : 'FAIL', title)
     await shot(page, '08-mobile-home')
   }, 'R1', '移动端首页')
 
@@ -733,7 +733,7 @@ async function runMobile() {
 }
 
 async function main() {
-  console.log(`GoOffice 全面 E2E 测试 → ${BASE_URL}`)
+  console.log(`SamOffice 全面 E2E 测试 → ${BASE_URL}`)
   console.log(`时间: ${new Date().toISOString()}`)
   await runDesktop()
   await runMobile()

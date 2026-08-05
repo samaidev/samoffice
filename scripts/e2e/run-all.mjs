@@ -1,5 +1,5 @@
 /**
- * GoOffice Playwright E2E 全面测试脚本 v2
+ * SamOffice Playwright E2E 全面测试脚本 v2
  * 依照 测试方案.md (主方案) + 边缘测试方案.md
  *
  * 优化点:
@@ -24,8 +24,8 @@ process.on('uncaughtException', (e) => {
 });
 
 const BASE_URL = 'http://127.0.0.1:18400';
-const SERVER_BIN = '/tmp/gooffice-server';
-const DATA_DIR = '/tmp/gooffice-pw-test';
+const SERVER_BIN = '/tmp/SamOffice-server';
+const DATA_DIR = '/tmp/SamOffice-pw-test';
 const SHOTS_DIR = '/home/z/my-project/scripts/pw-shots';
 const DOWNLOAD_DIR = '/home/z/my-project/download';
 
@@ -99,8 +99,8 @@ function httpReq(method, pathStr, opts = {}) {
 // 设置全局默认超时
 const DEFAULT_TIMEOUT = 5000;
 
-console.log('\n=== GoOffice E2E 全面测试 v2 ===\n');
-console.log(`启动 gooffice-server (${BASE_URL}) ...`);
+console.log('\n=== SamOffice E2E 全面测试 v2 ===\n');
+console.log(`启动 SamOffice-server (${BASE_URL}) ...`);
 
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (e) {}
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -144,7 +144,7 @@ console.log('--- 模块 1: Shell ---');
     await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(1000);
     const title = await page.title();
-    if (!/GoOffice|Office/i.test(title)) throw new Error(`title: "${title}"`);
+    if (!/SamOffice|Office/i.test(title)) throw new Error(`title: "${title}"`);
     await page.waitForSelector('.ProseMirror', { timeout: 8000 });
     await shot(page, 's1-home');
   });
@@ -237,7 +237,7 @@ console.log('\n--- 模块 2: 文档编辑器 ---');
     await pm.click();
     await page.keyboard.press('Control+A');
     await page.keyboard.press('Delete');
-    await page.keyboard.type('Hello GoOffice E2E', { delay: 5 });
+    await page.keyboard.type('Hello SamOffice E2E', { delay: 5 });
     await page.waitForTimeout(200);
     const txt = await pm.innerText();
     if (!txt.includes('Hello')) throw new Error(`text: "${txt}"`);
@@ -1200,7 +1200,7 @@ console.log('\n--- 模块 7: 响应式 (iPhone 13) ---');
     await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(1000);
     const title = await page.title();
-    if (!/GoOffice|Office/i.test(title)) throw new Error(`title: ${title}`);
+    if (!/SamOffice|Office/i.test(title)) throw new Error(`title: ${title}`);
     await shot(page, 'r1-mobile');
   });
 
@@ -1683,7 +1683,7 @@ console.log('--- E9: 响应式边界 ---');
     await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(800);
     const title = await page.title();
-    if (!/GoOffice|Office/i.test(title)) throw new Error(`title: ${title}`);
+    if (!/SamOffice|Office/i.test(title)) throw new Error(`title: ${title}`);
     await shot(page, 'e9-tiny');
   });
 
@@ -1808,7 +1808,7 @@ function generateHTML(s, kf) {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>GoOffice E2E Test Report</title>
+<title>SamOffice E2E Test Report</title>
 <style>
   body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
   h1 { color: #333; margin-top: 0; }
@@ -1829,7 +1829,7 @@ function generateHTML(s, kf) {
 </style>
 </head>
 <body>
-<h1>GoOffice E2E Test Report</h1>
+<h1>SamOffice E2E Test Report</h1>
 <p>Generated: ${s.timestamp}</p>
 <div class="summary">
   <div class="card"><div class="num c-total">${s.total}</div><div class="label">Total</div></div>

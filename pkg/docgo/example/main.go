@@ -10,12 +10,12 @@ import (
 
 func main() {
 	doc := docgo.New()
-	doc.SetTitle("GoOffice 季度报告")
+	doc.SetTitle("SamOffice 季度报告")
 	doc.SetAuthor("SamAI Group")
 
-	doc.AddHeading("GoOffice 季度运营报告", 1)
+	doc.AddHeading("SamOffice 季度运营报告", 1)
 	doc.AddHeading("概述", 2)
-	doc.AddParagraph("本季度 GoOffice 项目取得了显著进展。")
+	doc.AddParagraph("本季度 SamOffice 项目取得了显著进展。")
 
 	p := doc.AddParagraph("")
 	p.AddRun("普通文本 ").Bold(false)

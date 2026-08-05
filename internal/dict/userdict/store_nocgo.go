@@ -1,9 +1,10 @@
-//go:build !cgo
+//go:build !cgo || windows
 
 package userdict
 
 // openDriver 打开 sqlite 数据库 — Windows/交叉编译用 modernc.org/sqlite (pure Go)
-// 与 store_cgo.go (mattn/go-sqlite3) 通过 build tag 互斥
+// 与 store_cgo.go (mattn/go-sqlite3) 通过 build tag 互斥。
+// Windows 桌面版 (Wails 强制 cgo) 也走此分支，避免 cgo 版 SQLite 崩溃。
 
 import (
         "database/sql"

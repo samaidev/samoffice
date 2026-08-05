@@ -1,4 +1,4 @@
-// GoOffice 边缘情况测试套件
+// SamOffice 边缘情况测试套件
 // 覆盖：API 边缘、容错、安全、并发、UI 边缘
 const { firefox } = require('playwright')
 const fs = require('fs')
@@ -7,8 +7,8 @@ const { spawn } = require('child_process')
 const httpModule = require('http')
 
 const BASE_URL = 'http://127.0.0.1:18500'
-const SERVER_BIN = '/tmp/gooffice-server'
-const DATA_DIR = '/tmp/gooffice-pw-edge'
+const SERVER_BIN = '/tmp/SamOffice-server'
+const DATA_DIR = '/tmp/SamOffice-pw-edge'
 const SERVER_CWD = '/home/z/my-project/samoffice'
 const SHOTS_DIR = path.join(__dirname, 'screenshots', 'edge')
 fs.mkdirSync(SHOTS_DIR, { recursive: true })
@@ -543,11 +543,11 @@ async function waitForServer(maxWait = 60000) {
 }
 
 async function main() {
-  console.log(`GoOffice 边缘测试套件 → ${BASE_URL}`)
+  console.log(`SamOffice 边缘测试套件 → ${BASE_URL}`)
 
   // 自启动服务器 (沙箱环境后台进程会被清理, 必须由 node 进程 spawn)
   if (fs.existsSync(SERVER_BIN)) {
-    console.log('启动 gooffice-server...')
+    console.log('启动 SamOffice-server...')
     startServer()
   } else {
     console.log(`⚠️  服务器二进制不存在: ${SERVER_BIN}, 假定外部已启动服务`)

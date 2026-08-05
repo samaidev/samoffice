@@ -48,7 +48,7 @@ async function runDesktop() {
   await safe(async () => {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 })
     const title = await page.title()
-    log('首页加载', title.includes('GoOffice') ? 'PASS' : 'FAIL', `title="${title}"`)
+    log('首页加载', title.includes('SamOffice') ? 'PASS' : 'FAIL', `title="${title}"`)
     await shot(page, '01-home')
   }, '首页加载')
 
@@ -90,7 +90,7 @@ async function runDesktop() {
     await page.selectOption('select', 'en')
     await page.waitForTimeout(300)
     await page.click('.ProseMirror')
-    await page.keyboard.type('Hello GoOffice misspellled worrd')
+    await page.keyboard.type('Hello SamOffice misspellled worrd')
     await page.waitForTimeout(1500)
     const text = await page.locator('.ProseMirror').textContent()
     log('输入文本', text.includes('Hello') ? 'PASS' : 'FAIL', `len=${text.length}`)
@@ -233,7 +233,7 @@ async function runMobile() {
   await safe(async () => {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 })
     const title = await page.title()
-    log('移动端首页', title.includes('GoOffice') ? 'PASS' : 'FAIL')
+    log('移动端首页', title.includes('SamOffice') ? 'PASS' : 'FAIL')
     await shot(page, '08-mobile-home')
   }, '移动端首页')
 
@@ -282,7 +282,7 @@ async function runMobile() {
 }
 
 async function main() {
-  console.log(`GoOffice E2E Tests → ${BASE_URL}`)
+  console.log(`SamOffice E2E Tests → ${BASE_URL}`)
   await runDesktop()
   await runMobile()
 

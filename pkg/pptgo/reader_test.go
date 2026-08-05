@@ -13,7 +13,7 @@ func TestRoundTripWriteRead(t *testing.T) {
 	// 1. 创建并写入
 	prs := New()
 	prs.SetTitle("测试演示文稿")
-	prs.SetAuthor("GoOffice")
+	prs.SetAuthor("SamOffice")
 	prs.SetSubject("往返测试")
 
 	s1 := prs.AddSlide()
@@ -47,8 +47,8 @@ func TestRoundTripWriteRead(t *testing.T) {
 	}
 
 	// 4. 验证元数据
-	if prs2.Author() != "GoOffice" {
-		t.Errorf("Author = %q, want GoOffice", prs2.Author())
+	if prs2.Author() != "SamOffice" {
+		t.Errorf("Author = %q, want SamOffice", prs2.Author())
 	}
 	if prs2.Subject() != "往返测试" {
 		t.Errorf("Subject = %q, want 往返测试", prs2.Subject())

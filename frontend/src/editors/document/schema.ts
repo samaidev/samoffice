@@ -44,6 +44,8 @@ export const schema = new Schema({
         letterSpacing: { default: '' },  // "0.5px" / "1px"
         // P2: 文字方向
         rtl: { default: false },
+        // 命名样式（如 "Heading 1" / "Normal"），用于样式库“当前样式”高亮
+        style: { default: '' },
       },
       toDOM: (node) => {
         const a = node.attrs
@@ -129,6 +131,8 @@ export const schema = new Schema({
         shading: { default: '' },
         letterSpacing: { default: '' },
         rtl: { default: false },
+        // 命名样式（如 "Heading 1" / "Normal"），用于样式库“当前样式”高亮
+        style: { default: '' },
       },
       content: 'inline*',
       group: 'block',
@@ -535,6 +539,12 @@ export const schema = new Schema({
       attrs: { size: { validate: 'string' } },
       toDOM: (mark) => ['span', { style: `font-size: ${mark.attrs.size}` }, 0],
       parseDOM: [{ tag: 'span[style]', getAttrs: (d: HTMLElement) => d.style.fontSize ? { size: d.style.fontSize } : false }]
+    },
+    // 字符间距（字间距）：与字号一样是字符级标记，作用于选区/后续输入
+    charSpacing: {
+      attrs: { value: { validate: 'string' } }, // 如 "1px" / "0.5pt" / "2px"
+      toDOM: (mark) => ['span', { style: `letter-spacing: ${mark.attrs.value}` }, 0],
+      parseDOM: [{ tag: 'span[style]', getAttrs: (d: HTMLElement) => d.style.letterSpacing ? { value: d.style.letterSpacing } : false }]
     },
     fontFamily: {
       attrs: { font: { validate: 'string' } },

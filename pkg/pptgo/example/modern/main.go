@@ -38,7 +38,7 @@ const (
 
 func main() {
 	prs := pptgo.New()
-	prs.SetTitle("GoOffice PPT 高级功能演示 v2").SetAuthor("SamAI Group")
+	prs.SetTitle("SamOffice PPT 高级功能演示 v2").SetAuthor("SamAI Group")
 
 	// === Slide 1: 封面 (Aurora mesh) ===
 	s1 := prs.AddSlide()
@@ -54,12 +54,12 @@ func main() {
 	s1.AddShape("roundRect", 600000, 400000, 280000, 280000).
 		SetCornerRadius(80000).
 		SetGradient(primary + "," + accent)
-	// GoOffice 文字
+	// SamOffice 文字
 	s1.AddShape("rect", 950000, 430000, 3500000, 280000).
-		SetText("GOOFFICE / 2026").
+		SetText("SamOffice / 2026").
 		SetFontSize(11).SetFontColor(textMuted).SetFont(fontHead).SetTextAlign("l")
 	// 主标题 (居中)
-	s1.AddGlowText(800000, 2200000, 10500000, 900000, "GoOffice PPT", textBright, primary, 44)
+	s1.AddGlowText(800000, 2200000, 10500000, 900000, "SamOffice PPT", textBright, primary, 44)
 	// 渐变副标题
 	s1.AddShape("rect", 800000, 3100000, 10500000, 900000).
 		SetText("高级功能演示 v2").
@@ -189,7 +189,7 @@ func main() {
 
 	// 左栏 4 个艺术字示例
 	// 示例1: 渐变艺术字
-	s3.AddArtText("GoOffice", 600000, 2200000, 6500000, 900000).
+	s3.AddArtText("SamOffice", 600000, 2200000, 6500000, 900000).
 		SetFontSize(54).SetGradient(primary + "," + primaryBr).
 		SetShadow(true).SetFont(fontHead)
 	// 示例2: 描边发光艺术字
@@ -496,7 +496,7 @@ func main() {
 		SetFontColor(textFaint).SetFont(fontNum).SetTextAlign("ctr")
 
 	// 保存
-	outPath := "/home/z/my-project/download/GoOffice-v2-高级PPT演示.pptx"
+	outPath := "/home/z/my-project/download/SamOffice-v2-高级PPT演示.pptx"
 	if err := prs.Save(outPath); err != nil {
 		log.Fatal(err)
 	}

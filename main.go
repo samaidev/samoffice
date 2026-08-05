@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wailsapp/wails/v2"
@@ -28,6 +29,7 @@ import (
 	"github.com/zai/samoffice/internal/parser"
 	"github.com/zai/samoffice/internal/server/api"
 	"go.uber.org/zap"
+	"golang.org/x/sys/windows"
 )
 
 //go:embed all:frontend/dist
@@ -42,6 +44,94 @@ type App struct {
 	httpPort  int
 	logger    *zap.Logger
 	startupArgs []string
+}
+
+// pendingOpenPath 返回“待打开文件”落盘路径（第二个实例把路径写到这里，首个实例轮询读取）
+func pendingOpenPath() string {
+        dir, err := os.UserCacheDir()
+        if err != nil {
+                dir = os.TempDir()
+        }
+        dir = filepath.Join(dir, "samoffice")
+        _ = os.MkdirAll(dir, 0o755)
+        return filepath.Join(dir, "pending_open.txt")
+}
+
+// tryEarlySingleInstance 在 wails.Run 之前做极早期单实例检测，避免第二个实例重复加载词典（慢）。
+// - 若已存在实例：把第二个实例的文档参数写入 pending 文件后立刻退出（毫秒级），由首个实例负责打开并最大化窗口。
+// - 否则：创建全局命名互斥体并持有，返回 true（本进程是首个实例）。
+// 非 Windows 平台退化为直接返回 true（不阻止多开）。
+func tryEarlySingleInstance() bool {
+        const mutexName = "Global\\SamOffice-SingleInstance"
+        _, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(mutexName))
+        if err == nil {
+                // 创建成功：本进程是第一个，继续
+                return true
+        }
+        if errno, ok := err.(windows.Errno); ok && errno == windows.ERROR_ALREADY_EXISTS {
+                // 已存在实例：把文档参数写出并立即退出，跳过昂贵初始化
+		args := os.Args[1:]
+		files := []string{}
+		for _, a := range args {
+			// 去除 Windows "打开方式" 可能包裹的首尾引号/空白，再判断扩展名，
+			// 否则带引号路径（"C:\x.pdf"）会匹配失败导致pending不写入、第二实例不退。
+			clean := strings.Trim(strings.TrimSpace(a), "\"'")
+			lower := strings.ToLower(clean)
+			if strings.HasSuffix(lower, ".docx") || strings.HasSuffix(lower, ".doc") ||
+				strings.HasSuffix(lower, ".xlsx") || strings.HasSuffix(lower, ".xls") ||
+				strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".md") ||
+				strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") ||
+				strings.HasSuffix(lower, ".txt") {
+				files = append(files, clean)
+			}
+		}
+                if len(files) > 0 {
+                        if f, ferr := os.OpenFile(pendingOpenPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
+                                for _, p := range files {
+                                        _, _ = f.WriteString(p + "\n")
+                                }
+                                f.Close()
+                        }
+                }
+                os.Exit(0)
+        }
+        // 其它创建错误：退化为允许多开
+        return true
+}
+
+// pollPendingOpens 由首个实例在 OnStartup 后启动，轮询第二个实例写入的待打开文件，
+// 收到后通过事件通知前端打开，并将窗口恢复/最大化（复用当前窗口而非新开）。
+func (a *App) pollPendingOpens() {
+        last := ""
+        for {
+                time.Sleep(200 * time.Millisecond)
+                if a.ctx == nil {
+                        continue
+                }
+                data, err := os.ReadFile(pendingOpenPath())
+                if err != nil {
+                        continue
+                }
+                content := string(data)
+                if content == "" || content == last {
+                        continue
+                }
+                // 清空，避免重复触发
+                _ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
+                last = content
+                for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+                        line = strings.TrimSpace(line)
+                        if line == "" {
+                                continue
+                        }
+                        runtime.EventsEmit(a.ctx, "second-instance-open", []string{line})
+                        runtime.WindowUnminimise(a.ctx)
+                        runtime.WindowShow(a.ctx)
+                        if !runtime.WindowIsMaximised(a.ctx) {
+                                runtime.WindowMaximise(a.ctx)
+                        }
+                }
+        }
 }
 
 // WindowMinimize minimizes the window
@@ -101,21 +191,71 @@ func NewApp() *App {
 
 // === 暴露给前端的方法（Wails Binding）===
 
+// normalizePath 清理外部传入的文件路径：去掉首尾引号/空白，以及 file:// 协议前缀，
+// 确保后续 os.ReadFile / ReadFile 前端调用能正确定位文件。
+func normalizePath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "\"'")
+	if strings.HasPrefix(strings.ToLower(p), "file:///") {
+		p = p[8:]
+	} else if strings.HasPrefix(strings.ToLower(p), "file://") {
+		p = p[7:]
+	}
+	// Windows 路径 file:///C:/x 去掉前缀后为 /C:/x，补回盘符形式
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return strings.TrimSpace(p)
+}
+
 // OpenFile 通过文件路径打开文档
 func (a *App) OpenFile(path string) (map[string]any, error) {
-        data, err := os.ReadFile(path)
-        if err != nil {
-                return nil, err
-        }
-        doc, warns, err := a.registry.ParseBytes(path, data)
-        if err != nil {
-                return nil, err
-        }
-        return map[string]any{
-                "document": doc,
-                "warnings": warns,
-                "path":     path,
-        }, nil
+	// 规范化路径：邮件/Windows“打开方式”可能传入带引号或 file:// 前缀的路径，
+	// 直接 os.ReadFile 会因路径非法而失败。这里统一去掉引号与 file:// 前缀。
+	path = normalizePath(path)
+
+	lower := strings.ToLower(path)
+	// PDF 不解析为 UDM 文档：前端 PdfViewer 直接读取原始字节渲染，
+	// 故不读取文件内容、不调用解析器，直接返回路径即可，避免 os.ReadFile / 解析失败。
+	if strings.HasSuffix(lower, ".pdf") {
+		return map[string]any{
+			"document": nil,
+			"warnings": []any{},
+			"path":     path,
+		}, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	doc, warns, err := a.registry.ParseBytes(path, data)
+	if err != nil {
+		return nil, err
+	}
+	// 对于文本类文件（Markdown / HTML），把原文以 base64 一并返回，
+	// 前端无需再调用 ReadFile（远程/网页模式下 ReadFile 不可用），直接展示原文。
+	// PDF 不解析为 UDM 文档：前端 PdfViewer 直接读取原始字节渲染，
+	// 走 registry.ParseBytes 会因无 PDF 解析器返回 "unsupported format" 而失败。
+	// 故 PDF 仅返回路径，由前端 openResult 的 pdf 分支处理。
+	if strings.HasSuffix(lower, ".pdf") {
+		return map[string]any{
+			"document": nil,
+			"warnings": []any{},
+			"path":     path,
+		}, nil
+	}
+	res := map[string]any{
+		"document": doc,
+		"warnings": warns,
+		"path":     path,
+	}
+	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
+		strings.HasSuffix(lower, ".mdx") || strings.HasSuffix(lower, ".html") ||
+		strings.HasSuffix(lower, ".htm") {
+		res["rawContent"] = base64.StdEncoding.EncodeToString(data)
+	}
+	return res, nil
 }
 
 // SpellCheck 拼写检查
@@ -187,7 +327,9 @@ func (a *App) ReadFile(path string) (string, error) {
 
 // LogError 接收前端上报的错误/状态，写入 boot.log 便于排障（诊断用）。
 func (a *App) LogError(msg string) {
-	f, err := os.OpenFile("c:/Users/Administrator/samoffice/boot.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	home, _ := os.UserHomeDir()
+	logPath := filepath.Join(home, ".samoffice", "boot.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
@@ -266,6 +408,10 @@ func (a *App) startHTTPServer() {
 }
 
 func main() {
+        // 极早期单实例检测：若已有实例在运行，第二个实例把文档参数写出后立即退出，
+        // 不再加载词典/初始化 Wails（否则“再打开”会和首次一样慢）。
+        tryEarlySingleInstance()
+
         app := NewApp()
         app.startHTTPServer()
 
@@ -293,6 +439,9 @@ func main() {
                         if len(os.Args) > 1 {
                                 app.startupArgs = append(app.startupArgs, os.Args[1:]...)
                         }
+                        // 清空可能残留的“待打开文件”，并启动轮询第二个实例写入的路径
+                        _ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
+                        go app.pollPendingOpens()
                 },
                 Bind: []interface{}{app},
         })

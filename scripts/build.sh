@@ -1,5 +1,5 @@
 #!/bin/bash
-# GoOffice 构建脚本
+# SamOffice 构建脚本
 # 用法: ./scripts/build.sh [server|wails|all]
 
 set -e

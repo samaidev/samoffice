@@ -23,7 +23,7 @@ async function safe(fn, label) {
 }
 
 async function main() {
-  console.log(`GoOffice 新功能 E2E 测试 → ${BASE_URL}`)
+  console.log(`SamOffice 新功能 E2E 测试 → ${BASE_URL}`)
   const browser = await firefox.launch()
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await ctx.newPage()
@@ -99,7 +99,7 @@ async function main() {
   await safe(async () => {
     // 先输入文本
     await page.click('.ProseMirror')
-    await page.keyboard.type('Hello World Hello GoOffice Hello SamAI')
+    await page.keyboard.type('Hello World Hello SamOffice Hello SamAI')
     await page.waitForTimeout(300)
     // 打开查找栏
     await page.click('button[title*="查找替换"]')

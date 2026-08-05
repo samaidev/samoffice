@@ -1,8 +1,10 @@
-//go:build cgo
+//go:build cgo && !windows
 
 package userdict
 
 // openDriver 打开 sqlite 数据库 — Linux/Mac 本地编译用 mattn/go-sqlite3 (CGO, 更快)
+// Windows 桌面版 (Wails, 必须 cgo) 改用纯 Go 的 modernc.org/sqlite 以避开
+// MinGW gcc 编译的 mattn/go-sqlite3 在运行时的 ACCESS VIOLATION 崩溃。
 
 import (
 	"database/sql"

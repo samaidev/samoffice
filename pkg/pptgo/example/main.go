@@ -9,13 +9,13 @@ import (
 
 func main() {
 	prs := pptgo.New()
-	prs.SetTitle("GoOffice 高级功能演示").SetAuthor("SamAI Group")
+	prs.SetTitle("SamOffice 高级功能演示").SetAuthor("SamAI Group")
 	prs.SetAutoPlay(true, 5) // 自动播放，每页5秒
 
 	// === Slide 1: 标题页 ===
 	s1 := prs.AddSlide()
 	s1.SetLayout(pptgo.LayoutTitle)
-	s1.AddTitle("GoOffice PPT 高级功能")
+	s1.AddTitle("SamOffice PPT 高级功能")
 	s1.AddSubtitle("形状 · 动画 · 流程图 · 艺术字 · 特效")
 	s1.SetBgColor("#1e293b")
 	s1.SetTransition("fade", 500)
@@ -81,7 +81,7 @@ func main() {
 	s3.SetTransition("zoom", 600)
 
 	// 渐变艺术字
-	s3.AddArtText("GoOffice", 1838400, 1828800, 8515200, 1828800).
+	s3.AddArtText("SamOffice", 1838400, 1828800, 8515200, 1828800).
 		SetFontSize(54).
 		SetGradient("4f46e5,818cf8").
 		SetShadow(true)
@@ -162,11 +162,11 @@ func main() {
 	s6.SetTransition("fade", 800)
 	s6.SetAdvanceTime(3)
 
-	err := prs.Save("/home/z/my-project/download/GoOffice-高级PPT演示.pptx")
+	err := prs.Save("/home/z/my-project/download/SamOffice-高级PPT演示.pptx")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("✅ 已保存 GoOffice-高级PPT演示.pptx\n")
+	fmt.Printf("✅ 已保存 SamOffice-高级PPT演示.pptx\n")
 	fmt.Printf("   幻灯片数: %d\n", len(prs.Slides()))
 	for i, s := range prs.Slides() {
 		fmt.Printf("   Slide %d: %s (动画:%d, 形状:%d)\n", i+1, s.Title(), len(s.Animations()), 0)

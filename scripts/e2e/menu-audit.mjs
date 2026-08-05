@@ -128,7 +128,7 @@ function rectsOverlap(a, b) {
 
   // 验证基础可用
   const title = await page.title()
-  if (title.includes('GoOffice') || title.includes('SamOffice')) {
+  if (title.includes('SamOffice') || title.includes('SamOffice')) {
     record('shell', 'pass', `首页 title 正常: ${title}`)
   } else {
     record('shell', 'warn', `首页 title 异常: ${title}`)

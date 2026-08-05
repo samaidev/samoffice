@@ -96,9 +96,9 @@ export function doReplace(view: any, query: string, replace: string, caseSensiti
   view.focus()
 }
 
-export function doReplaceAll(view: any, query: string, replace: string, caseSensitive: boolean = false) {
+export function doReplaceAll(view: any, query: string, replace: string, caseSensitive: boolean = false): number {
   const matches = findMatches(view.state.doc, query, caseSensitive)
-  if (matches.length === 0) return
+  if (matches.length === 0) return 0
   // 从后往前替换，避免位置偏移
   let tr = view.state.tr
   for (let i = matches.length - 1; i >= 0; i--) {
@@ -109,6 +109,7 @@ export function doReplaceAll(view: any, query: string, replace: string, caseSens
   })
   view.dispatch(tr)
   view.focus()
+  return matches.length
 }
 
 export function nextMatch(view: any) {

@@ -6,7 +6,7 @@
 > **命名说明（避免混淆）**
 > - 仓库 Go 模块路径：`github.com/zai/samoffice`
 > - 产品名（Wails `name`）：`SamOffice`（安装目录 / 可执行文件名均为 `samoffice`）
-> - ⚠️ 旧文档（如 `pkg/README.md`）中出现的 `github.com/zai/gooffice` 是**过时写法**，正确路径为 `github.com/zai/samoffice`。
+> - ⚠️ 旧文档（如 `pkg/README.md`）中出现的 `github.com/zai/SamOffice` 是**过时写法**，正确路径为 `github.com/zai/samoffice`。
 
 ---
 

@@ -53,7 +53,7 @@ async function main() {
     let tr = view.state.tr
     const pos = 1
     tr = tr.insert(pos, schema.nodes.heading.create({ level: 1 },
-      schema.text('GoOffice 产品白皮书', [schema.marks.bold.create(), schema.marks.textColor.create({ color: '#4f46e5' })]))
+      schema.text('SamOffice 产品白皮书', [schema.marks.bold.create(), schema.marks.textColor.create({ color: '#4f46e5' })]))
     )
     view.dispatch(tr)
 
@@ -73,7 +73,7 @@ async function main() {
       schema.nodes.heading.create({ level: 2 }, schema.text('一、产品概述'))
     ))
     view.dispatch(view.state.tr.replaceSelectionWith(
-      schema.nodes.paragraph.create({}, schema.text('GoOffice 是一款基于 Go + Web 技术构建的跨平台办公套件，由 SamAI 集团公益开源。它支持文档、表格、演示三件套，以及 Markdown 和 HTML 编辑，覆盖办公全场景。'))
+      schema.nodes.paragraph.create({}, schema.text('SamOffice 是一款基于 Go + Web 技术构建的跨平台办公套件，由 SamAI 集团公益开源。它支持文档、表格、演示三件套，以及 Markdown 和 HTML 编辑，覆盖办公全场景。'))
     ))
     view.dispatch(view.state.tr.replaceSelectionWith(
       schema.nodes.paragraph.create({}, [
@@ -108,7 +108,7 @@ async function main() {
 
     // 代码块
     view.dispatch(view.state.tr.replaceSelectionWith(
-      schema.nodes.code_block.create({}, schema.text('package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, GoOffice!")\n}'))
+      schema.nodes.code_block.create({}, schema.text('package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, SamOffice!")\n}'))
     ))
 
     // 表格
@@ -149,13 +149,13 @@ async function main() {
   // === 2. 通过 API 导出 docx ===
   console.log('\n=== 2. 导出 docx ===')
   const docxResult = await downloadFile('/api/lib/doc/create', {
-    title: 'GoOffice 产品白皮书',
+    title: 'SamOffice 产品白皮书',
     author: 'SamAI Group',
     elements: [
-      { type: 'heading', text: 'GoOffice 产品白皮书', level: 1 },
+      { type: 'heading', text: 'SamOffice 产品白皮书', level: 1 },
       { type: 'paragraph', text: 'SamAI Group · 2026年7月' },
       { type: 'heading', text: '一、产品概述', level: 2 },
-      { type: 'paragraph', text: 'GoOffice 是一款基于 Go + Web 技术构建的跨平台办公套件，由 SamAI 集团公益开源。它支持文档、表格、演示三件套，以及 Markdown 和 HTML 编辑，覆盖办公全场景。' },
+      { type: 'paragraph', text: 'SamOffice 是一款基于 Go + Web 技术构建的跨平台办公套件，由 SamAI 集团公益开源。它支持文档、表格、演示三件套，以及 Markdown 和 HTML 编辑，覆盖办公全场景。' },
       { type: 'paragraph', runs: [
         { text: '核心特性包括：', bold: true },
         { text: '富文本编辑、' },
@@ -164,23 +164,23 @@ async function main() {
       ]},
       { type: 'list', items: ['ProseMirror 富文本引擎', 'SymSpell 拼写纠错算法', 'Hunspell + jieba 中文分词', 'KaTeX 公式渲染', '深色模式 + 响应式 UI'] },
       { type: 'heading', text: '二、技术架构', level: 2 },
-      { type: 'code', language: 'go', code: 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, GoOffice!")\n}' },
+      { type: 'code', language: 'go', code: 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, SamOffice!")\n}' },
       { type: 'table', rows: [['模块', '技术栈', '状态'], ['文档编辑', 'ProseMirror + React', '✅ 完成'], ['表格编辑', 'excelize + 自研', '✅ 完成'], ['演示编辑', '自研 OOXML', '✅ 完成']] },
       { type: 'heading', text: '三、关于 SamAI', level: 2 },
       { type: 'paragraph', text: 'SamAI 是一家全球领先的 AI 集团，总部位于新加坡。所有开源项目均完全免费、无广告、无订阅、无遥测，永久公益。访问 samai.cc 了解更多。' },
     ]
-  }, 'GoOffice-产品白皮书.docx')
+  }, 'SamOffice-产品白皮书.docx')
   console.log(`  ✓ docx: ${(docxResult.size/1024).toFixed(1)}KB`)
 
   // === 3. 导出 PDF ===
   console.log('\n=== 3. 导出 PDF ===')
   const pdfResult = await downloadFile('/api/doc/export-pdf', {
-    meta: { title: 'GoOffice 产品白皮书' },
+    meta: { title: 'SamOffice 产品白皮书' },
     blocks: [
-      { level: 2, inline: [{ content: 'GoOffice 产品白皮书', bold: true }] },
+      { level: 2, inline: [{ content: 'SamOffice 产品白皮书', bold: true }] },
       { inline: [{ content: 'SamAI Group · 2026年7月' }] },
       { level: 2, inline: [{ content: '一、产品概述' }] },
-      { inline: [{ content: 'GoOffice 是一款基于 Go + Web 技术构建的跨平台办公套件，由 SamAI 集团公益开源。' }] },
+      { inline: [{ content: 'SamOffice 是一款基于 Go + Web 技术构建的跨平台办公套件，由 SamAI 集团公益开源。' }] },
       { inline: [{ content: '核心特性包括：', bold: true }, { content: '富文本编辑、表格操作、拼写检查、PDF 导出等。' }] },
       { items: [[{ inline: [{ content: 'ProseMirror 富文本引擎' }], style: '', align: '' }]], ordered: false },
       { items: [[{ inline: [{ content: 'SymSpell 拼写纠错算法' }], style: '', align: '' }]], ordered: false },
@@ -192,12 +192,12 @@ async function main() {
       { level: 2, inline: [{ content: '三、关于 SamAI' }] },
       { inline: [{ content: 'SamAI 是一家全球领先的 AI 集团，总部位于新加坡。所有开源项目均完全免费、无广告、无订阅、无遥测，永久公益。访问 samai.cc 了解更多。' }] },
     ]
-  }, 'GoOffice-产品白皮书.pdf')
+  }, 'SamOffice-产品白皮书.pdf')
   console.log(`  ✓ PDF: ${(pdfResult.size/1024).toFixed(1)}KB`)
 
   // === 4. 验证 ===
   console.log('\n=== 4. 文件验证 ===')
-  const files = ['GoOffice-产品白皮书.docx', 'GoOffice-产品白皮书.pdf', 'GoOffice-功能清单.xlsx', 'GoOffice-产品介绍.pptx', 'word-screenshot.png']
+  const files = ['SamOffice-产品白皮书.docx', 'SamOffice-产品白皮书.pdf', 'SamOffice-功能清单.xlsx', 'SamOffice-产品介绍.pptx', 'word-screenshot.png']
   for (const f of files) {
     const fp = path.join(DOWNLOAD_DIR, f)
     if (fs.existsSync(fp)) {

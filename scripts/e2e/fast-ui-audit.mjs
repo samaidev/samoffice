@@ -96,7 +96,7 @@ const TABS = [
     await page.waitForTimeout(800)
     await page.screenshot({ path: join(SHOTS, '00-home.png') })
     const title = await page.title()
-    if (title.includes('GoOffice') || title.includes('SamOffice')) {
+    if (title.includes('SamOffice') || title.includes('SamOffice')) {
       record('shell', 'pass', `首页加载成功，title="${title}"`)
     } else {
       record('shell', 'fail', `首页 title 异常: "${title}"`)

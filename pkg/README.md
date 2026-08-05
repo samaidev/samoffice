@@ -1,15 +1,15 @@
-# GoOffice 独立库 — 智能体调用指南
+# SamOffice 独立库 — 智能体调用指南
 
-GoOffice 提供三个独立的 Go 库，类似 python-docx / openpyxl / python-pptx，
+SamOffice 提供三个独立的 Go 库，类似 python-docx / openpyxl / python-pptx，
 专为智能体和开发者设计，一行 import 即可操作 Office 文件。
 
 ## 库一览
 
 | 库 | 用途 | Python 对标 | 导入路径 |
 |----|------|------------|----------|
-| `docgo` | 读写 .docx | python-docx | `github.com/zai/gooffice/pkg/docgo` |
-| `xlsgo` | 读写 .xlsx | openpyxl | `github.com/zai/gooffice/pkg/xlsgo` |
-| `pptgo` | 读写 .pptx | python-pptx | `github.com/zai/gooffice/pkg/pptgo` |
+| `docgo` | 读写 .docx | python-docx | `github.com/zai/SamOffice/pkg/docgo` |
+| `xlsgo` | 读写 .xlsx | openpyxl | `github.com/zai/SamOffice/pkg/xlsgo` |
+| `pptgo` | 读写 .pptx | python-pptx | `github.com/zai/SamOffice/pkg/pptgo` |
 
 ## docgo — Word 文档
 
@@ -18,7 +18,7 @@ GoOffice 提供三个独立的 Go 库，类似 python-docx / openpyxl / python-p
 ```go
 package main
 
-import "github.com/zai/gooffice/pkg/docgo"
+import "github.com/zai/SamOffice/pkg/docgo"
 
 func main() {
     doc := docgo.New()
@@ -82,7 +82,7 @@ for _, p := range doc.Paragraphs() {
 ```go
 package main
 
-import "github.com/zai/gooffice/pkg/xlsgo"
+import "github.com/zai/SamOffice/pkg/xlsgo"
 
 func main() {
     wb := xlsgo.New()
@@ -149,7 +149,7 @@ ws.FillTable("A1", [][]string{
 ```go
 package main
 
-import "github.com/zai/gooffice/pkg/pptgo"
+import "github.com/zai/SamOffice/pkg/pptgo"
 
 func main() {
     prs := pptgo.New()
@@ -158,7 +158,7 @@ func main() {
     // 标题页
     s1 := prs.AddSlide()
     s1.SetLayout(pptgo.LayoutTitle)
-    s1.AddTitle("GoOffice")
+    s1.AddTitle("SamOffice")
     s1.AddSubtitle("跨平台办公套件")
 
     // 内容页
@@ -208,7 +208,7 @@ for i, s := range prs.Slides() {
 ```go
 package main
 
-import "github.com/zai/gooffice/pkg/docgo"
+import "github.com/zai/SamOffice/pkg/docgo"
 
 func main() {
     doc := docgo.New()

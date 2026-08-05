@@ -1,4 +1,4 @@
-﻿; samoffice_installer.nsi - NSIS installer script for SamOffice
+; samoffice_installer.nsi - NSIS installer script for SamOffice
 ; Build: makensis samoffice_installer.nsi
 ; Output: samoffice-setup-0.1.0.exe
 ; Requires: NSIS 3.x (https://nsis.sourceforge.io/)
@@ -63,8 +63,7 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 
-; Languages
-!insertmacro MUI_LANGUAGE "SimpChinese"
+; Languages (English only to keep ASCII-safe source)
 !insertmacro MUI_LANGUAGE "English"
 
 ; === Sections ===
@@ -73,10 +72,8 @@ Section "SamOffice Desktop (GUI)" SecDesktop
     SectionIn RO ; Required
     SetOutPath "$INSTDIR"
 
-    ; Main executable (renamed from gooffice.exe)
-    File "stage\samoffice.exe"
-    File "stage\README.txt"
-    File "stage\LICENSE.txt"
+    ; Recursively package the whole stage dir: samoffice.exe, samoffice-server.exe, frontend/dist, etc.
+    File /r "stage\*"
 
     ; Registry entries
     WriteRegStr HKLM "${APP_REGKEY}" "InstallDir" "$INSTDIR"
@@ -91,7 +88,7 @@ Section "SamOffice Desktop (GUI)" SecDesktop
     WriteRegDWORD HKLM "${APP_UNINSTKEY}" "NoModify" 1
     WriteRegDWORD HKLM "${APP_UNINSTKEY}" "NoRepair" 1
 
-    ; 文件关联：双击 / 右键"打开方式" 用 SamOffice 打开 Office 文档
+    ; File associations: open Office documents with SamOffice
     !define PROGID "SamOffice.File"
     WriteRegStr HKLM "Software\Classes\${PROGID}" "" "SamOffice Document"
     WriteRegStr HKLM "Software\Classes\${PROGID}\DefaultIcon" "" "$INSTDIR\samoffice.exe,0"
@@ -114,10 +111,7 @@ SectionEnd
 
 Section "SamOffice Server (HTTP)" SecServer
     SetOutPath "$INSTDIR"
-    ; Server executable (renamed from gooffice-server.exe)
-    File "stage\samoffice-server.exe"
-
-    ; Start menu shortcut for server
+    ; samoffice-server.exe is already installed by the Desktop section (/r); add a shortcut here
     CreateShortcut "$SMPROGRAMS\SamOffice\SamOffice Server.lnk" "$INSTDIR\samoffice-server.exe" "--addr 127.0.0.1:8080"
 SectionEnd
 
@@ -126,10 +120,6 @@ Section "Create Desktop Shortcut" SecDesktop2
 SectionEnd
 
 ; === Section Descriptions ===
-LangString DESC_SecDesktop ${LANG_SIMPCHINESE} "SamOffice 桌面应用（必装）"
-LangString DESC_SecServer ${LANG_SIMPCHINESE} "HTTP 服务模式，浏览器访问"
-LangString DESC_SecDesktop2 ${LANG_SIMPCHINESE} "在桌面创建快捷方式"
-
 LangString DESC_SecDesktop ${LANG_ENGLISH} "SamOffice desktop application (required)"
 LangString DESC_SecServer ${LANG_ENGLISH} "HTTP server mode, access via browser"
 LangString DESC_SecDesktop2 ${LANG_ENGLISH} "Create a desktop shortcut"
@@ -152,15 +142,16 @@ Section "Uninstall"
     Delete "$INSTDIR\README.txt"
     Delete "$INSTDIR\LICENSE.txt"
     Delete "$INSTDIR\uninstall.exe"
-    ; 清理文件关联（仅删除我们写入的值）
-    !define PROGID "SamOffice.File"
-    DeleteRegKey HKLM "Software\Classes\${PROGID}"
-    DeleteRegValue HKLM "Software\Classes\.docx" ""
-    DeleteRegValue HKLM "Software\Classes\.doc"  ""
-    DeleteRegValue HKLM "Software\Classes\.xlsx" ""
-    DeleteRegValue HKLM "Software\Classes\.pptx" ""
-    DeleteRegValue HKLM "Software\Classes\.pdf"  ""
-    DeleteRegValue HKLM "Software\Classes\.md"   ""
+    RMDir /r "$INSTDIR\frontend"
+    RMDir /r "$INSTDIR\samoffice-data"
+    ; Clean file associations (only the values we wrote)
+    DeleteRegKey HKLM "Software\Classes\SamOffice.File"
+    DeleteRegValue HKLM "Software\Classes\.docx" "SamOffice.File"
+    DeleteRegValue HKLM "Software\Classes\.doc"  "SamOffice.File"
+    DeleteRegValue HKLM "Software\Classes\.xlsx" "SamOffice.File"
+    DeleteRegValue HKLM "Software\Classes\.pptx" "SamOffice.File"
+    DeleteRegValue HKLM "Software\Classes\.pdf"  "SamOffice.File"
+    DeleteRegValue HKLM "Software\Classes\.md"   "SamOffice.File"
     RMDir /r "$INSTDIR"
 
     ; Delete shortcuts

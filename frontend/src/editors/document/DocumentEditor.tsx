@@ -28,6 +28,7 @@ interface Props {
   zoom?: number
   onZoomChange?: (z: number) => void
   backend?: Backend
+  onToast?: (msg: string) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
@@ -303,7 +304,7 @@ function extractFootnotes(doc: any): FootnoteData[] {
   return out
 }
 
-export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange, backend }: Props) {
+export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange, backend, onToast }: Props) {
   const { t } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 加载 (Chrome/Edge 支持), 回退到常用字体列表
@@ -350,15 +351,34 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const getActiveMarks = (): Record<string, any> => {
     const v = viewRef.current; if (!v) return {}
     const { state } = v
+    const { from, to } = state.selection
     const marks: Record<string, any> = {}
-    const from = state.selection.from
-    const $from = state.doc.resolve(from)
-    const stored = state.storedMarks || ($from.marks && $from.marks())
-    if (stored) { stored.forEach((m: any) => { marks[m.type.name] = m.attrs }) }
+    // 遍历选区内所有文本节点，收集其字符格式标记（避免 $from.marks() 在 mark 边界返回空的问题）
+    state.doc.nodesBetween(from, to, (node: any) => {
+      if (node.isText && node.marks) {
+        node.marks.forEach((m: any) => { marks[m.type.name] = m.attrs })
+      }
+    })
     return marks
   }
-  // 格式刷：暂存源格式标记，等待应用到下一次选区
-  const [formatPainter, setFormatPainter] = useState<Record<string, any> | null>(null)
+  // 格式刷：暂存源格式标记，等待应用到下一次选区。
+  // lock=false → 单击模式（应用一次后自动解除，等同 MS Office 单击格式刷）
+  // lock=true  → 双击锁定模式（可连续多次应用，等同 MS Office 双击格式刷）
+  // 用 ref 持有最新值，避免 ProseMirror Plugin 闭包捕获到过期的 state。
+  const [formatPainter, setFormatPainter] = useState<{ marks: Record<string, any>; lock: boolean } | null>(null)
+  const formatPainterRef = useRef<{ marks: Record<string, any>; lock: boolean } | null>(null)
+  const setPainter = (v: { marks: Record<string, any>; lock: boolean } | null) => {
+    formatPainterRef.current = v
+    setFormatPainter(v)
+  }
+  // Esc 退出格式刷锁定模式
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && formatPainterRef.current?.lock) setPainter(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // 将当前选区序列化为 HTML 并写入系统剪贴板（HTML + 纯文本双格式）；cut=true 时同时删除选区
   const serializeSelectionToClipboard = (v: any, cut: boolean) => {
     const sel = v.state.selection
@@ -523,6 +543,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [activeFont, setActiveFont] = useState('')
   const [activeFontSize, setActiveFontSize] = useState('')
   const [activeColor, setActiveColor] = useState('')
+  const [activeCharSpacing, setActiveCharSpacing] = useState('')
   const [activeIsImage, setActiveIsImage] = useState(false)
   const [activeIsShape, setActiveIsShape] = useState(false)
   const [, setTick] = useState(0)
@@ -712,20 +733,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
         createPaginationPlugin(() => metricsRef.current, setPageCount, setPageRects, setBlockPages),
-        // 格式刷：暂存源格式后，下一次选区变化时自动套用并解除
+        // 格式刷：暂存源格式后，下一次在目标选区上直接套用源 marks。
+        // 单击模式（lock=false）套用一次即解除；锁定模式（lock=true）可连续套用。
         new Plugin({
           appendTransaction: (_transactions: any, _oldState: any, newState: any) => {
-            if (!formatPainter) return null
+            const fp = formatPainterRef.current
+            if (!fp) return null
             const sel = newState.selection
             if (sel.empty || sel instanceof NodeSelection) return null
-            const store: any[] = []
-            for (const [name, attrs] of Object.entries(formatPainter)) {
+            const { from, to } = sel
+            let tr: any = newState.tr
+            let added = 0
+            for (const [name, attrs] of Object.entries(fp.marks)) {
               const m = (schema.marks as any)[name]; if (!m) continue
-              store.push(m.create(attrs || {}))
+              tr = tr.addMark(from, to, m.create(attrs || {}))
+              added++
             }
-            if (store.length === 0) { setFormatPainter(null); return null }
-            const tr = newState.tr.setStoredMarks(store)
-            setFormatPainter(null)
+            if (added === 0) { setPainter(null); return null }
+            if (!fp.lock) setPainter(null)
             return tr
           },
         }),
@@ -998,13 +1023,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const { from, $from, to, empty } = state.selection
     const attrs: any = {}
     if ($from.parent.type.name === 'paragraph' || $from.parent.type.name === 'heading') { Object.assign(attrs, { align: $from.parent.attrs.align, lineHeight: $from.parent.attrs.lineHeight, indent: $from.parent.attrs.indent, indentLeft: $from.parent.attrs.indentLeft, firstLine: $from.parent.attrs.firstLine, spaceBefore: $from.parent.attrs.spaceBefore, spaceAfter: $from.parent.attrs.spaceAfter, border: $from.parent.attrs.border, shading: $from.parent.attrs.shading, rtl: $from.parent.attrs.rtl, letterSpacing: $from.parent.attrs.letterSpacing, dropCap: $from.parent.attrs.dropCap }) }
-    let f = '', sz = '', c = ''
-    const collect = (m: any) => { marks.add(m.type.name); if (m.type.name === 'fontFamily') f = m.attrs.font; if (m.type.name === 'fontSize') sz = m.attrs.size; if (m.type.name === 'textColor') c = m.attrs.color }
+    let f = '', sz = '', c = '', cs = ''
+    const collect = (m: any) => { marks.add(m.type.name); if (m.type.name === 'fontFamily') f = m.attrs.font; if (m.type.name === 'fontSize') sz = m.attrs.size; if (m.type.name === 'textColor') c = m.attrs.color; if (m.type.name === 'charSpacing') cs = m.attrs.value }
     if (empty) { state.storedMarks?.forEach(collect); $from.marks().forEach(collect) } else { state.doc.nodesBetween(from, to, (n) => n.marks.forEach(collect)) }
     if ($from.parent.type.name === 'heading') marks.add(`heading-${$from.parent.attrs.level}`)
     let isInTable = false
     for (let d = $from.depth; d > 0; d--) { if ($from.node(d).type.name === 'table') { isInTable = true; break } }
-    setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c)
+    setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c); setActiveCharSpacing(cs)
     // Track if cursor is on an image or shape node (for float/wrap buttons)
     const sel = state.selection
     const selNode = sel instanceof NodeSelection ? sel.node : null
@@ -1280,12 +1305,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         })()
         setShowContextMenu(false); break
       }
-      case 'formatPainter': { setFormatPainter(getActiveMarks()); break }
+      case 'formatPainter': { setPainter({ marks: getActiveMarks(), lock: false }); break }
       case 'clearFormat': {
         const { state, dispatch } = v
         const { from, to } = state.selection
         const tr = state.tr
-        const markNames = ['bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'code', 'fontSize', 'fontFamily', 'fontColor', 'highlight', 'comment_mark']
+        const markNames = ['bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'code', 'fontSize', 'fontFamily', 'fontColor', 'highlight', 'comment_mark', 'charSpacing']
         markNames.forEach((n) => { const m = (state.schema.marks as any)[n]; if (m) tr.removeMark(from, to, m) })
         dispatch(tr); v.focus(); break
       }
@@ -1443,16 +1468,36 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if (c) rejectChange(c)
   }
 
-  const setParaAttr = (attr: string, value: any) => { const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; const tn = $from.parent.type.name; if (tn !== 'paragraph' && tn !== 'heading') return; v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [attr]: value })); v.focus() }
+  const setParaAttr = (attr: string, value: any, focusAfter = true) => {
+    const v = viewRef.current; if (!v) return
+    const { $from, $to } = v.state.selection
+    const tr = v.state.tr
+    let changed = false
+    v.state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+      if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, [attr]: value })
+        changed = true
+      }
+    })
+    if (changed) { v.dispatch(tr); if (focusAfter) v.focus() }
+  }
   // 缩进增减（按字符单位 em，贴近 Word 的“增加/减少缩进量”）
   // 段前/段后间距快捷调节（pt）
   const changeSpace = (which: 'before' | 'after', delta: number) => {
-    const v = viewRef.current; if (!v) return; const { $from } = v.state.selection; const tn = $from.parent.type.name
-    if (tn !== 'paragraph' && tn !== 'heading') return
+    const v = viewRef.current; if (!v) return
+    const { $from, $to } = v.state.selection
     const key = which === 'before' ? 'spaceBefore' : 'spaceAfter'
-    const cur = Number($from.parent.attrs[key]) || 0
-    const next = Math.max(0, Math.min(120, cur + delta))
-    v.dispatch(v.state.tr.setNodeMarkup($from.before(), undefined, { ...$from.parent.attrs, [key]: next })); v.focus()
+    const tr = v.state.tr
+    let changed = false
+    v.state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+      if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+        const cur = Number(node.attrs[key]) || 0
+        const next = Math.max(0, Math.min(120, cur + delta))
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, [key]: next })
+        changed = true
+      }
+    })
+    if (changed) { v.dispatch(tr); v.focus() }
   }
   // 打开"段落"对话框：读取当前段落/标题的格式属性作为初值
   const openParaDialog = () => {
@@ -1534,11 +1579,37 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     // 注意：输入过程中不调用 v.focus()，否则焦点会被抢回编辑器，
     // 导致后续输入的数字被当作正文内容写入（艺术字内容变成输入数值的现象）。
   }
+  // 字符间距（字间距）：与字号一样是字符级标记，作用于选区/后续输入
+  const setCharSpacing = (val: string) => {
+    const v = viewRef.current; if (!v) return
+    const { state, dispatch } = v
+    const { from, to, empty } = state.selection
+    const trimmed = (val || '').trim()
+    if (!trimmed) { // 清空字间距
+      if (!empty) dispatch(state.tr.removeMark(from, to, schema.marks.charSpacing))
+      return
+    }
+    // 仅数字视为 px，否则按原 CSS 值（如 0.5pt / 2px）处理
+    const value = /^-?\d+(\.\d+)?$/.test(trimmed) ? `${trimmed}px` : trimmed
+    const mark = schema.marks.charSpacing.create({ value })
+    if (empty) {
+      const stored = state.storedMarks ? state.storedMarks.slice() : state.selection.$from.marks()
+      const filtered = stored.filter(m => m.type !== schema.marks.charSpacing)
+      dispatch(state.tr.setStoredMarks([...filtered, mark]))
+    } else {
+      dispatch(state.tr.removeMark(from, to, schema.marks.charSpacing).addMark(from, to, mark))
+    }
+  }
   const setTextColor = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.textColor, { color })(v.state, v.dispatch); v.focus() }
   const setHighlight = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.highlight, { color })(v.state, v.dispatch); v.focus() }
   const handleSearch = () => { const v = viewRef.current; if (!v || !searchQuery) return; doSearch(v, searchQuery, false) }
   const handleReplace = () => { const v = viewRef.current; if (!v) return; doReplace(v, searchQuery, replaceQuery, false) }
-  const handleReplaceAll = () => { const v = viewRef.current; if (!v) return; doReplaceAll(v, searchQuery, replaceQuery, false) }
+  const handleReplaceAll = () => {
+    const v = viewRef.current
+    if (!v) return
+    const count = doReplaceAll(v, searchQuery, replaceQuery, false)
+    if (count > 0) onToast?.(t('doc.replacedCount', { count }))
+  }
   const handlePrint = () => { setPrintPreview(false); setTimeout(() => window.print(), 100) }
   const insertFormula = () => { openPanel2('formula') }
   const insertSymbol = (sym: string) => {
@@ -1706,6 +1777,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
             <RibbonButton icon="↷" label={t('doc.redo')} onClick={() => exec('redo')} title="Ctrl+Y" />
+            <RibbonButton icon="🖌" label={t('doc.formatPainter')} onClick={() => exec('formatPainter')} onDoubleClick={() => setPainter({ marks: getActiveMarks(), lock: true })} active={!!formatPainter} title={t('doc.formatPainter') + (formatPainter?.lock ? '（锁定：连续刷，Esc 退出）' : '（双击锁定连续刷）')} />
+            <RibbonButton icon="⌫" label={t('doc.clearFormat')} onClick={() => exec('clearFormat')} title={t('doc.clearFormat')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.font')}>
             <div className="flex flex-col gap-1">
@@ -1742,6 +1815,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   onChange={(v) => setFontSize(v)}
                   options={FONT_SIZES.map(s => ({ label: s.name, value: s.value }))}
                   title={t('doc.fontSize')}
+                />
+                {/* 字间距：与字号一样支持输入数字（数值视为 px），作用于选区/后续输入 */}
+                <Dropdown
+                  className="text-xs rounded-md px-2 ribbon-input"
+                  style={{ width: 60, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  editable
+                  inputMode="numeric"
+                  inputValue={activeCharSpacing.replace(/px$/, '')}
+                  placeholder="0"
+                  onInputChange={(raw) => {
+                    const v = raw.trim()
+                    if (v === '') { setCharSpacing(''); return }
+                    const num = parseFloat(v)
+                    if (!isNaN(num)) setCharSpacing(`${num}px`)
+                  }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
+                  value={activeCharSpacing}
+                  onChange={(v) => setCharSpacing(v)}
+                  options={['0px', '0.5px', '1px', '1.5px', '2px', '3px', '-1px', '-0.5px'].map(s => ({ label: s, value: s }))}
+                  title={t('doc.charSpacing')}
+                  testId="charSpacing"
                 />
               </div>
               <div className="flex items-center gap-0.5">
@@ -1823,6 +1917,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <Dropdown
                   className="text-xs rounded-md px-2 py-1 ribbon-input"
                   style={{ width: 92, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  editable
+                  testId="paraLetterSpacing"
+                  inputMode="numeric"
+                  inputValue={activeAttrs.letterSpacing ? activeAttrs.letterSpacing.replace(/px$/, '') : ''}
+                  onInputChange={(raw) => {
+                    const v = raw.trim()
+                    if (v === '') { setParaAttr('letterSpacing', '', false); return }
+                    const num = parseFloat(v)
+                    if (!isNaN(num)) setParaAttr('letterSpacing', `${num}px`, false)
+                  }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
                   value={activeAttrs.letterSpacing || ''}
                   onChange={v => setParaAttr('letterSpacing', v)}
                   options={[
@@ -1922,7 +2027,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.text')}>
             <RibbonButton icon="📦" label={t('doc.textBox')} onClick={() => exec('textBox')} />
             <div className="relative">
-              <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} />
+              <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} data-testid="insert-formula" />
               {showFormulaPanel && (
                 <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, padding: '12px', minWidth: 320 }}>
                   <div className="text-xs font-medium mb-2">{t('doc.commonFormulas') || '常用公式'}</div>
@@ -1941,7 +2046,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                       { l: '≥', v: '\\geq' },
                       { l: '±', v: '\\pm' },
                     ].map(f => (
-                      <button key={f.l} onClick={() => insertLatexFormula(f.v)} className="p-2 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 48 }}>{f.l}</button>
+                      <button key={f.l} data-testid="formula-quick" onClick={() => insertLatexFormula(f.v)} className="p-2 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 48 }}>{f.l}</button>
                     ))}
                   </div>
                   <div className="text-xs font-medium mb-2">{t('doc.customFormula') || '自定义 LaTeX'}</div>
@@ -2023,10 +2128,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 </div>
               )}
             </div>
-          </RibbonGroup>
-          <RibbonGroup label={t('doc.clipboard')}>
-            <RibbonButton icon="🖌" label={t('doc.formatPainter')} onClick={() => exec('formatPainter')} active={!!formatPainter} title={t('doc.formatPainter')} />
-            <RibbonButton icon="⌫" label={t('doc.clearFormat')} onClick={() => exec('clearFormat')} title={t('doc.clearFormat')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.layout')}>
             <RibbonButton icon="🅰" label={t('doc.dropCap')} onClick={() => exec('dropCap')} active={activeAttrs.dropCap} />
@@ -2391,6 +2492,28 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                     ))}
                   </div>
                 )}
+                {/* 文本输入区四角直角标记：仅“显示标记”时显示，标记“可输入内容的起始位置空间”——
+                    即页边距之内的正文区域（可编辑文本区）的四个角。角标紧贴文本区边界，
+                    让用户一眼看清正文从哪里开始、到哪里结束。
+                    该纸页背景 div 的尺寸=整张纸（pageWidthPx × p.height），文本区起点在
+                    docMargins.top/left 处，终点在右侧 docMargins.right、底部 docMargins.bottom 处，
+                    因此角标需以页边距为偏移定位到文本区四角（而非整张纸四角）。 */}
+                {showMarks && (() => {
+                  const size = 16
+                  const cornerColor = '#5b9bd5' // Word 风格蓝灰，与页面边界一致
+                  const mt = docMargins.top
+                  const mb = docMargins.bottom
+                  const ml = docMargins.left
+                  const mr = docMargins.right
+                  return (
+                    <Fragment>
+                      <span style={{ position: 'absolute', top: mt, left: ml, width: size, height: size, borderTop: `2px solid ${cornerColor}`, borderLeft: `2px solid ${cornerColor}`, pointerEvents: 'none' }} />
+                      <span style={{ position: 'absolute', top: mt, right: mr, width: size, height: size, borderTop: `2px solid ${cornerColor}`, borderRight: `2px solid ${cornerColor}`, pointerEvents: 'none' }} />
+                      <span style={{ position: 'absolute', bottom: mb, left: ml, width: size, height: size, borderBottom: `2px solid ${cornerColor}`, borderLeft: `2px solid ${cornerColor}`, pointerEvents: 'none' }} />
+                      <span style={{ position: 'absolute', bottom: mb, right: mr, width: size, height: size, borderBottom: `2px solid ${cornerColor}`, borderRight: `2px solid ${cornerColor}`, pointerEvents: 'none' }} />
+                    </Fragment>
+                  )
+                })()}
               </div>
               {/* 每页底部页码（预览）：按真实页码填充模板 */}
               {pageNumber?.enabled && (

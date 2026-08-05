@@ -95,7 +95,13 @@ export function Dropdown({ value, onChange, options, className, style, title, pl
             inputMode={inputMode}
             onFocus={() => { inputFocused.current = true }}
             onChange={(e) => { setInputBuffer(e.target.value); onInputChange?.(e.target.value) }}
-            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            onKeyDown={(e) => {
+              // 阻止按键冒泡到 ProseMirror 的原生 document 监听，否则输入会被当作正文写入编辑器
+              e.nativeEvent.stopImmediatePropagation()
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+            onKeyUp={(e) => { e.nativeEvent.stopImmediatePropagation() }}
+            onInput={(e) => { e.nativeEvent.stopImmediatePropagation() }}
             onBlur={() => { inputFocused.current = false; onInputBlur?.() }}
             className="dropdown-input"
             style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', color: 'inherit', outline: 'none', fontSize: 'inherit', textAlign: 'left' }}

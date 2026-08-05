@@ -37,6 +37,9 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
     }
     try {
       w.marked.setOptions({ gfm: true, breaks: true })
+      // 保护公式：breaks:true 会把 $$...$$ 内的换行变成 <br>，导致 KaTeX 无法匹配。
+      // 在解析前把公式块内部空白折叠成单行（KaTeX 仅以 \\ 换行，折叠原始换行无影响）。
+      const safeMd = protectMath(md)
       const renderer = new w.marked.Renderer()
       renderer.heading = function(text: string, level: number, raw: string) {
         const id = slugify(raw)
@@ -55,7 +58,7 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
         }
         return `<pre><code>${escapeHtml(code)}</code></pre>`
       }
-      const raw = w.marked.parse(md, { renderer })
+      const raw = w.marked.parse(safeMd, { renderer })
       // 安全过滤：移除 script/iframe/object/embed/style 标签、事件处理器、javascript: 协议
       return sanitizeHtml(raw)
     } catch (e: any) {
@@ -98,6 +101,24 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
     if (!previewRef.current) return
     if (mode === 'markdown') {
       previewRef.current.innerHTML = renderMarkdown(content)
+      // KaTeX 公式渲染：在 sanitize 之后对实时 DOM 执行，
+      // 这样 sanitize 不会破坏 KaTeX 生成的 <span class="katex"> 结构。
+      const w = window as any
+      if (typeof w.renderMathInElement !== 'undefined') {
+        try {
+          w.renderMathInElement(previewRef.current, {
+            delimiters: [
+              { left: '$$', right: '$$', display: true },
+              { left: '$', right: '$', display: false },
+              { left: '\\(', right: '\\)', display: false },
+              { left: '\\[', right: '\\]', display: true },
+            ],
+            throwOnError: false,
+          })
+        } catch (e) {
+          /* 忽略渲染异常，避免影响整页 */
+        }
+      }
       setToc(extractToc(content))
     } else {
       previewRef.current.innerHTML = renderHtml(content)
@@ -107,18 +128,30 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
 
   const jumpToToc = (id: string) => {
     setActiveTocId(id)
+    // 预览区：仅在预览容器内滚动到对应标题（不使用 scrollIntoView，
+    // 否则会连带滚动外层容器/窗口，导致顶部菜单栏被推出视口）。
     if (viewMode === 'preview' || viewMode === 'split') {
-      const el = previewRef.current?.querySelector(`#${CSS.escape(id)}`)
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      const prev = previewRef.current
+      const el = prev?.querySelector(`#${CSS.escape(id)}`)
+      if (prev && el) {
+        const target =
+          el.getBoundingClientRect().top - prev.getBoundingClientRect().top + prev.scrollTop - 12
+        prev.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
       }
-    } else {
-      const line = lineMapRef.current.get(id)
-      if (line && editorRef.current) {
-        const lines = content.split('\n')
-        const offset = lines.slice(0, line - 1).join('\n').length
-        editorRef.current.focus()
-        editorRef.current.setSelectionRange(offset, offset)
+    }
+    // 代码区：同步滚动到对应行（与预览导航保持一致）
+    const line = lineMapRef.current.get(id)
+    if (line && editorRef.current && viewMode !== 'preview') {
+      const ta = editorRef.current
+      const lines = content.split('\n')
+      const offset = lines.slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0)
+      // 计算行高并直接设置滚动位置（仅滚动该 textarea，不影响页面/菜单栏）
+      const style = window.getComputedStyle(ta)
+      const lh = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.6)
+      ta.scrollTop = Math.max(0, (line - 1) * lh - 8)
+      // 仅当编辑器已获得焦点时定位光标，避免 setSelectionRange 触发文档滚动
+      if (document.activeElement === ta) {
+        ta.setSelectionRange(offset, offset)
       }
     }
   }
@@ -268,6 +301,23 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
       )}
     </div>
   )
+}
+
+/**
+ * 保护公式：在 marked 解析前，把 $$...$$ 与 $...$ 内部的空白/换行折叠成单行。
+ * 否则 breaks:true 会把公式内的换行变成 <br>，把 $$ 分隔符拆到多个文本节点，
+ * 导致 KaTeX auto-render 无法匹配（块级公式不渲染）。
+ */
+function protectMath(src: string): string {
+  // 块级 $$...$$（可跨多行）
+  src = src.replace(/\$\$([\s\S]*?)\$\$/g, (_m, body: string) => {
+    return '$$' + body.replace(/\s+/g, ' ').trim() + '$$'
+  })
+  // 行内 $...$（单行）
+  src = src.replace(/\$([^$\n]+?)\$/g, (m) => {
+    return '$' + m.slice(1, -1).replace(/\s+/g, ' ').trim() + '$'
+  })
+  return src
 }
 
 function slugify(text: string): string {

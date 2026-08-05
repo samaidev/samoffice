@@ -74,7 +74,7 @@ export function AboutPage() {
             <strong style={{ color: 'var(--color-text)' }}>SamAI</strong> {t('about.samaiDesc2')} {t('about.samaiDesc3')}
           </p>
           <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-            {t('about.goofficeDesc1')} {t('about.goofficeDesc2')}
+            {t('about.samofficeDesc1')} {t('about.samofficeDesc2')}
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <a

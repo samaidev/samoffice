@@ -1,6 +1,7 @@
 package api
 
 import (
+        "encoding/base64"
         "fmt"
         "net/http"
         "os"
@@ -348,16 +349,25 @@ func (h *Handler) LocalFileOpen(c *gin.Context) {
                 c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
                 return
         }
-        doc, warns, err := h.Parsers.ParseBytes(abs, data)
-        if err != nil {
-                c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-                return
-        }
-        c.JSON(http.StatusOK, gin.H{
-                "document": doc,
-                "warnings": warns,
-                "path":     abs,
-        })
+	doc, warns, err := h.Parsers.ParseBytes(abs, data)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	// 文本类文件（Markdown/HTML）把原文以 base64 一并返回，
+	// 前端无需再调用 readFile（网页模式下不可用），直接展示原文。
+	lower := strings.ToLower(abs)
+	out := gin.H{
+		"document": doc,
+		"warnings": warns,
+		"path":     abs,
+	}
+	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
+		strings.HasSuffix(lower, ".mdx") || strings.HasSuffix(lower, ".html") ||
+		strings.HasSuffix(lower, ".htm") {
+		out["rawContent"] = base64.StdEncoding.EncodeToString(data)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func parseInt(s string) (int, error) {

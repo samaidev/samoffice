@@ -9,40 +9,120 @@
 package chinese
 
 import (
-        "bufio"
-        "embed"
-        "strconv"
-        "strings"
-        "sync"
+	"bufio"
+	"encoding/gob"
+	"embed"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 )
 
 //go:embed dict.txt
 var dictFS embed.FS
 
+// dictCacheVersion 随词典内容/格式变化而递增；变更后旧缓存自动失效
+const dictCacheVersion = 1
+
 // Segmenter 中文分词器
 type Segmenter struct {
-        dict     map[string]int  // 词典：word → frequency
-        maxLen   int             // 词典最长词长
-        bigram   map[string]int  // bigram 频率：w1|w2 → freq
-        mu       sync.RWMutex
+	dict     map[string]int  // 词典：word → frequency
+	maxLen   int             // 词典最长词长
+	bigram   map[string]int  // bigram 频率：w1|w2 → freq
+	mu       sync.RWMutex
 }
 
 func New() *Segmenter {
-        return &Segmenter{
-                dict:   make(map[string]int),
-                bigram: make(map[string]int),
-                maxLen: 1,
-        }
+	return &Segmenter{
+		dict:   make(map[string]int),
+		bigram: make(map[string]int),
+		maxLen: 1,
+	}
+}
+
+// dictData 是序列化到磁盘的词典快照，避免每次启动都重新解析 35 万词文本
+type dictData struct {
+	Dict   map[string]int
+	Bigram map[string]int
+	MaxLen int
+}
+
+func cachePath() (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "samoffice")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "zh_dict_v"+strconv.Itoa(dictCacheVersion)+".gob"), nil
+}
+
+// loadCache 尝试从磁盘加载词典快照；命中且有效返回 true
+func (s *Segmenter) loadCache() bool {
+	p, err := cachePath()
+	if err != nil {
+		return false
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var d dictData
+	if err := gob.NewDecoder(f).Decode(&d); err != nil {
+		return false
+	}
+	if d.Dict == nil || len(d.Dict) == 0 {
+		return false
+	}
+	s.dict = d.Dict
+	s.bigram = d.Bigram
+	if s.bigram == nil {
+		s.bigram = make(map[string]int)
+	}
+	s.maxLen = d.MaxLen
+	if s.maxLen < 1 {
+		s.maxLen = 1
+	}
+	return true
+}
+
+// saveCache 将当前词典快照写入磁盘，供下次启动复用
+func (s *Segmenter) saveCache() {
+	p, err := cachePath()
+	if err != nil {
+		return
+	}
+	s.mu.RLock()
+	d := dictData{Dict: s.dict, Bigram: s.bigram, MaxLen: s.maxLen}
+	s.mu.RUnlock()
+	f, err := os.Create(p)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_ = gob.NewEncoder(f).Encode(d)
 }
 
 // LoadBuiltin 从 embed 词典加载（jieba dict.txt，~35万词）
+// 首次启动解析并缓存；之后启动直接复用缓存快照，显著加快冷启动。
 // 格式：word freq pos（如 "AT&T 3 nz"），空格分隔
 func (s *Segmenter) LoadBuiltin() error {
-        data, err := dictFS.ReadFile("dict.txt")
-        if err != nil {
-                return err
-        }
-        return s.ParseDict(data)
+	if s.loadCache() {
+		return nil
+	}
+	data, err := dictFS.ReadFile("dict.txt")
+	if err != nil {
+		return err
+	}
+	if err := s.ParseDict(data); err != nil {
+		return err
+	}
+	s.saveCache()
+	return nil
 }
 
 // ParseDict 解析 jieba 格式词典字节流

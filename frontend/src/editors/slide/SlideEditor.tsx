@@ -89,7 +89,7 @@ function RibbonGroup({ label, children }: any) {
   )
 }
 
-export function SlideEditor() {
+export function SlideEditor({ initialSlides }: { initialSlides?: { title: string; content: string; notes?: string }[] }) {
   const { t } = useI18n()
 
   // 仅在 t 变化时重建 (perf: 避免每次渲染重建静态数组)
@@ -102,10 +102,26 @@ export function SlideEditor() {
   const EXIT_ANIMS = useMemo(() => EXIT_ANIM_DEFS.map((e, i) => ({ effect: e, name: e === 'fade' ? t('anim.fadeOut') : e === 'fly' ? t('anim.flyOut') : t('anim.shrink') })), [t])
   const ART_PRESETS = useMemo(() => ART_PRESET_DEFS.map((p, i) => ({ name: t(['art.purple','art.blue','art.green','art.orange','art.red','art.white'][i]), color: p.color, gradient: (p as any).gradient || '', shadow: !!(p as any).shadow, glow: !!(p as any).glow, outline: (p as any).outline || '' })), [t])
 
-  const [slides, setSlides] = useState<Slide[]>([
-    { id: 1, title: t('slide.titleDefault'), content: t('slide.subtitleDefault'), bg: '#ffffff', layout: 'title', transition: 'fade', notes: '', shapes: [], artTexts: [], animations: [] },
-    { id: 2, title: t('slide.contentSlide'), content: t('slide.contentPlaceholder'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] },
-  ])
+  const [slides, setSlides] = useState<Slide[]>(() => {
+    if (initialSlides && initialSlides.length) {
+      return initialSlides.map((s, i) => ({
+        id: i + 1,
+        title: s.title || (i === 0 ? t('slide.titleDefault') : t('slide.contentSlide')),
+        content: s.content || (i === 0 ? t('slide.subtitleDefault') : t('slide.contentPlaceholder')),
+        bg: '#ffffff',
+        layout: (i === 0 && !s.content ? 'title' : 'content') as Slide['layout'],
+        transition: i === 0 ? 'fade' : '',
+        notes: s.notes || '',
+        shapes: [],
+        artTexts: [],
+        animations: [],
+      }))
+    }
+    return [
+      { id: 1, title: t('slide.titleDefault'), content: t('slide.subtitleDefault'), bg: '#ffffff', layout: 'title', transition: 'fade', notes: '', shapes: [], artTexts: [], animations: [] },
+      { id: 2, title: t('slide.contentSlide'), content: t('slide.contentPlaceholder'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] },
+    ]
+  })
   const [active, setActive] = useState(0)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)

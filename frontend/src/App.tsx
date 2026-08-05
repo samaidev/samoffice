@@ -15,6 +15,16 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 type Theme = 'light' | 'dark' | 'auto'
 
+// 规范化外部传入的文件路径：去掉首尾引号/空白，以及 file:// / file:\\ 协议前缀，
+// 并把 /C:/xxx 还原为 C:/xxx，确保 os.ReadFile / ReadFile 能正确定位文件。
+function normalizePath(raw: string): string {
+  let p = String(raw).trim().replace(/^["']|["']$/g, '')
+  const m = p.match(/^file:\/\/+\/?(.+)$/i) || p.match(/^file:\\+(.+)$/i)
+  if (m) p = m[1]
+  p = p.replace(/^\/([A-Za-z]:[\\/])/, '$1')
+  return p.trim()
+}
+
 // base64 → Blob，用于本地模式读取 PDF 等二进制文件后在 WebView 中预览
 function base64ToBlob(b64: string, mime: string): Blob {
   const bin = atob(b64)
@@ -22,6 +32,27 @@ function base64ToBlob(b64: string, mime: string): Blob {
   const bytes = new Uint8Array(len)
   for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i)
   return new Blob([bytes], { type: mime })
+}
+
+// base64 → UTF-8 字符串，用于读取 Markdown/HTML 等文本文件原文
+function base64ToUtf8(b64: string): string {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
+// 读取文本文件原文（base64）：优先使用 OpenFile 一并返回的 rawContent，
+// 这样在远程/网页模式下（readFile 不可用）也能正确加载 Markdown/HTML 内容；
+// 本地模式则回退到 backend.readFile。
+async function loadRawText(result: any, backend: Backend | null, path: string): Promise<string> {
+  if (result && typeof result.rawContent === 'string' && result.rawContent.length > 0) {
+    return result.rawContent
+  }
+  if (backend?.readFile) {
+    return await backend.readFile(path)
+  }
+  throw new Error('无法读取文件原文：rawContent 为空且 readFile 不可用')
 }
 
 
@@ -115,23 +146,19 @@ ${t('sample.md.more')}
   // 打开 xlsx/xls 时传入表格编辑器的初始 sheet 数据；epoch 用于强制重挂载以加载新文件
   const [sheetInitial, setSheetInitial] = useState<{ name: string; cells: Record<string, any> }[] | null>(null)
   const [sheetEpoch, setSheetEpoch] = useState(0)
+  // 待打开的 PDF（通过 prop 传给 PdfViewer，避免 setTimeout+全局事件竞态导致 loadPdf 未触发）
+  const [pdfOpenSignal, setPdfOpenSignal] = useState<{ url: string; name: string; nonce: number } | null>(null)
+  // 打开 pptx/ppt 时传入幻灯片编辑器的初始幻灯片数据；epoch 用于强制重挂载以加载新文件
+  const [slideInitial, setSlideInitial] = useState<{ title: string; content: string; notes?: string }[] | null>(null)
+  const [slideEpoch, setSlideEpoch] = useState(0)
 
   // 统一处理打开结果：表格类文件切换到表格视图，其余切换到文档视图
-  const openResult = (result: any) => {
+  const openResult = async (result: any) => {
     const path: string = result.path || ''
     const decision = decideOpen(path, result.document)
     const sheets = decision.sheets
+    const slides = decision.slides
     const isSheet = decision.tab === 'spreadsheet'
-    // 诊断日志：确认实际路由到了哪个视图（右键打开 xls 却显示 word 的回归验证点）
-    try {
-      const w = (window as any)
-      w.go?.main?.App?.LogError?.(
-        'OPEN_RESULT path=' + path +
-        ' isSheet=' + isSheet +
-        ' sheets=' + (sheets ? sheets.length : 0) +
-        ' tab=' + decision.tab,
-      )
-    } catch {}
     setFilePath(path)
     try {
       const name = path.split(/[\\/]/).pop() || path
@@ -144,6 +171,57 @@ ${t('sample.md.more')}
       setSheetInitial(sheets)
       setSheetEpoch(e => e + 1)
       setTab('spreadsheet')
+    } else if (decision.tab === 'slide') {
+      // 演示文稿：把 pptx 解析出的幻灯片数据传入幻灯片编辑器
+      setSlideInitial(slides && slides.length ? slides : [])
+      setSlideEpoch(e => e + 1)
+      setTab('slide')
+    } else if (decision.tab === 'markdown') {
+      // Markdown 文件：读取原文到 MD 编辑器（而非解析成 UDM 文档）
+      setSheetInitial(null)
+      try {
+        const b64 = await loadRawText(result, backend, path)
+        setMdContent(base64ToUtf8(b64))
+      } catch (e: any) {
+        console.error('read markdown failed', e)
+      }
+      setTab('markdown')
+    } else if (decision.tab === 'html') {
+      setSheetInitial(null)
+      try {
+        const b64 = await loadRawText(result, backend, path)
+        setHtmlContent(base64ToUtf8(b64))
+      } catch (e: any) {
+        console.error('read html failed', e)
+      }
+      setTab('html')
+    } else if (decision.tab === 'pdf') {
+      setSheetInitial(null)
+      try {
+        // 读取 PDF 原始字节：优先 backend.readFile；否则直接走 Wails 绑定兜底，
+        // 避免 backend 因闭包未及时更新（setBackend 后同函数体内 backend 仍为旧值）而读不到文件。
+        let b64: string | undefined
+        if (backend?.readFile) {
+          b64 = await backend.readFile(path)
+        } else {
+          const appRead = (window as any).go?.main?.App?.ReadFile
+          if (typeof appRead === 'function') {
+            b64 = await appRead(path)
+          }
+        }
+        if (b64) {
+          const blob = base64ToBlob(b64, 'application/pdf')
+          const url = URL.createObjectURL(blob)
+          // 通过 prop 传给 PdfViewer，避免全局事件在组件挂载前触发而丢失
+          setPdfOpenSignal({ url, name: path, nonce: Date.now() })
+        } else {
+          showToast(t('doc.openPdfFailed', { name: path }) || 'PDF 读取失败')
+        }
+      } catch (e: any) {
+        console.error('read pdf failed', e)
+        showToast(t('doc.openPdfFailed', { name: path }) || 'PDF 读取失败')
+      }
+      setTab('pdf')
     } else {
       setSheetInitial(null)
       setDoc(result.document)
@@ -237,13 +315,7 @@ ${t('sample.md.more')}
     let cancelled = false
     // 规范化启动参数路径：处理 Windows "打开方式"可能传入的 file:// / file:/// / file:\\ 形式，
     // 以及首尾引号；并把 /C:/xxx 还原为 C:/xxx（否则 openFile 读不到文件会静默回退到模板）。
-    const normalizeStartupPath = (raw: string): string => {
-      let p = String(raw).trim().replace(/^["']|["']$/g, '')
-      const m = p.match(/^file:\/\/+\/?(.+)$/i) || p.match(/^file:\\+(.+)$/i)
-      if (m) p = m[1]
-      p = p.replace(/^\/([A-Za-z]:[\\/])/, '$1')
-      return p.trim()
-    }
+    const normalizeStartupPath = (raw: string): string => normalizePath(raw)
     const tryOpenStartupFile = async () => {
       // 注意：此处不依赖 createBackend() 判定出的 b.mode，因为 Wails 绑定在挂载瞬间可能
       // 尚未注入，会导致 b 被误判为 RemoteBackend 而跳过本逻辑。改为直接探测 window.go.main.App。
@@ -281,16 +353,74 @@ ${t('sample.md.more')}
       try { (window as any).go?.main?.App?.LogError?.('STARTUP_NO_BINDING') } catch {}
     }
     tryOpenStartupFile()
+
+    // 单实例：第二个 SamOffice 实例(或再次双击文档)启动时会把文件路径通过此事件转发过来。
+    // 这里复用当前窗口打开该文件，窗口已在后端最大化，无需新建窗口。
+    const onSecondInstance = (args: any) => {
+      const arr = Array.isArray(args) ? args : [args]
+      const path = arr.find((a: any) => typeof a === 'string' && /\.(docx?|xlsx?|pptx?|ppsx?|potx?|pdf|md|markdown|mdx|html?|txt|rtf|csv)$/i.test(a))
+      if (!path) return
+      void openViaApp(path)
+    }
+    const rt: any = (window as any).runtime
+    if (rt && typeof rt.EventsOn === 'function') {
+      rt.EventsOn('second-instance-open', onSecondInstance)
+    }
+
     const checkMobile = () => setIsMobile(window.innerWidth <= 768)
     checkMobile()
     window.addEventListener('resize', checkMobile)
-    return () => { cancelled = true; clearTimeout(timer); window.removeEventListener('resize', checkMobile) }
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      window.removeEventListener('resize', checkMobile)
+      const rt: any = (window as any).runtime
+      if (rt && typeof rt.EventsOff === 'function') {
+        rt.EventsOff('second-instance-open', onSecondInstance)
+      }
+    }
   }, [])
+
+  // 由单实例事件(onSecondInstance)调用：在当前窗口中打开文件，不新建窗口。
+  // 直接复用统一的 openResult 处理各类型文件（docx/xlsx/pdf/md/html），后端已负责最大化窗口。
+  const openViaApp = async (path: string) => {
+    if (!path) return
+    path = normalizePath(path)
+    setLoading(true)
+    showToast(t('app.opening', { name: path }))
+    try {
+      const app: any = (window as any).go?.main?.App
+      if (!app) {
+        showToast(t('app.openFailed', { msg: 'binding not ready' }))
+        setLoading(false)
+        return
+      }
+      const result = await app.OpenFile(path)
+      if (!result || (result as any).error) {
+        showToast(t('app.openFailed', { msg: (result as any)?.error || 'unknown' }))
+        setLoading(false)
+        return
+      }
+      // 确保 backend 已就绪（PDF 分支依赖 backend.readFile）
+      if (!backend) {
+        const b = createBackend()
+        setBackend(b)
+      }
+      await openResult(result)
+      setSpellErrors([])
+      try { app.SetCurrentFilePath?.(path) } catch {}
+    } catch (e: any) {
+      console.error('open via app failed', e)
+      showToast(t('app.openFailed', { msg: (e?.message || String(e)) + '  (' + path + ')' }))
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // 字数统计
   useEffect(() => {
     const text = doc.blocks?.map(b => {
-      if ('inline' in b) return (b as any).inline?.map((i: any) => i.content || '').join('') || ''
+      if (b && Array.isArray((b as any).inline)) return (b as any).inline.map((i: any) => i.content || '').join('') || ''
       if ('code' in b) return (b as any).code || ''
       return ''
     }).join(' ') || ''
@@ -374,11 +504,9 @@ ${t('sample.md.more')}
       if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
         setTab('pdf')
         showToast(t('app.opening', { name: file.name }))
-        // 等待 PdfViewer 组件挂载后，通过自定义事件传递文件
-        setTimeout(() => {
-          const url = URL.createObjectURL(file)
-          window.dispatchEvent(new CustomEvent('pdf-open', { detail: { url, name: file.name } }))
-        }, 300)
+        // 通过 prop 传给 PdfViewer，避免全局事件在组件挂载前触发而丢失
+        const url = URL.createObjectURL(file)
+        setPdfOpenSignal({ url, name: file.name, nonce: Date.now() })
         return
       }
 
@@ -399,6 +527,19 @@ ${t('sample.md.more')}
           setSheetEpoch(e => e + 1)
           setFilePath(file.name)
           setTab('spreadsheet')
+        } else if (decision.tab === 'markdown') {
+          // 远程模式：从已选文件读取原文到 MD 编辑器
+          setSheetInitial(null)
+          setFilePath(file.name)
+          const text = await file.text()
+          setMdContent(text)
+          setTab('markdown')
+        } else if (decision.tab === 'html') {
+          setSheetInitial(null)
+          setFilePath(file.name)
+          const text = await file.text()
+          setHtmlContent(text)
+          setTab('html')
         } else {
           setSheetInitial(null)
           setDoc(result.document)
@@ -414,7 +555,6 @@ ${t('sample.md.more')}
           localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
         } catch {}
         showToast(t('app.opened', { name: file.name }))
-        triggerSpellCheck(JSON.stringify(result.document.blocks))
       } catch (e: any) {
         showToast(t('app.openFailed', { msg: e.message }))
       } finally {
@@ -448,11 +588,11 @@ ${t('sample.md.more')}
       const safeDoc: Document = {
         meta: doc.meta || { title: t('app.untitled') },
         blocks: (doc.blocks || []).map((b: any) => {
+          // 结构型块（公式/图片/脚注/表格等）保持原样，不再误当成纯文本处理
+          if (b && (b.formula || b.type === 'math' || b.type === 'image' || b.type === 'footnote' || b.type === 'table' || b.type === 'footnote_section' || b.src || b.rows || b.items)) return b
           if (b && Array.isArray(b.inline)) return b
           if (b && typeof b.code === 'string') return { inline: [{ content: b.code }] }
           if (b && typeof b.src === 'string') return { inline: [{ content: '[图片]' }] }
-          if (b && Array.isArray(b.items)) return { inline: [{ content: b.items.flat().map((it: any) => it?.inline?.[0]?.content || '').join(' ') }] }
-          if (b && Array.isArray(b.rows)) return { inline: [{ content: b.rows.flat().map((c: any) => c?.inline?.[0]?.content || '').join(' ') }] }
           return { inline: [{ content: '' }] }
         })
       }
@@ -857,10 +997,11 @@ ${t('sample.md.more')}
               zoom={docZoom}
               onZoomChange={setDocZoom}
               backend={backend ?? undefined}
+              onToast={showToast}
             />
           )}
           {tab === 'spreadsheet' && <SpreadsheetEditor key={sheetEpoch} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} />}
-          {tab === 'slide' && <SlideEditor />}
+          {tab === 'slide' && <SlideEditor key={slideEpoch} initialSlides={slideInitial || undefined} />}
           {tab === 'markdown' && (
             <MarkdownHtmlEditor
               initialContent={mdContent}
@@ -875,7 +1016,7 @@ ${t('sample.md.more')}
               onChange={setHtmlContent}
             />
           )}
-          {tab === 'pdf' && <PdfViewer />}
+          {tab === 'pdf' && <PdfViewer pdfOpenSignal={pdfOpenSignal} />}
           {tab === 'about' && <AboutPage />}
         </div>
 

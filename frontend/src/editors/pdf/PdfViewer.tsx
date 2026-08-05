@@ -11,9 +11,12 @@ declare global {
 
 interface PdfViewerProps {
   initialUrl?: string
+  // 由父组件通过 prop 传入待打开的 PDF（含 nonce 以便重复打开同一文件也能触发），
+  // 避免依赖全局 'pdf-open' 事件在组件挂载前触发而丢失。
+  pdfOpenSignal?: { url: string; name: string; nonce: number } | null
 }
 
-export function PdfViewer({ initialUrl }: PdfViewerProps) {
+export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
   const { t } = useI18n()
   const [pdfDoc, setPdfDoc] = useState<any>(null)
   const [pageNum, setPageNum] = useState(1)
@@ -55,7 +58,9 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
 
   // 加载 PDF 文档
   const loadPdf = useCallback(async (url: string, name?: string) => {
-    if (!url) return
+    if (!url) {
+      return
+    }
     setLoading(true)
     setError('')
     try {
@@ -68,6 +73,7 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
       if (name) setFileName(name)
       setPdfUrl(url)
     } catch (e: any) {
+      console.error('[PdfViewer] loadPdf failed:', e && e.message)
       setError(e.message || 'Failed to load PDF')
       setPdfDoc(null)
       setNumPages(0)
@@ -226,7 +232,7 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
     return () => window.removeEventListener('keydown', handleKey)
   }, [pdfDoc, pageNum, numPages])
 
-  // 监听全局 pdf-open 事件 (来自顶栏的"打开文件"按钮)
+  // 监听全局 pdf-open 事件 (来自顶栏的"打开文件"按钮) —— 兜底兼容
   useEffect(() => {
     const handlePdfOpen = (e: Event) => {
       const detail = (e as CustomEvent).detail
@@ -237,6 +243,13 @@ export function PdfViewer({ initialUrl }: PdfViewerProps) {
     window.addEventListener('pdf-open', handlePdfOpen as EventListener)
     return () => window.removeEventListener('pdf-open', handlePdfOpen as EventListener)
   }, [loadPdf])
+
+  // 主路径：父组件通过 prop 传入待打开的 PDF（含 nonce，重复打开同一文件也能触发）
+  useEffect(() => {
+    if (pdfOpenSignal?.url) {
+      loadPdf(pdfOpenSignal.url, pdfOpenSignal.name)
+    }
+  }, [pdfOpenSignal, loadPdf])
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>

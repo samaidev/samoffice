@@ -43,11 +43,11 @@ function blockToPM(b: Block, schema: Schema): Node {
   switch (t) {
     case 'heading': {
       const h = b as any
-      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '', align: h.align || '' }), inlineToPM(h.inline, schema))
+      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '', style: h.style || '', align: h.align || '' }), inlineToPM(h.inline, schema))
     }
     case 'paragraph': {
       const p = b as any
-      return schema.node('paragraph', applyParaAttrsFromProps(p, { align: p.align || '' }), inlineToPM(p.inline, schema))
+      return schema.node('paragraph', applyParaAttrsFromProps(p, { style: p.style || '', align: p.align || '' }), inlineToPM(p.inline, schema))
     }
     case 'codeBlock': {
       const c = b as any
