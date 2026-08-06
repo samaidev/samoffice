@@ -636,6 +636,21 @@ input:focus, textarea:focus, select:focus {
   padding: 0 6px !important;
 }
 
+/* 插入幻灯片版式下拉菜单项 */
+.ribbon-menu-item {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  color: var(--color-text);
+  transition: all 0.15s var(--ease-out);
+}
+.ribbon-menu-item:hover {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+
 /* === Ribbon Tab 栏样式统一 ===
  * ribbon-tab 选中态：底部 2px 主色高亮条 + 轻微背景
  * 与 header tab 的视觉语言一致（都是底部高亮条） */
@@ -816,6 +831,25 @@ table td, table th {
   padding: 6px 10px;
   vertical-align: top;
 }
+
+/* === 放映入场动画 === */
+@keyframes slFade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slFlyLeft { from { opacity: 0; transform: translateX(-80px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes slFlyRight { from { opacity: 0; transform: translateX(80px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes slFlyUp { from { opacity: 0; transform: translateY(60px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes slFlyDown { from { opacity: 0; transform: translateY(-60px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes slZoom { from { opacity: 0; transform: scale(0.5) } to { opacity: 1; transform: scale(1) } }
+@keyframes slWipe { from { opacity: 0; clip-path: inset(0 100% 0 0) } to { opacity: 1; clip-path: inset(0 0 0 0) } }
+@keyframes slBounce {
+  0% { opacity: 0; transform: scale(0.3) }
+  60% { opacity: 1; transform: scale(1.12) }
+  100% { opacity: 1; transform: scale(1) }
+}
+.sl-anim-fade { animation: slFade 0.5s var(--ease-out) both }
+.sl-anim-fly { animation: slFlyUp 0.5s var(--ease-out) both }
+.sl-anim-zoom { animation: slZoom 0.45s var(--ease-spring) both }
+.sl-anim-wipe { animation: slWipe 0.6s var(--ease-out) both }
+.sl-anim-bounce { animation: slBounce 0.6s var(--ease-spring) both }
 .ProseMirror table.pm-table th {
   background: #f1f5f9;
   font-weight: 600;
@@ -1295,4 +1329,186 @@ img[data-float="center"] { display: block; margin: 0 auto; }
   font-size: 12px;
   line-height: 1;
   margin: -12px 0 12px;
+}
+
+/* === Slide 编辑器（PPTX 渲染） === */
+.slide-editor {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  background: var(--color-bg);
+  overflow: hidden;
+}
+/* 左侧导航列 */
+.slide-nav {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.slide-nav-head {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+.slide-nav-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+.slide-thumb {
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+}
+.slide-thumb.active {
+  border-color: var(--color-primary);
+}
+.slide-thumb-canvas {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+}
+.slide-thumb-no {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 16px;
+}
+.slide-nav-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border);
+}
+.slide-nav-actions button {
+  flex: 1;
+  height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 15px;
+}
+.slide-nav-actions button:hover:not(:disabled) {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.slide-nav-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 主区域 */
+.slide-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.slide-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+.slide-toolbar button {
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.slide-toolbar button:hover:not(:disabled) {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.slide-toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
+.slide-page { font-size: 13px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.slide-spacer { flex: 1; }
+.slide-zoom { font-size: 12px; color: var(--color-text-muted); }
+.slide-stage {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px;
+  background:
+    repeating-linear-gradient(45deg, #eef2f7, #eef2f7 10px, #e8edf3 10px, #e8edf3 20px);
+}
+.slide-canvas-box {
+  position: relative;
+  flex-shrink: 0;
+}
+.slide-canvas {
+  position: relative;
+  box-shadow: var(--shadow-lg);
+  border-radius: 2px;
+  overflow: hidden;
+  background: #fff;
+  flex-shrink: 0;
+}
+.slide-edit-panel {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+.slide-title-input { flex: 0 0 280px; font-weight: 600; }
+.slide-content-input { flex: 1; resize: none; min-height: 38px; height: 38px; font-family: inherit; }
+.slide-play-btn { font-weight: 600; color: var(--color-primary) !important; }
+
+/* 放映（全屏预览）模式 */
+.slide-player {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.slide-player .slide-canvas {
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.6);
+}
+.slide-player-hint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 4px 12px;
+  border-radius: 20px;
 }

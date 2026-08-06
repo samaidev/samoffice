@@ -1,0 +1,37 @@
+[0;92mWails CLI[0m [0;31mv2.13.0[0m
+
+
+# [1;33m[1;33mBuild Options[0m
+[1;33m[0m[0m
+Platform(s)       [90m[90m | [0m[0mwindows/amd64                              
+Compiler          [90m[90m | [0m[0mC:\Program Files\Go\bin\go.exe             
+Skip Bindings     [90m[90m | [0m[0mfalse                                      
+Build Mode        [90m[90m | [0m[0mproduction                                 
+Devtools          [90m[90m | [0m[0mfalse                                      
+Frontend Directory[90m[90m | [0m[0mc:\Users\Administrator\samoffice-1\frontend
+Obfuscated        [90m[90m | [0m[0mfalse                                      
+Install Scope     [90m[90m | [0m[0mmachine                                    
+Skip Frontend     [90m[90m | [0m[0mfalse                                      
+Compress          [90m[90m | [0m[0mfalse                                      
+Package           [90m[90m | [0m[0mtrue                                       
+Clean Bin Dir     [90m[90m | [0m[0mfalse                                      
+LDFlags           [90m[90m | [0m[0m                                           
+Tags              [90m[90m | [0m[0m[]                                         
+Race Detector     [90m[90m | [0m[0mfalse                                      
+
+
+# [1;33m[1;33mBuilding target: windows/amd64[0m
+[1;33m[0m[0m
+  [90m[90m•[0m[0m [39m[39mGenerating bindings: [0m[0m2026/08/06 07:59:12 [0;33m2026/08/06 07:59:09 Loaded en_US dict: 100000 words
+{"level":"info","ts":1785974352.0624526,"caller":"samoffice-1/main.go:407","msg":"HTTP server started","port":51274}
+[0m
+Done.
+  [90m[90m•[0m[0m [39m[39mInstalling frontend dependencies: [0m[0mDone.
+  [90m[90m•[0m[0m [39m[39mCompiling frontend: [0m[0mDone.
+  [90m[90m•[0m[0m [39m[39mGenerating application assets: [0m[0mDone.
+  [90m[90m•[0m[0m [39m[39mCompiling application: [0m[0mDone.
+[30;46m[30;46m INFO [0m[0m [96m[96mWails is now using the new Go WebView2Loader. If you encounter any issues with it, please report them to https://github.com/wailsapp/wails/issues/2004. You could also use the old legacy loader with `-tags native_webview2loader`, but keep in mind this will be deprecated in the near future.[0m[0m
+Built 'c:\Users\Administrator\samoffice-1\build\bin\samoffice.exe' in 3m34.269s.
+
+[31;107m[31;107m ♥  [0m[0m [92m[92mIf Wails is useful to you or your company, please consider sponsoring the project:[0m[0m
+https://github.com/sponsors/leaanthony

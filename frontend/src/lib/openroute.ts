@@ -15,10 +15,27 @@ export type OpenTab =
   | 'pdf'
   | 'about'
 
+export interface SlideShape {
+  kind: string // text | rect | pic
+  x: number; y: number; cx: number; cy: number // EMU
+  fill?: string // #RRGGBB
+  text?: string
+  color?: string
+  sizePt?: number
+  bold?: boolean
+  align?: string // l|c|r
+  vanchor?: string // t|ctr|b
+  img?: string // data URL
+}
+
 export interface SlideData {
   title: string
   content: string
   notes?: string
+  bg?: string
+  shapes?: SlideShape[]
+  pageW?: number // 页面宽度 EMU
+  pageH?: number // 页面高度 EMU
 }
 
 export interface OpenDecision {
@@ -100,10 +117,31 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
     if (b && b.kind === 'slide' && b.data) {
       const d = b.data
       const bullets: string[] = Array.isArray(d.bullets) ? d.bullets : []
+      const shapes: SlideShape[] = Array.isArray(d.shapes)
+        ? d.shapes.map((s: any) => ({
+            kind: s.kind,
+            x: Number(s.x) || 0,
+            y: Number(s.y) || 0,
+            cx: Number(s.cx) || 0,
+            cy: Number(s.cy) || 0,
+            fill: typeof s.fill === 'string' ? s.fill : undefined,
+            text: typeof s.text === 'string' ? s.text : undefined,
+            color: typeof s.color === 'string' ? s.color : undefined,
+            sizePt: typeof s.sizePt === 'number' ? s.sizePt : undefined,
+            bold: !!s.bold,
+            align: typeof s.align === 'string' ? s.align : undefined,
+            vanchor: typeof s.vanchor === 'string' ? s.vanchor : undefined,
+            img: typeof s.img === 'string' ? s.img : undefined,
+          }))
+        : []
       slides.push({
         title: typeof d.title === 'string' ? d.title : '',
         content: bullets.join('\n'),
         notes: typeof d.notes === 'string' ? d.notes : '',
+        bg: typeof d.bg === 'string' ? d.bg : undefined,
+        shapes,
+        pageW: typeof d.pageW === 'number' ? d.pageW : undefined,
+        pageH: typeof d.pageH === 'number' ? d.pageH : undefined,
       })
     }
   }

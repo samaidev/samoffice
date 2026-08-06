@@ -2,10 +2,11 @@ import { useState, useMemo, memo, useEffect } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
+import { SlideData, SlideShape } from '../../lib/openroute'
 
 interface Slide {
   id: number; title: string; content: string; bg: string
-  layout: 'title' | 'content' | 'blank'
+  layout: 'title' | 'section' | 'content' | 'blank'
   transition: string; notes: string
   shapes: ShapeItem[]; artTexts: ArtTextItem[]
   animations: AnimItem[]
@@ -53,6 +54,13 @@ interface ShapeItem {
   // 现代扩展
   stroke?: string; strokeWidth?: number
   fontSize?: number; fontBold?: boolean; fontColor?: string; font?: string
+  textAlign?: 'left' | 'center' | 'right'
+  lineHeight?: number
+  indent?: number
+  bullet?: boolean
+  numbered?: boolean
+  vAlign?: 'top' | 'middle' | 'bottom'
+  isFootnote?: boolean
   glowColor?: string; glowRadius?: number
 }
 
@@ -63,7 +71,7 @@ interface ArtTextItem {
 }
 
 interface AnimItem {
-  target: string; effect: string; category: string; delay: number
+  target: string; effect: string; category: string; delay: number; sound?: string
 }
 
 type RibbonTab = 'home' | 'insert' | 'design' | 'modern' | 'animations' | 'transition' | 'view'
@@ -89,10 +97,37 @@ function RibbonGroup({ label, children }: any) {
   )
 }
 
-export function SlideEditor({ initialSlides }: { initialSlides?: { title: string; content: string; notes?: string }[] }) {
+export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) {
   const { t } = useI18n()
 
-  // 仅在 t 变化时重建 (perf: 避免每次渲染重建静态数组)
+  // 将真实 PPTX 解析出的 EMU 形状转换为内部 ShapeItem（画布 808×454 逻辑，x/8 → px）
+  const emuShapesToItems = (shapes?: SlideShape[], pageW = 12192000, pageH = 6858000): ShapeItem[] => {
+    if (!shapes || !shapes.length) return []
+    const SX = 6464 / pageW // 808px 宽 = 6464 单位 (x/8)
+    const SY = 3632 / pageH // 454px 高 = 3632 单位 (y/4.5)
+    return shapes.map((s) => {
+      const isPic = s.kind === 'pic'
+      const fill = isPic && s.img ? `url("${s.img}")` : (s.fill || '')
+      return {
+        type: 'rect',
+        x: (s.x || 0) * SX,
+        y: (s.y || 0) * SY,
+        w: (s.cx || 0) * SX,
+        h: (s.cy || 0) * SY,
+        fill,
+        text: isPic ? '' : (s.text || ''),
+        shadow: false,
+        glow: false,
+        gradient: '',
+        rotation: 0,
+        fontSize: s.sizePt ? Math.round(s.sizePt * 914400 * 808 / (72 * pageW)) : undefined,
+        fontBold: !!s.bold,
+        fontColor: s.color || undefined,
+        textAlign: s.align === 'l' ? 'left' : s.align === 'r' ? 'right' : s.align === 'c' ? 'center' : undefined,
+        vAlign: s.vanchor === 't' ? 'top' : s.vanchor === 'b' ? 'bottom' : s.vanchor === 'ctr' ? 'middle' : undefined,
+      }
+    })
+  }
   const LAYOUTS = useMemo(() => LAYOUT_DEFS.map(l => ({ ...l, name: t(`slide.layout.${l.id}`) })), [t])
   const PRESET_COLORS = useMemo(() => PRESET_COLOR_DEFS.map((v, i) => ({ value: v, name: t(['color.white','color.lightGray','color.beige','color.skyBlue','color.mint','color.pink','color.darkGray','color.indigo'][i]) })), [t])
   const TRANSITIONS = useMemo(() => TRANSITION_DEFS.map(id => ({ id, name: id === '' ? t('transition.none') : t(`transition.${id === 'cut' ? 'switch' : id}`) })), [t])
@@ -104,18 +139,22 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
 
   const [slides, setSlides] = useState<Slide[]>(() => {
     if (initialSlides && initialSlides.length) {
-      return initialSlides.map((s, i) => ({
-        id: i + 1,
-        title: s.title || (i === 0 ? t('slide.titleDefault') : t('slide.contentSlide')),
-        content: s.content || (i === 0 ? t('slide.subtitleDefault') : t('slide.contentPlaceholder')),
-        bg: '#ffffff',
-        layout: (i === 0 && !s.content ? 'title' : 'content') as Slide['layout'],
-        transition: i === 0 ? 'fade' : '',
-        notes: s.notes || '',
-        shapes: [],
-        artTexts: [],
-        animations: [],
-      }))
+      return initialSlides.map((s, i) => {
+        const pageW = (s.pageW && s.pageW > 0 ? s.pageW : 12192000) as number
+        const pageH = (s.pageH && s.pageH > 0 ? s.pageH : 6858000) as number
+        return {
+          id: i + 1,
+          title: s.title || (i === 0 ? t('slide.titleDefault') : t('slide.contentSlide')),
+          content: s.content || (i === 0 ? t('slide.subtitleDefault') : t('slide.contentPlaceholder')),
+          bg: s.bg || '#ffffff',
+          layout: (i === 0 && !s.content ? 'title' : 'content') as Slide['layout'],
+          transition: i === 0 ? 'fade' : '',
+          notes: s.notes || '',
+          shapes: emuShapesToItems(s.shapes, pageW, pageH),
+          artTexts: [],
+          animations: [],
+        }
+      })
     }
     return [
       { id: 1, title: t('slide.titleDefault'), content: t('slide.subtitleDefault'), bg: '#ffffff', layout: 'title', transition: 'fade', notes: '', shapes: [], artTexts: [], animations: [] },
@@ -131,9 +170,11 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
   const [presentSlide, setPresentSlide] = useState(0)
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showAnimPanel, setShowAnimPanel] = useState(false)
+  const [pendingSound, setPendingSound] = useState<string>('none')
   const [showArtPanel, setShowArtPanel] = useState(false)
   // 二级颜色弹出菜单 — 统一 click 触发，避免 hover 残留导致重叠
   const [showColorPopup, setShowColorPopup] = useState(false)
+  const [showInsertSlide, setShowInsertSlide] = useState(false)
   // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
   type PanelName = 'shape' | 'anim' | 'art' | 'color'
   const openPanel = (which: PanelName) => {
@@ -142,28 +183,66 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
     setShowArtPanel(which === 'art' ? !showArtPanel : false)
     setShowColorPopup(which === 'color' ? !showColorPopup : false)
   }
-  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false); setShowColorPopup(false) }
-  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel || showColorPopup
+  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false); setShowColorPopup(false); setShowInsertSlide(false) }
+  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel || showColorPopup || showInsertSlide
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
   const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
 
-  const addSlide = () => { setSlides(s => [...s, { id: Date.now(), title: t('slide.slideN', { n: s.length + 1 }), content: t('slide.addContentHere'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }]); setActive(slides.length) }
-  const deleteSlide = (idx: number) => { if (slides.length <= 1) return; setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
-  const duplicateSlide = (idx: number) => { setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
-  const updateActive = (patch: Partial<Slide>) => setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl))
+  // 撤销/重做历史栈
+  const [past, setPast] = useState<Slide[][]>([])
+  const [future, setFuture] = useState<Slide[][]>([])
+  const recordHistory = (snapshot: Slide[]) => { setPast(p => [...p, snapshot]); setFuture([]) }
+  const undo = () => {
+    if (!past.length) return
+    const prev = past[past.length - 1]
+    setPast(p => p.slice(0, -1))
+    setFuture(f => [slides, ...f])
+    setSlides(prev)
+  }
+  const redo = () => {
+    if (!future.length) return
+    const next = future[0]
+    setFuture(f => f.slice(1))
+    setPast(p => [...p, slides])
+    setSlides(next)
+  }
+
+  const insertSlide = (at: number, layout: 'title' | 'section' | 'blank' | 'content') => {
+    recordHistory(slides)
+    const n = slides.length + 1
+    let slide: Slide
+    if (layout === 'title') {
+      slide = { id: Date.now(), title: t('slide.titleSlide'), content: t('slide.subtitleHere'), bg: '#1e293b', layout: 'title', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }
+    } else if (layout === 'section') {
+      slide = { id: Date.now(), title: t('slide.sectionSlide'), content: '', bg: '#312e81', layout: 'section', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }
+    } else if (layout === 'blank') {
+      slide = { id: Date.now(), title: t('slide.slideN', { n }), content: '', bg: '#ffffff', layout: 'blank', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }
+    } else {
+      slide = { id: Date.now(), title: t('slide.slideN', { n }), content: t('slide.addContentHere'), bg: '#ffffff', layout: 'content', transition: '', notes: '', shapes: [], artTexts: [], animations: [] }
+    }
+    setSlides(s => { const next = [...s]; next.splice(at + 1, 0, slide); return next })
+    setActive(at + 1)
+    setShowInsertSlide(false)
+  }
+  const addSlide = () => insertSlide(slides.length - 1, 'content')
+  const deleteSlide = (idx: number) => { if (slides.length <= 1) return; recordHistory(slides); setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
+  const duplicateSlide = (idx: number) => { recordHistory(slides); setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
+  const updateActive = (patch: Partial<Slide>) => { recordHistory(slides); setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl)) }
   const switchSlide = (i: number) => { if (i === active) return; setActive(i) }
   const current = slides[active] || slides[0]
   const isDark = current.bg === '#1e293b' || current.bg === '#312e81'
 
   // 形状操作
   const addShape = (type: string) => {
+    recordHistory(slides)
     const newShape: ShapeItem = { type, x: 200 + Math.random()*100, y: 200 + Math.random()*100, w: 200, h: 120, fill: '#4f46e5', text: '', shadow: false, glow: false, gradient: '', rotation: 0 }
     updateActive({ shapes: [...current.shapes, newShape] })
     setShowShapePanel(false)
   }
-  const removeShape = (idx: number) => { updateActive({ shapes: current.shapes.filter((_, i) => i !== idx) }) }
-  const updateShape = (idx: number, patch: Partial<ShapeItem>) => {
+  const removeShape = (idx: number) => { recordHistory(slides); updateActive({ shapes: current.shapes.filter((_, i) => i !== idx) }) }
+  const updateShape = (idx: number, patch: Partial<ShapeItem>, record = true) => {
+    if (record) recordHistory(slides)
     const newShapes = current.shapes.map((s, i) => i === idx ? { ...s, ...patch } : s)
     updateActive({ shapes: newShapes })
   }
@@ -172,6 +251,7 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
   const addArtText = (preset: any) => {
     const text = prompt(t('slide.prompt.wordArt'), 'SamOffice')
     if (!text) return
+    recordHistory(slides)
     const newArt: ArtTextItem = {
       text, x: 100, y: 100, w: 400, h: 80,
       fontSize: 36, color: preset.color, gradient: preset.gradient || '',
@@ -180,25 +260,69 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
     updateActive({ artTexts: [...current.artTexts, newArt] })
     setShowArtPanel(false)
   }
-  const removeArtText = (idx: number) => { updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
-  const updateArtText = (idx: number, patch: Partial<ArtTextItem>) => {
+  const removeArtText = (idx: number) => { recordHistory(slides); updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
+  const updateArtText = (idx: number, patch: Partial<ArtTextItem>, record = true) => {
+    if (record) recordHistory(slides)
     const newArts = current.artTexts.map((a, i) => i === idx ? { ...a, ...patch } : a)
     updateActive({ artTexts: newArts })
   }
 
+  // 声音特效引擎（Web Audio 合成，无需外部资源）
+  const playSound = (type?: string) => {
+    if (!type || type === 'none') return
+    try {
+      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
+      const ac = (playSound as any)._ac || ((playSound as any)._ac = new Ctx())
+      const now = ac.currentTime
+      const osc = ac.createOscillator()
+      const gain = ac.createGain()
+      osc.connect(gain); gain.connect(ac.destination)
+      const presets: Record<string, { f: number; f2: number; d: number; t: OscillatorType }> = {
+        click: { f: 880, f2: 440, d: 0.08, t: 'square' },
+        laser: { f: 1200, f2: 200, d: 0.18, t: 'sawtooth' },
+        chime: { f: 660, f2: 990, d: 0.4, t: 'sine' },
+        applause: { f: 300, f2: 120, d: 0.3, t: 'triangle' },
+        whoosh: { f: 200, f2: 800, d: 0.25, t: 'sine' },
+      }
+      const p = presets[type] || presets.click
+      osc.type = p.t
+      osc.frequency.setValueAtTime(p.f, now)
+      osc.frequency.exponentialRampToValueAtTime(Math.max(40, p.f2), now + p.d)
+      gain.gain.setValueAtTime(0.001, now)
+      gain.gain.exponentialRampToValueAtTime(0.25, now + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + p.d)
+      osc.start(now); osc.stop(now + p.d + 0.02)
+    } catch { /* 忽略音频错误 */ }
+  }
+
   // 动画操作
   const addAnimation = (effect: string, category: string) => {
-    const target = `shape_${current.shapes.length}` // 简化：指向最后一个形状
-    const newAnim: AnimItem = { target, effect, category, delay: current.animations.length * 300 }
+    recordHistory(slides)
+    const targetIdx = selectedEl?.type === 'shape' ? selectedEl.index : current.shapes.length - 1
+    const target = `shape_${targetIdx}`
+    const newAnim: AnimItem = { target, effect, category, delay: current.animations.length * 300, sound: pendingSound }
     updateActive({ animations: [...current.animations, newAnim] })
     setShowAnimPanel(false)
   }
-  const removeAnimation = (idx: number) => { updateActive({ animations: current.animations.filter((_, i) => i !== idx) }) }
+  const removeAnimation = (idx: number) => { recordHistory(slides); updateActive({ animations: current.animations.filter((_, i) => i !== idx) }) }
 
   // 放映控制
-  const startPresent = () => { setPresenting(true); setPresentSlide(active) }
-  const nextPresent = () => { if (presentSlide < slides.length - 1) setPresentSlide(presentSlide + 1); else setPresenting(false) }
-  const prevPresent = () => { if (presentSlide > 0) setPresentSlide(presentSlide - 1) }
+  const [presentAnimStep, setPresentAnimStep] = useState(0)
+  const startPresent = () => { setPresenting(true); setPresentSlide(active); setPresentAnimStep(0) }
+  const entranceAnimOf = (slide: Slide) => slide.animations.filter(a => a.category === 'entrance')
+  const nextPresent = () => {
+    const ent = entranceAnimOf(presentingSlide)
+    if (presentAnimStep < ent.length) {
+      const step = presentAnimStep
+      setPresentAnimStep(step + 1)
+      playSound(ent[step]?.sound)
+    } else if (presentSlide < slides.length - 1) {
+      setPresentSlide(presentSlide + 1); setPresentAnimStep(0)
+    } else {
+      setPresenting(false)
+    }
+  }
+  const prevPresent = () => { if (presentAnimStep > 0) setPresentAnimStep(0); else if (presentSlide > 0) { setPresentSlide(presentSlide - 1); setPresentAnimStep(0) } }
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('slide.ribbon.home') }, { id: 'insert', label: t('slide.ribbon.insert') }, { id: 'design', label: t('slide.ribbon.design') },
@@ -215,17 +339,17 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
       const dy = e.clientY - dragInfo.startY
       if (selectedEl.type === 'shape') {
         if (dragInfo.mode === 'move') {
-          updateShape(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 4.5) })
+          updateShape(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 8) }, false)
         } else if (dragInfo.mode === 'resize') {
-          updateShape(selectedEl.index, { w: Math.max(20, dragInfo.origX + dx * 8), h: Math.max(20, dragInfo.origY + dy * 4.5) })
+          updateShape(selectedEl.index, { w: Math.max(20, dragInfo.origX + dx * 8), h: Math.max(20, dragInfo.origY + dy * 8) }, false)
         } else if (dragInfo.mode === 'rotate') {
-          updateShape(selectedEl.index, { rotation: dragInfo.origX + dx })
+          updateShape(selectedEl.index, { rotation: dragInfo.origX + dx }, false)
         }
       } else {
         if (dragInfo.mode === 'move') {
-          updateArtText(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 4.5) })
+          updateArtText(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 8) }, false)
         } else if (dragInfo.mode === 'rotate') {
-          updateArtText(selectedEl.index, { rotation: dragInfo.origX + dx })
+          updateArtText(selectedEl.index, { rotation: dragInfo.origX + dx }, false)
         }
       }
     }
@@ -235,16 +359,28 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [dragInfo, selectedEl, active])
 
-  // Escape 关闭所有弹出面板 或 退出放映模式
+  // Escape 关闭所有弹出面板 或 退出放映模式；Ctrl+Z/Ctrl+Y 撤销重做
   useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      if (presenting) { setPresenting(false); e.preventDefault(); return }
-      if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (presenting) { setPresenting(false); e.preventDefault(); return }
+        if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (e.shiftKey) redo(); else undo()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        redo()
+      }
     }
-    window.addEventListener('keydown', onEsc)
-    return () => window.removeEventListener('keydown', onEsc)
-  }, [anyPanelOpen, presenting])
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [anyPanelOpen, presenting, past.length, future.length])
+
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)', position: 'relative' }}>
@@ -268,8 +404,37 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
       {/* Ribbon 内容区 */}
       <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
+          <RibbonGroup label={t('slide.edit')}>
+            <RibbonButton icon="↶" label={t('slide.undo')} onClick={undo} disabled={!past.length} />
+            <RibbonButton icon="↷" label={t('slide.redo')} onClick={redo} disabled={!future.length} />
+          </RibbonGroup>
           <RibbonGroup label={t('slide.slides')}>
-            <RibbonButton icon="+" label={t('slide.new')} onClick={addSlide} />
+            <div className="relative">
+              <RibbonButton icon="＋" label={t('slide.new')} onClick={() => setShowInsertSlide(v => !v)} />
+              {showInsertSlide && (
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.5rem', zIndex: 50, width: 220 }}>
+                  <div className="text-xs mb-1" style={{ color: 'var(--color-text-muted)' }}>{t('slide.insertSlideTip')}</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button onClick={() => insertSlide(active, 'title')} className="ribbon-menu-item" style={{ textAlign: 'left' }}>
+                      <div className="font-semibold text-sm">🎬 {t('slide.layoutTitle')}</div>
+                      <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{t('slide.layoutTitleDesc')}</div>
+                    </button>
+                    <button onClick={() => insertSlide(active, 'section')} className="ribbon-menu-item" style={{ textAlign: 'left' }}>
+                      <div className="font-semibold text-sm">📑 {t('slide.layoutSection')}</div>
+                      <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{t('slide.layoutSectionDesc')}</div>
+                    </button>
+                    <button onClick={() => insertSlide(active, 'content')} className="ribbon-menu-item" style={{ textAlign: 'left' }}>
+                      <div className="font-semibold text-sm">📄 {t('slide.layoutContent')}</div>
+                      <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{t('slide.layoutContentDesc')}</div>
+                    </button>
+                    <button onClick={() => insertSlide(active, 'blank')} className="ribbon-menu-item" style={{ textAlign: 'left' }}>
+                      <div className="font-semibold text-sm">⬜ {t('slide.layoutBlank')}</div>
+                      <div className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>{t('slide.layoutBlankDesc')}</div>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <RibbonButton icon="⎘" label={t('slide.copy')} onClick={() => duplicateSlide(active)} />
             <RibbonButton icon="✕" label={t('slide.delete')} onClick={() => deleteSlide(active)} disabled={slides.length <= 1} />
           </RibbonGroup>
@@ -286,7 +451,7 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
                     {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
                       <button key={c} onClick={() => {
                         if (!selectedEl) { alert('请先选择元素'); closeAllPanels(); return }
-                        if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fill: c })
+                        if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fontColor: c })
                         else updateArtText(selectedEl.index, { color: c })
                         closeAllPanels()
                       }} className="w-6 h-6 rounded-md border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} />
@@ -295,11 +460,33 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
                 </div>
               )}
             </div>
+            {/* 字号调整：放大 / 缩小 */}
+            <RibbonButton icon="A+" label={t('slide.fontSizeUp')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontSize: (sh.fontSize || 16) + 2 }) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { fontSize: (at.fontSize || 36) + 2 }) } }} />
+            <RibbonButton icon="A-" label={t('slide.fontSizeDown')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontSize: Math.max(6, (sh.fontSize || 16) - 2) }) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { fontSize: Math.max(8, (at.fontSize || 36) - 2) }) } }} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
-            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; alert('左对齐已应用于选中元素') }} />
-            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; alert('居中对齐已应用于选中元素') }} />
-            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; alert('右对齐已应用于选中元素') }} />
+            {/* 行距 */}
+            <div className="flex items-center gap-0.5">
+              <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('slide.lineSpacing')}</span>
+              <select value={current.shapes[selectedEl?.type === 'shape' ? selectedEl.index : 0]?.lineHeight || 1} onChange={(e) => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') updateShape(selectedEl.index, { lineHeight: parseFloat(e.target.value) || 1 }) }} className="text-xs rounded-md px-1 py-1 ribbon-input" style={{ width: 64, height: 26, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
+                <option value="1">1.0</option>
+                <option value="1.15">1.15</option>
+                <option value="1.5">1.5</option>
+                <option value="2">2.0</option>
+                <option value="2.5">2.5</option>
+              </select>
+            </div>
+            {/* 缩进 */}
+            <RibbonButton icon="→|" label={t('slide.indentMore')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { indent: (sh.indent || 0) + 1 }) } }} />
+            <RibbonButton icon="|←" label={t('slide.indentLess')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { indent: Math.max(0, (sh.indent || 0) - 1) }) } }} />
+            {/* 项目符号 / 编号 */}
+            <RibbonButton icon="•" label={t('slide.bulletList')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { bullet: !sh.bullet, numbered: false }) } }} />
+            <RibbonButton icon="1." label={t('slide.numberedList')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { numbered: !sh.numbered, bullet: false }) } }} />
+          </RibbonGroup>
+          <RibbonGroup label={t('slide.paragraph')}>
+            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { updateShape(selectedEl.index, { textAlign: 'left' }) } else { alert('左对齐已应用于选中元素') } }} />
+            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { updateShape(selectedEl.index, { textAlign: 'center' }) } else { alert('居中对齐已应用于选中元素') } }} />
+            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { updateShape(selectedEl.index, { textAlign: 'right' }) } else { alert('右对齐已应用于选中元素') } }} />
           </RibbonGroup>
         </>)}
 
@@ -364,10 +551,10 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
           <RibbonGroup label={t('slide.flowchart')}>
             <RibbonButton icon="🔀" label={t('slide.flowchart')} onClick={() => {
               const newShapes: ShapeItem[] = [
-                { type: 'roundRect', x: 100, y: 200, w: 160, h: 60, fill: '#4f46e5', text: t('slide.flow.start'), shadow: true, glow: false, gradient: '', rotation: 0 },
-                { type: 'rect', x: 320, y: 200, w: 160, h: 60, fill: '#10b981', text: t('slide.flow.process'), shadow: true, glow: false, gradient: '', rotation: 0 },
-                { type: 'diamond', x: 540, y: 200, w: 160, h: 60, fill: '#f59e0b', text: t('slide.flow.decision'), shadow: true, glow: false, gradient: '', rotation: 0 },
-                { type: 'roundRect', x: 760, y: 200, w: 160, h: 60, fill: '#ef4444', text: t('slide.flow.end'), shadow: true, glow: false, gradient: '', rotation: 0 },
+                { type: 'roundRect', x: 20, y: 200, w: 150, h: 60, fill: '#4f46e5', text: t('slide.flow.start'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'rect', x: 220, y: 200, w: 150, h: 60, fill: '#10b981', text: t('slide.flow.process'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'diamond', x: 420, y: 200, w: 150, h: 60, fill: '#f59e0b', text: t('slide.flow.decision'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'roundRect', x: 620, y: 200, w: 160, h: 60, fill: '#ef4444', text: t('slide.flow.end'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
               ]
               updateActive({ shapes: [...current.shapes, ...newShapes] })
             }} />
@@ -377,7 +564,19 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
             <RibbonButton icon="⚓" label={t('slide.bookmark')} onClick={() => alert(t('slide.bookmark'))} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.text')}>
-            <RibbonButton icon="📝" label={t('slide.footnote')} onClick={() => { const n = prompt(t('slide.prompt.notes'), current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
+            <RibbonButton icon="📝" label={t('slide.footnote')} onClick={() => {
+              const n = prompt(t('slide.prompt.notes'), current.notes || '')
+              if (n === null) return
+              const txt = n.trim()
+              if (!txt) return
+              const shapes = current.shapes || []
+              const idx = shapes.findIndex(s => s.isFootnote)
+              if (idx >= 0) {
+                updateShape(idx, { text: txt })
+              } else {
+                updateActive({ shapes: [...shapes, { type: 'rect', x: 16, y: 432, w: 776, h: 16, fill: '', text: txt, fontSize: 10, fontBold: false, fontColor: '#64748b', textAlign: 'left', isFootnote: true } as ShapeItem] })
+              }
+            }} active={!!current.notes} />
           </RibbonGroup>
         </>)}
 
@@ -562,6 +761,18 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
                   <div className="grid grid-cols-3 gap-1">
                     {EXIT_ANIMS.map(a => <button key={a.effect} onClick={() => addAnimation(a.effect, 'exit')} className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{a.name}</button>)}
                   </div>
+                  <div className="text-[10px] font-bold uppercase mt-3 mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('slide.sound')}</div>
+                  <div className="flex items-center gap-1">
+                    <select value={pendingSound} onChange={(e) => setPendingSound(e.target.value)} className="text-xs rounded-md px-1 py-1 ribbon-input" style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
+                      <option value="none">{t('slide.soundNone')}</option>
+                      <option value="click">{t('slide.soundClick')}</option>
+                      <option value="laser">{t('slide.soundLaser')}</option>
+                      <option value="chime">{t('slide.soundChime')}</option>
+                      <option value="applause">{t('slide.soundApplause')}</option>
+                      <option value="whoosh">{t('slide.soundWhoosh')}</option>
+                    </select>
+                    <button onClick={() => playSound(pendingSound)} className="px-2 py-1 text-xs rounded-md" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)' }}>▶</button>
+                  </div>
                 </div>
               )}
             </div>
@@ -702,9 +913,9 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
 
         {/* 中间画布 */}
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
-          <div className="bg-white shadow-xl rounded-lg w-full animate-fade-in relative"
-            style={{ aspectRatio: '16 / 9', background: current.bg, maxWidth: '900px', boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', zoom: `${zoom}%` }}>
-            <div className="h-full flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={() => setSelectedEl(null)}>
+          <div className="bg-white shadow-xl rounded-lg animate-fade-in relative overflow-hidden"
+            style={{ width: 808, height: 454, background: current.bg, boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', transform: `scale(${zoom / 100})`, transformOrigin: 'center', flexShrink: 0 }}>
+            <div className="absolute inset-0 flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={() => setSelectedEl(null)}>
               {/* 文字内容 */}
               {current.layout === 'title' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10">
@@ -726,16 +937,17 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
               {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
-                  onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
+                  onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
                   style={{
-                    left: `${sh.x / 8}px`, top: `${sh.y / 4.5}px`, width: `${sh.w / 8}px`, height: `${sh.h / 4.5}px`,
+                    left: `${sh.x / 8}px`, top: `${sh.y / 8}px`, width: `${sh.w / 8}px`, height: `${sh.h / 8}px`,
                     transform: sh.rotation ? `rotate(${sh.rotation}deg)` : '',
                     zIndex: 20,
                     outline: selectedEl?.type === 'shape' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none',
                     outlineOffset: '2px',
                   }}>
                   {/* 形状内容层 — clip-path 只作用于形状本身，不影响手柄 */}
-                  <div className="absolute inset-0 flex items-center justify-center" style={{
+                  <div className="absolute inset-0 flex flex-col" style={{
+                    justifyContent: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
                     background: sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill,
                     backgroundSize: sh.fill.startsWith('url') ? 'cover' : undefined,
                     backgroundRepeat: sh.fill.startsWith('url') ? 'no-repeat' : undefined,
@@ -754,21 +966,34 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
                     boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
                     filter: sh.glow ? `drop-shadow(0 0 8px ${sh.fill})` : 'none',
                     border: sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none',
-                    color: '#ffffff', fontSize: '12px', fontWeight: 600,
+                    color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
+                    fontSize: sh.fontSize ? `${sh.fontSize}px` : '12px',
+                    fontWeight: sh.fontBold ? 700 : 400,
+                    textAlign: sh.textAlign || 'center',
+                    lineHeight: sh.lineHeight || 1.2,
+                    paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined,
+                    width: '100%',
+                    display: 'block',
                   }}>
-                    {sh.text && <span style={{ pointerEvents: 'none', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>{sh.text}</span>}
+                    {sh.text && <span style={{ pointerEvents: 'none', display: 'block', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {sh.bullet
+                        ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
+                        : sh.numbered
+                        ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
+                        : sh.text}
+                    </span>}
                   </div>
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
-                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
-                    <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
                   </>}
                 </div>
               ))}
 
               {/* 艺术字渲染层 — zIndex 21 > 文字内容 z-10 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 4.5}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
                   <span style={{
                     fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700,
                     color: at.color,
@@ -780,7 +1005,7 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
                     WebkitTextStroke: at.outline ? `1px #${at.outline}` : 'none',
                   }}>{at.text}</span>
                   <button onClick={() => removeArtText(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
-                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
+                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
                 </div>
               ))}
 
@@ -811,22 +1036,27 @@ export function SlideEditor({ initialSlides }: { initialSlides?: { title: string
       {/* 全屏放映模式 */}
       {presenting && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: '#000' }} onClick={nextPresent}>
-          <div className="w-full h-full relative" style={{ background: presentingSlide.bg, maxWidth: '100vw', maxHeight: '100vh', aspectRatio: '16/9' }}>
-            <div className="h-full flex flex-col justify-center items-center p-12 text-center">
+          <div className="relative overflow-hidden" style={{ width: 808, height: 454, background: presentingSlide.bg, transform: `scale(${Math.min(window.innerWidth / 808, window.innerHeight / 454)})`, transformOrigin: 'center' }}>
+            <div className="absolute inset-0 flex flex-col justify-center items-center p-12 text-center">
               <h1 className="text-5xl font-bold mb-6" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{presentingSlide.title}</h1>
               {presentingSlide.content && <p className="text-xl" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#cbd5e1' : '#64748b' }}>{presentingSlide.content}</p>}
               {presentingSlide.shapes.map((sh, i) => (
-                <div key={i} className="absolute flex items-center justify-center" style={{
-                  left: `${sh.x / 8 * 2}px`, top: `${sh.y / 4.5 * 2}px`, width: `${sh.w / 8 * 2}px`, height: `${sh.h / 4.5 * 2}px`,
+                <div key={i} className="absolute flex flex-col" style={{
+                  left: `${sh.x / 8}px`, top: `${sh.y / 8}px`, width: `${sh.w / 8}px`, height: `${sh.h / 8}px`,
+                  justifyContent: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
                   background: sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill,
                   borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : '0',
                   clipPath: sh.type === 'triangle' ? 'polygon(50% 0, 100% 100%, 0 100%)' : sh.type === 'diamond' ? 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)' : sh.type === 'rightArrow' ? 'polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%)' : sh.type === 'star5' ? 'polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' : undefined,
-                  boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none', color: '#fff', fontSize: '18px', fontWeight: 600,
-                }}>{sh.text}</div>
+                  boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none', color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#fff' : '#1f2937'), fontSize: sh.fontSize ? `${sh.fontSize}px` : '18px', fontWeight: sh.fontBold ? 700 : 400, textAlign: sh.textAlign || 'center', lineHeight: sh.lineHeight || 1.2, paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                }}>{sh.bullet
+                  ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
+                  : sh.numbered
+                  ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
+                  : sh.text}</div>
               ))}
               {presentingSlide.artTexts.map((at, i) => (
-                <div key={i} className="absolute" style={{ left: `${at.x / 8 * 2}px`, top: `${at.y / 4.5 * 2}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '' }}>
-                  <span style={{ fontSize: `${at.fontSize}px`, fontWeight: 700, color: at.color, textShadow: at.shadow ? '2px 2px 6px rgba(0,0,0,0.3)' : 'none' }}>{at.text}</span>
+                <div key={i} className="absolute" style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '' }}>
+                  <span style={{ fontSize: `${at.fontSize / 2}px`, fontWeight: 700, color: at.color, textShadow: at.shadow ? '2px 2px 6px rgba(0,0,0,0.3)' : 'none' }}>{at.text}</span>
                 </div>
               ))}
             </div>
