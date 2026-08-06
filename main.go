@@ -27,6 +27,8 @@ import (
 	"github.com/zai/samoffice/internal/dict/hunspell"
 	"github.com/zai/samoffice/internal/dict/userdict"
 	"github.com/zai/samoffice/internal/parser"
+	"github.com/zai/samoffice/internal/parser/pptx"
+	"github.com/zai/samoffice/internal/parser/xlsx"
 	"github.com/zai/samoffice/internal/server/api"
 	"go.uber.org/zap"
 	"golang.org/x/sys/windows"
@@ -381,6 +383,30 @@ func (a *App) WriteDocument(path, format string, document core.Document) error {
 		path = path + ext
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// === Excel 原生读写（保留格式：值/字体/填充/边框/对齐/合并） ===
+
+// ReadXLSX 读取 xlsx 为 JSON（完整保留单元格格式与合并信息）
+func (a *App) ReadXLSX(path string) (string, error) {
+	return xlsx.ReadXLSX(path)
+}
+
+// WriteXLSX 将前端传来的 JSON 写成真正的 xlsx（保留格式与合并）
+func (a *App) WriteXLSX(path, jsonStr string) error {
+	return xlsx.WriteXLSX(path, jsonStr)
+}
+
+// WriteTextFile 把纯文本（Markdown / HTML / TXT 等）原样写入磁盘。
+// 用于"保存"当前 Markdown/HTML 选项卡的文件，保留原文而非重新渲染。
+func (a *App) WriteTextFile(path, content string) error {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// WritePPTX 把前端传来的幻灯片 JSON 写成真正的 .pptx（自研 OOXML 写入器）。
+func (a *App) WritePPTX(path, jsonStr string) error {
+	return pptx.WritePPTX(path, jsonStr)
 }
 
 // === 内嵌 HTTP 服务 ===

@@ -195,6 +195,16 @@ export interface Backend {
   saveFileDialog(defaultName: string, format: string): Promise<string> // 返回选中路径，取消返回 ''
   writeDocument(path: string, format: string, document: Document): Promise<void>
 
+  // Excel 原生读写（保留格式：值/字体/填充/边框/对齐/合并/行列）
+  readXLSX(path: string): Promise<string>       // 返回 JSON {sheets:[{name,rows,cols,cells}]}
+  writeXLSX(path: string, json: string): Promise<void>
+
+  // 纯文本（Markdown / HTML / TXT 等）原样写盘
+  writeTextFile(path: string, content: string): Promise<void>
+
+  // 把前端幻灯片 JSON 写成真正的 .pptx
+  writePPTX(path: string, json: string): Promise<void>
+
   spellCheck(text: string, lang: string): Promise<SpellError[]>
   suggest(word: string, lang: string, n?: number): Promise<Candidate[]>
   learnWord(word: string, lang: string, source?: string): Promise<void>

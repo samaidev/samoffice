@@ -1,4 +1,4 @@
-import { useState, useMemo, memo, useEffect } from 'react'
+import { useState, useMemo, memo, useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
@@ -59,6 +59,7 @@ interface ShapeItem {
   indent?: number
   bullet?: boolean
   numbered?: boolean
+  media?: { type: 'video' | 'audio'; src: string; poster?: string }
   vAlign?: 'top' | 'middle' | 'bottom'
   isFootnote?: boolean
   glowColor?: string; glowRadius?: number
@@ -96,8 +97,20 @@ function RibbonGroup({ label, children }: any) {
     </div>
   )
 }
+function MenuItem({ label, icon, onClick, disabled, danger }: any) {
+  return (
+    <button disabled={disabled} onClick={onClick}
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors disabled:opacity-40"
+      style={{ color: danger ? '#e11d48' : 'var(--color-text)', background: 'transparent' }}
+      onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+      <span style={{ width: 16, textAlign: 'center', opacity: 0.8 }}>{icon}</span>
+      <span>{label}</span>
+    </button>
+  )
+}
 
-export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) {
+export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?: SlideData[]; onSlidesChange?: (slides: SlideData[]) => void }) {
   const { t } = useI18n()
 
   // 将真实 PPTX 解析出的 EMU 形状转换为内部 ShapeItem（画布 808×454 逻辑，x/8 → px）
@@ -188,6 +201,12 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
   const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
+  // 右键上下文菜单 + 剪切板（对标 MS PPT 元素右键菜单）
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'shape' | 'art'; index: number } | null>(null)
+  const clipboardRef = useRef<{ type: 'shape' | 'art'; data: ShapeItem | ArtTextItem } | null>(null)
+  // 文本内联编辑（双击元素编辑文字，对标 MS PPT）
+  const [editing, setEditing] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
+  const editAreaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // 撤销/重做历史栈
   const [past, setPast] = useState<Slide[][]>([])
@@ -233,6 +252,75 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
   const current = slides[active] || slides[0]
   const isDark = current.bg === '#1e293b' || current.bg === '#312e81'
 
+  // 把内部 Slide[]（px 坐标）转换为可保存的 SlideData[]（EMU 坐标），供 App 保存 pptx
+  const slidesToData = useMemo(() => {
+    const PAGE_W = 12192000
+    const PAGE_H = 6858000
+    const SX = PAGE_W / 6464 // EMU per px (x/8 → 6464 单位 = 808px)
+    const SY = PAGE_H / 3632 // EMU per px (y/4.5 → 3632 单位 = 454px)
+    const toEMUx = (px: number) => Math.round(px * SX)
+    const toEMUy = (py: number) => Math.round(py * SY)
+    return (src: Slide[]): SlideData[] => src.map((s) => {
+      const shapes: SlideShape[] = []
+      for (const sh of s.shapes) {
+        const isPic = typeof sh.fill === 'string' && sh.fill.startsWith('url(')
+        let img: string | undefined
+        if (isPic) {
+          const m = sh.fill.match(/^url\(\s*["']?(.*?)["']?\s*\)$/)
+          img = m ? m[1] : undefined
+        }
+        shapes.push({
+          kind: isPic ? 'pic' : 'text',
+          type: sh.type,
+          x: toEMUx(sh.x),
+          y: toEMUy(sh.y),
+          cx: toEMUx(sh.w),
+          cy: toEMUy(sh.h),
+          fill: isPic ? undefined : (sh.fill || ''),
+          text: sh.text,
+          color: sh.fontColor,
+          sizePt: sh.fontSize,
+          bold: sh.fontBold,
+          align: sh.textAlign === 'left' ? 'l' : sh.textAlign === 'right' ? 'r' : sh.textAlign === 'center' ? 'c' : 'l',
+          vanchor: sh.vAlign === 'top' ? 't' : sh.vAlign === 'bottom' ? 'b' : 'ctr',
+          img,
+        })
+      }
+      // 艺术字也作为文本形状保存
+      for (const art of s.artTexts) {
+        shapes.push({
+          kind: 'text',
+          type: 'rect',
+          x: toEMUx(art.x),
+          y: toEMUy(art.y),
+          cx: toEMUx(art.w),
+          cy: toEMUy(art.h),
+          fill: '',
+          text: art.text,
+          color: art.color,
+          sizePt: art.fontSize,
+          bold: true,
+          align: 'c',
+          vanchor: 'ctr',
+        })
+      }
+      return {
+        title: s.title,
+        content: s.content,
+        notes: s.notes,
+        bg: s.bg,
+        shapes,
+        pageW: PAGE_W,
+        pageH: PAGE_H,
+      }
+    })
+  }, [])
+
+  // 幻灯片变化时回传给 App（用于保存）
+  useEffect(() => {
+    onSlidesChange?.(slidesToData(slides))
+  }, [slides, onSlidesChange, slidesToData])
+
   // 形状操作
   const addShape = (type: string) => {
     recordHistory(slides)
@@ -265,6 +353,86 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
     if (record) recordHistory(slides)
     const newArts = current.artTexts.map((a, i) => i === idx ? { ...a, ...patch } : a)
     updateActive({ artTexts: newArts })
+  }
+
+  // 叠放层次（z-order，对标 MS PPT：置于顶层/底层、上移/下移一层）
+  const reorderShape = (idx: number, to: 'front' | 'back' | 'forward' | 'backward') => {
+    recordHistory(slides)
+    const shapes = [...current.shapes]
+    const [item] = shapes.splice(idx, 1)
+    if (to === 'front') shapes.push(item)
+    else if (to === 'back') shapes.unshift(item)
+    else if (to === 'forward') shapes.splice(Math.min(idx + 1, shapes.length), 0, item)
+    else if (to === 'backward') shapes.splice(Math.max(idx - 1, 0), 0, item)
+    updateActive({ shapes })
+  }
+  const reorderArt = (idx: number, to: 'front' | 'back' | 'forward' | 'backward') => {
+    recordHistory(slides)
+    const arts = [...current.artTexts]
+    const [item] = arts.splice(idx, 1)
+    if (to === 'front') arts.push(item)
+    else if (to === 'back') arts.unshift(item)
+    else if (to === 'forward') arts.splice(Math.min(idx + 1, arts.length), 0, item)
+    else if (to === 'backward') arts.splice(Math.max(idx - 1, 0), 0, item)
+    updateActive({ artTexts: arts })
+  }
+
+  // 剪切 / 复制 / 粘贴（元素级，对标 MS PPT 右键菜单）
+  const copySelected = () => {
+    if (!selectedEl) return
+    if (selectedEl.type === 'shape') clipboardRef.current = { type: 'shape', data: { ...current.shapes[selectedEl.index] } }
+    else clipboardRef.current = { type: 'art', data: { ...current.artTexts[selectedEl.index] } }
+  }
+  const cutSelected = () => {
+    if (!selectedEl) return
+    copySelected()
+    if (selectedEl.type === 'shape') removeShape(selectedEl.index)
+    else removeArtText(selectedEl.index)
+    setSelectedEl(null)
+  }
+  const pasteClipboard = () => {
+    const clip = clipboardRef.current
+    if (!clip) return
+    recordHistory(slides)
+    if (clip.type === 'shape') {
+      const copy = { ...(clip.data as ShapeItem), x: (clip.data as ShapeItem).x + 16, y: (clip.data as ShapeItem).y + 16 }
+      const shapes = [...current.shapes, copy]
+      updateActive({ shapes })
+      setSelectedEl({ type: 'shape', index: shapes.length - 1 })
+    } else {
+      const copy = { ...(clip.data as ArtTextItem), x: (clip.data as ArtTextItem).x + 16, y: (clip.data as ArtTextItem).y + 16 }
+      const arts = [...current.artTexts, copy]
+      updateActive({ artTexts: arts })
+      setSelectedEl({ type: 'art', index: arts.length - 1 })
+    }
+  }
+
+  // 内联文本编辑：双击文字元素进入编辑，对标 MS PPT 直接改字
+  const isTextEditable = (type: 'shape' | 'art', index: number) => {
+    if (type === 'art') return true
+    const sh = current.shapes[index]
+    return sh && !sh.media // 图片/视频等媒体无文字
+  }
+  const startEdit = (type: 'shape' | 'art', index: number, e?: React.MouseEvent) => {
+    if (!isTextEditable(type, index)) return
+    e?.stopPropagation()
+    setSelectedEl({ type, index })
+    setEditing({ type, index })
+    setTimeout(() => {
+      editAreaRef.current?.focus()
+      editAreaRef.current?.select()
+    }, 0)
+  }
+  const commitEdit = () => {
+    if (!editing) return
+    const val = editAreaRef.current?.value ?? ''
+    if (editing.type === 'shape') {
+      const sh = current.shapes[editing.index]
+      if (sh) updateShape(editing.index, { text: val } as any)
+    } else {
+      updateArtText(editing.index, { text: val })
+    }
+    setEditing(null)
   }
 
   // 声音特效引擎（Web Audio 合成，无需外部资源）
@@ -380,6 +548,23 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [anyPanelOpen, presenting, past.length, future.length])
+
+  // 点击/滚动/ESC 关闭右键菜单
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = () => setContextMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('blur', close)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null) }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('blur', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [contextMenu])
 
 
   return (
@@ -547,6 +732,38 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
               input.click()
             }} />
             <RibbonButton icon="📊" label={t('slide.chart')} onClick={() => alert(t('slide.chart'))} />
+            <RibbonButton icon="🎬" label={t('slide.video')} onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'video/*'
+              input.onchange = () => {
+                const file = input.files?.[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = () => {
+                  recordHistory(slides)
+                  updateActive({ shapes: [...current.shapes, { type: 'rect', x: 160, y: 120, w: 480, h: 270, fill: '', text: '', shadow: false, glow: false, gradient: '', rotation: 0, media: { type: 'video', src: String(reader.result) } } as ShapeItem] })
+                }
+                reader.readAsDataURL(file)
+              }
+              input.click()
+            }} />
+            <RibbonButton icon="🔊" label={t('slide.audio')} onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'audio/*'
+              input.onchange = () => {
+                const file = input.files?.[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = () => {
+                  recordHistory(slides)
+                  updateActive({ shapes: [...current.shapes, { type: 'rect', x: 280, y: 200, w: 240, h: 48, fill: '#1f2937', text: file.name, shadow: false, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 11, media: { type: 'audio', src: String(reader.result) } } as ShapeItem] })
+                }
+                reader.readAsDataURL(file)
+              }
+              input.click()
+            }} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.flowchart')}>
             <RibbonButton icon="🔀" label={t('slide.flowchart')} onClick={() => {
@@ -852,31 +1069,109 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
         editorType="ppt"
         printSelector=".slide-canvas"
         renderPreview={(settings) => {
-          const slidesToShow = settings.pptContent === 'handout'
-            ? slides.slice(0, settings.slidesPerPage * 2)
-            : slides.slice(0, 2)
-          return (
-            <div style={{ color: '#000' }}>
-              {settings.pptContent === 'notes' ? (
-                <div className="text-[8px]">
-                  <div className="font-bold mb-1">{slides[0]?.title}</div>
-                  <div className="text-[7px] text-gray-600">{slides[0]?.notes || t('slide.noAnim')}</div>
-                </div>
-              ) : settings.pptContent === 'outline' ? (
-                <div className="text-[8px] space-y-0.5">
-                  {slides.map((s, i) => <div key={i}><b>{i + 1}.</b> {s.title}</div>)}
-                </div>
-              ) : (
-                <div className={`grid gap-1 ${settings.slidesPerPage <= 1 ? 'grid-cols-1' : settings.slidesPerPage <= 2 ? 'grid-cols-1' : settings.slidesPerPage <= 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
-                  {slidesToShow.map((s, i) => (
-                    <div key={i} className="border p-1 text-[6px]" style={{ background: s.bg, aspectRatio: '16/9' }}>
-                      <div className="font-bold truncate">{s.title}</div>
-                      <div className="text-[5px] text-gray-600 truncate">{s.content}</div>
+          const per = settings.slidesPerPage || 1
+          const showNotes = settings.pptContent === 'notes'
+          const showOutline = settings.pptContent === 'outline'
+          // 网格列数（对标 MS PPT 讲义布局：2→1列, 3→3列, 4→2列, 6→3列, 9→3列）
+          const cols = per <= 1 ? 1 : per === 2 ? 1 : per === 3 ? 3 : per === 4 ? 2 : per === 6 ? 3 : 3
+          // 缩略图缩放（画布 808x454 → 约 86px 宽）
+          const K = 0.106
+
+          const clipFor = (type: string) => {
+            switch (type) {
+              case 'rect': return 'inset(0 0 0 0)'
+              case 'roundRect': return 'inset(12% 8% 12% 8% round 18px)'
+              case 'ellipse': return 'ellipse(50% 50% at 50% 50%)'
+              case 'triangle': return 'polygon(50% 6%, 94% 94%, 6% 94%)'
+              case 'diamond': return 'polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%)'
+              case 'rightArrow': return 'polygon(0% 35%, 62% 35%, 62% 8%, 100% 50%, 62% 92%, 62% 65%, 0% 65%)'
+              case 'star5': return 'polygon(50% 4%, 61% 38%, 98% 38%, 68% 60%, 79% 95%, 50% 73%, 21% 95%, 32% 60%, 2% 38%, 39% 38%)'
+              case 'hexagon': return 'polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0% 50%)'
+              case 'pentagon': return 'polygon(50% 6%, 96% 40%, 78% 95%, 22% 95%, 4% 40%)'
+              case 'heart': return 'path("M50,88 C0,55 8,5 50,30 C92,5 100,55 50,88 Z")'
+              case 'cloud': return 'path("M25,70 a18,18 0 1,1 18,-22 a16,16 0 1,1 30,8 a16,16 0 1,1 -6,24 Z")'
+              case 'callout': return 'path("M12,8 h64 a8,8 0 0,1 8,8 v34 a8,8 0 0,1 -8,8 h-30 l-14,16 v-16 h-20 a8,8 0 0,1 -8,-8 v-34 a8,8 0 0,1 8,-8 Z")'
+              default: return 'inset(0 0 0 0)'
+            }
+          }
+
+          // 单张幻灯片缩略图（真实渲染形状 / 文字 / 图片）
+          const SlideMini = ({ slide }: { slide: Slide }) => {
+            const isDark = slide.bg === '#1e293b' || slide.bg === '#312e81'
+            return (
+              <div
+                style={{
+                  width: 808 * K, height: 454 * K, overflow: 'hidden', position: 'relative',
+                  background: slide.bg, border: '1px solid #e5e7eb', color: isDark ? '#f1f5f9' : '#0f172a',
+                  flex: '0 0 auto',
+                }}
+              >
+                <div style={{ width: 808, height: 454, transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative' }}>
+                  <div style={{ position: 'absolute', inset: 0, padding: 40, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                    {slide.title && <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.12 }}>{slide.title}</div>}
+                    {slide.content && <div style={{ fontSize: 18, marginTop: 8, whiteSpace: 'pre-wrap', opacity: 0.85 }}>{slide.content}</div>}
+                  </div>
+                  {slide.shapes.map((sh, i) => {
+                    const isPic = typeof sh.fill === 'string' && sh.fill.startsWith('url(')
+                    const left = sh.x / 8, top = sh.y / 8, w = sh.w / 8, h = sh.h / 8
+                    if (isPic) {
+                      const m = sh.fill.match(/^url\(\s*["']?(.*?)["']?\s*\)$/)
+                      return <img key={i} src={m ? m[1] : ''} alt="" style={{ position: 'absolute', left, top, width: w, height: h, objectFit: 'cover' }} />
+                    }
+                    return (
+                      <div key={i} style={{ position: 'absolute', left, top, width: w, height: h, display: 'flex', alignItems: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center', justifyContent: sh.textAlign === 'left' ? 'flex-start' : sh.textAlign === 'right' ? 'flex-end' : 'center', textAlign: sh.textAlign || 'left', padding: 6, clipPath: clipFor(sh.type), overflow: 'hidden', background: sh.fill || 'transparent', color: sh.fontColor, fontWeight: sh.fontBold ? 700 : 400 }}>
+                        <span style={{ fontSize: Math.max(8, (sh.fontSize || 18) / 2.2) }}>{sh.text}</span>
+                      </div>
+                    )
+                  })}
+                  {slide.artTexts.map((at, i) => (
+                    <div key={'a' + i} style={{ position: 'absolute', left: at.x / 8, top: at.y / 8, color: at.color, fontWeight: 700, fontSize: Math.max(8, at.fontSize / 2.2), textAlign: 'center', maxWidth: at.w / 8, lineHeight: 1.05 }}>
+                      {at.text}
                     </div>
                   ))}
                 </div>
-              )}
-              <div className="text-[8px] text-gray-500 mt-1 text-center">- 1 -</div>
+              </div>
+            )
+          }
+
+          if (showNotes) {
+            return (
+              <div className="space-y-2">
+                {slides.map((s, i) => (
+                  <div key={i} className="p-2 border rounded" style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}>
+                    <div className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{s.title || `Slide ${i + 1}`}</div>
+                    <div className="text-xs mt-1 whitespace-pre-wrap" style={{ color: 'var(--color-text-muted)' }}>{s.notes || '—'}</div>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+          if (showOutline) {
+            return (
+              <div className="space-y-1">
+                {slides.map((s, i) => (
+                  <div key={i} className="text-xs" style={{ color: 'var(--color-text)' }}>{i + 1}. {s.title || `Slide ${i + 1}`}</div>
+                ))}
+              </div>
+            )
+          }
+
+          // 每页纸排 per 张，多页纸纵向堆叠（对标 MS PPT 讲义视图）
+          const papers: Slide[][] = []
+          for (let i = 0; i < slides.length; i += per) papers.push(slides.slice(i, i + per))
+          return (
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {papers.map((paper, pi) => (
+                <div key={pi} style={{ background: '#fff', border: '1px solid #d1d5db', boxShadow: '0 1px 3px rgba(0,0,0,0.12)', padding: 8, position: 'relative' }}>
+                  <div className="flex flex-wrap justify-center" style={{ gap: 6, gridTemplateColumns: `repeat(${cols}, auto)` }}>
+                    {paper.map((s, i) => <SlideMini key={i} slide={s} />)}
+                    {Array.from({ length: per - paper.length }).map((_, k) => (
+                      <div key={'e' + k} style={{ width: 808 * K, height: 454 * K, flex: '0 0 auto' }} />
+                    ))}
+                  </div>
+                  <div style={{ textAlign: 'center', fontSize: 9, color: '#6b7280', marginTop: 4 }}>- {pi + 1} -</div>
+                </div>
+              ))}
             </div>
           )
         }}
@@ -937,7 +1232,9 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
               {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
-                  onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
+                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
+                  onDoubleClick={(e) => { e.stopPropagation(); startEdit('shape', i) }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'shape', index: i }) }}
                   style={{
                     left: `${sh.x / 8}px`, top: `${sh.y / 8}px`, width: `${sh.w / 8}px`, height: `${sh.h / 8}px`,
                     transform: sh.rotation ? `rotate(${sh.rotation}deg)` : '',
@@ -975,13 +1272,21 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
                     width: '100%',
                     display: 'block',
                   }}>
-                    {sh.text && <span style={{ pointerEvents: 'none', display: 'block', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {sh.media && sh.media.type === 'video' && (
+                      <video src={sh.media.src} controls style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', pointerEvents: 'none' }} />
+                    )}
+                    {sh.media && sh.media.type === 'audio' && (
+                      <div className="w-full h-full flex items-center px-2"><audio src={sh.media.src} controls style={{ width: '100%', pointerEvents: 'none' }} /></div>
+                    )}
+                    {editing?.type === 'shape' && editing?.index === i ? (
+                      <textarea ref={editAreaRef} defaultValue={sh.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="w-full h-full outline-none bg-transparent resize-none" style={{ color: 'inherit', fontSize: 'inherit', fontWeight: 'inherit', textAlign: (sh.textAlign || 'center') as any, lineHeight: 'inherit', background: 'rgba(255,255,255,0.15)', padding: 2 }} />
+                    ) : sh.text && !(sh.media && (sh.media.type === 'video' || sh.media.type === 'audio')) && (<span style={{ pointerEvents: 'none', display: 'block', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       {sh.bullet
                         ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                         : sh.numbered
                         ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                         : sh.text}
-                    </span>}
+                    </span>)}
                   </div>
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
@@ -993,7 +1298,10 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
 
               {/* 艺术字渲染层 — zIndex 21 > 文字内容 z-10 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                  {editing?.type === 'art' && editing?.index === i ? (
+                    <textarea ref={editAreaRef} defaultValue={at.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="outline-none bg-transparent resize-none" style={{ fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700, color: at.color, textAlign: 'center', background: 'rgba(255,255,255,0.15)', padding: 2, minWidth: 80 }} />
+                  ) : (
                   <span style={{
                     fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700,
                     color: at.color,
@@ -1004,6 +1312,7 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
                     filter: at.glow ? `drop-shadow(0 0 6px ${at.color})` : 'none',
                     WebkitTextStroke: at.outline ? `1px #${at.outline}` : 'none',
                   }}>{at.text}</span>
+                  )}
                   <button onClick={() => removeArtText(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
                 </div>
@@ -1033,27 +1342,64 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
         <button onClick={startPresent} className="btn btn-primary btn-sm">▶ {t('slide.play')}</button>
       </div>
 
+      {/* 元素右键上下文菜单 — 对标 MS PPT（复制/剪切/粘贴、叠放层次等） */}
+      {contextMenu && (
+        <div className="fixed z-[100]" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="min-w-[180px] py-1 rounded-md shadow-lg border text-sm" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+            <MenuItem label={t('slide.editText')} icon="✎" onClick={() => { startEdit(contextMenu.type, contextMenu.index); setContextMenu(null) }} />
+            <div className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
+            <MenuItem label={t('slide.cut')} icon="✂" onClick={() => { cutSelected(); setContextMenu(null) }} />
+            <MenuItem label={t('slide.copy')} icon="⧉" onClick={() => { copySelected(); setContextMenu(null) }} />
+            <MenuItem label={t('slide.paste')} icon="📋" disabled={!clipboardRef.current} onClick={() => { pasteClipboard(); setContextMenu(null) }} />
+            <div className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
+            <div className="px-3 py-1 text-[11px] uppercase tracking-wide" style={{ color: 'var(--color-text-muted)' }}>{t('slide.layer')}</div>
+            <MenuItem label={t('slide.bringToFront')} icon="⤒" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'front'); else reorderArt(contextMenu.index, 'front'); setContextMenu(null) }} />
+            <MenuItem label={t('slide.bringForward')} icon="↑" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'forward'); else reorderArt(contextMenu.index, 'forward'); setContextMenu(null) }} />
+            <MenuItem label={t('slide.sendBackward')} icon="↓" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'backward'); else reorderArt(contextMenu.index, 'backward'); setContextMenu(null) }} />
+            <MenuItem label={t('slide.sendToBack')} icon="⤓" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'back'); else reorderArt(contextMenu.index, 'back'); setContextMenu(null) }} />
+            <div className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
+            <MenuItem label={t('slide.delete')} icon="🗑" danger onClick={() => { if (contextMenu.type === 'shape') removeShape(contextMenu.index); else removeArtText(contextMenu.index); setContextMenu(null); setSelectedEl(null) }} />
+          </div>
+        </div>
+      )}
+
       {/* 全屏放映模式 */}
       {presenting && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: '#000' }} onClick={nextPresent}>
-          <div className="relative overflow-hidden" style={{ width: 808, height: 454, background: presentingSlide.bg, transform: `scale(${Math.min(window.innerWidth / 808, window.innerHeight / 454)})`, transformOrigin: 'center' }}>
+          <div style={{ transform: `scale(${Math.min(window.innerWidth / 808, window.innerHeight / 454)})`, transformOrigin: 'center' }}>
+          <div key={presentSlide} className={`relative overflow-hidden sl-trans-${presentingSlide.transition || 'none'}`} style={{ width: 808, height: 454, background: presentingSlide.bg }}>
             <div className="absolute inset-0 flex flex-col justify-center items-center p-12 text-center">
               <h1 className="text-5xl font-bold mb-6" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{presentingSlide.title}</h1>
               {presentingSlide.content && <p className="text-xl" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#cbd5e1' : '#64748b' }}>{presentingSlide.content}</p>}
-              {presentingSlide.shapes.map((sh, i) => (
-                <div key={i} className="absolute flex flex-col" style={{
+              {presentingSlide.shapes.map((sh, i) => {
+                const ent = entranceAnimOf(presentingSlide)
+                const entIdx = ent.findIndex(a => a.target === `shape_${i}`)
+                const revealed = entIdx === -1 || entIdx < presentAnimStep
+                const justRevealed = entIdx === presentAnimStep - 1
+                const effect = entIdx >= 0 ? ent[entIdx].effect : ''
+                const animClass = justRevealed ? `sl-anim-${effect}` : ''
+                return (
+                <div key={i} className={`absolute flex flex-col ${animClass}`} style={{
                   left: `${sh.x / 8}px`, top: `${sh.y / 8}px`, width: `${sh.w / 8}px`, height: `${sh.h / 8}px`,
                   justifyContent: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
+                  opacity: revealed ? undefined : 0,
                   background: sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill,
                   borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : '0',
                   clipPath: sh.type === 'triangle' ? 'polygon(50% 0, 100% 100%, 0 100%)' : sh.type === 'diamond' ? 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)' : sh.type === 'rightArrow' ? 'polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%)' : sh.type === 'star5' ? 'polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' : undefined,
                   boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none', color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#fff' : '#1f2937'), fontSize: sh.fontSize ? `${sh.fontSize}px` : '18px', fontWeight: sh.fontBold ? 700 : 400, textAlign: sh.textAlign || 'center', lineHeight: sh.lineHeight || 1.2, paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                }}>{sh.bullet
+                }}>{sh.media && sh.media.type === 'video' && (
+                  <video src={sh.media.src} controls autoPlay={false} style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
+                )}
+                {sh.media && sh.media.type === 'audio' && (
+                  <div className="w-full h-full flex items-center px-2"><audio src={sh.media.src} controls style={{ width: '100%' }} /></div>
+                )}
+                {!sh.media && (sh.bullet
                   ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                   : sh.numbered
                   ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
-                  : sh.text}</div>
-              ))}
+                  : sh.text)}</div>
+                )
+              })}
               {presentingSlide.artTexts.map((at, i) => (
                 <div key={i} className="absolute" style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '' }}>
                   <span style={{ fontSize: `${at.fontSize / 2}px`, fontWeight: 700, color: at.color, textShadow: at.shadow ? '2px 2px 6px rgba(0,0,0,0.3)' : 'none' }}>{at.text}</span>
@@ -1067,6 +1413,7 @@ export function SlideEditor({ initialSlides }: { initialSlides?: SlideData[] }) 
               <button onClick={e => { e.stopPropagation(); nextPresent() }} className="text-white text-sm px-2" disabled={presentSlide === slides.length - 1}>→</button>
               <button onClick={e => { e.stopPropagation(); setPresenting(false) }} className="text-white text-sm px-2">✕</button>
             </div>
+          </div>
           </div>
         </div>
       )}

@@ -2440,11 +2440,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       <div
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${splitWindow ? 'flex' : ''}`}
-        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start' }}
+        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}
       >
       <div
         ref={pageRef}
-        className="max-w-4xl mx-auto animate-fade-in"
+        className="mx-auto animate-fade-in"
         style={{
           position: 'relative',
           marginTop: '24px',

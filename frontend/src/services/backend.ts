@@ -16,6 +16,10 @@ declare global {
           ReadFile: (path: string) => Promise<string>
           SaveFileDialog: (defaultName: string, format: string) => Promise<string>
           WriteDocument: (path: string, format: string, document: Document) => Promise<void>
+          ReadXLSX: (path: string) => Promise<string>
+          WriteXLSX: (path: string, json: string) => Promise<void>
+          WriteTextFile: (path: string, content: string) => Promise<void>
+          WritePPTX: (path: string, json: string) => Promise<void>
         }
       }
     }
@@ -78,6 +82,18 @@ export class RemoteBackend implements Backend {
   async readFile(_path: string): Promise<string> { throw new Error('readFile not supported in remote mode') }
   async writeDocument(_path: string, _format: string, _document: Document): Promise<void> {
     throw new Error('writeDocument not supported in remote mode')
+  }
+  async readXLSX(_path: string): Promise<string> {
+    throw new Error('readXLSX not supported in remote mode')
+  }
+  async writeXLSX(_path: string, _json: string): Promise<void> {
+    throw new Error('writeXLSX not supported in remote mode')
+  }
+  async writeTextFile(_path: string, _content: string): Promise<void> {
+    throw new Error('writeTextFile not supported in remote mode')
+  }
+  async writePPTX(_path: string, _json: string): Promise<void> {
+    throw new Error('writePPTX not supported in remote mode')
   }
 }
 
@@ -145,6 +161,26 @@ export class LocalBackend implements Backend {
   async writeDocument(path: string, format: string, document: Document): Promise<void> {
     if (!this.app) throw new Error('Wails binding not available')
     return this.app.WriteDocument(path, format, document)
+  }
+
+  async readXLSX(path: string): Promise<string> {
+    if (!this.app) throw new Error('Wails binding not available')
+    return this.app.ReadXLSX(path)
+  }
+
+  async writeXLSX(path: string, json: string): Promise<void> {
+    if (!this.app) throw new Error('Wails binding not available')
+    return this.app.WriteXLSX(path, json)
+  }
+
+  async writeTextFile(path: string, content: string): Promise<void> {
+    if (!this.app) throw new Error('Wails binding not available')
+    return this.app.WriteTextFile(path, content)
+  }
+
+  async writePPTX(path: string, json: string): Promise<void> {
+    if (!this.app) throw new Error('Wails binding not available')
+    return this.app.WritePPTX(path, json)
   }
 }
 

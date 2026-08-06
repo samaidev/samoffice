@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createBackend } from './services/backend'
 import type { Backend, Document, SpellError } from './types/udm'
+import type { SlideData } from './lib/openroute'
 import { DocumentEditor } from './editors/document/DocumentEditor'
 import { SpreadsheetEditor } from './editors/spreadsheet/SpreadsheetEditor'
 import { SlideEditor } from './editors/slide/SlideEditor'
@@ -142,10 +143,23 @@ ${t('sample.md.more')}
   const [tab, setTab] = useState<Tab>('document')
   const [doc, setDoc] = useState<Document>(emptyDoc)
   const [spellErrors, setSpellErrors] = useState<SpellError[]>([])
-  const [filePath, setFilePath] = useState('')
+  // 每个选项卡各自记录"当前打开的文件路径 + 名字"（左下角状态栏按当前 tab 显示）
+  const [filePaths, setFilePaths] = useState<Record<Tab, string>>({
+    document: '', spreadsheet: '', slide: '', markdown: '', html: '', pdf: '', about: '',
+  })
+  // 便捷读写：按当前 tab 读写
+  const setFilePathForTab = useCallback((tab: Tab, path: string) => {
+    setFilePaths(prev => ({ ...prev, [tab]: path }))
+  }, [])
+  // 当前激活 tab 对应的文件路径
+  const filePath = filePaths[tab]
   // 打开 xlsx/xls 时传入表格编辑器的初始 sheet 数据；epoch 用于强制重挂载以加载新文件
   const [sheetInitial, setSheetInitial] = useState<{ name: string; cells: Record<string, any> }[] | null>(null)
+  // SpreadsheetEditor 回传的完整工作簿快照（含边框/合并/填充），用于保存 xlsx
+  const [sheetSnapshot, setSheetSnapshot] = useState<{ name: string; rows: number; cols: number; cells: Record<string, any> }[] | null>(null)
   const [sheetEpoch, setSheetEpoch] = useState(0)
+  // SlideEditor 回传的最新幻灯片快照（EMU 坐标），用于保存 pptx
+  const [slideSnapshot, setSlideSnapshot] = useState<SlideData[] | null>(null)
   // 待打开的 PDF（通过 prop 传给 PdfViewer，避免 setTimeout+全局事件竞态导致 loadPdf 未触发）
   const [pdfOpenSignal, setPdfOpenSignal] = useState<{ url: string; name: string; nonce: number } | null>(null)
   // 打开 pptx/ppt 时传入幻灯片编辑器的初始幻灯片数据；epoch 用于强制重挂载以加载新文件
@@ -159,7 +173,14 @@ ${t('sample.md.more')}
     const sheets = decision.sheets
     const slides = decision.slides
     const isSheet = decision.tab === 'spreadsheet'
-    setFilePath(path)
+    // 记录当前打开文件对应到目标选项卡（左下角状态栏按 tab 显示）
+    const targetTab: Tab = isSheet ? 'spreadsheet'
+      : decision.tab === 'slide' ? 'slide'
+      : decision.tab === 'markdown' ? 'markdown'
+      : decision.tab === 'html' ? 'html'
+      : decision.tab === 'pdf' ? 'pdf'
+      : 'document'
+    setFilePathForTab(targetTab, path)
     try {
       const name = path.split(/[\\/]/).pop() || path
       const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
@@ -168,7 +189,20 @@ ${t('sample.md.more')}
       localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
     } catch {}
     if (isSheet && sheets && sheets.length) {
-      setSheetInitial(sheets)
+      let finalSheets = sheets
+      // xlsx 直接走原生读取，完整保留边框/合并/填充等格式（绕开有损的 UDM 中转）
+      if (/\.xlsx?$/i.test(path) && backend) {
+        try {
+          const json = await backend.readXLSX(path)
+          const parsed = JSON.parse(json)
+          if (parsed && Array.isArray(parsed.sheets) && parsed.sheets.length) {
+            finalSheets = parsed.sheets
+          }
+        } catch (e) {
+          console.warn('readXLSX failed, fall back to UDM sheets', e)
+        }
+      }
+      setSheetInitial(finalSheets)
       setSheetEpoch(e => e + 1)
       setTab('spreadsheet')
     } else if (decision.tab === 'slide') {
@@ -467,6 +501,7 @@ ${t('sample.md.more')}
           const b64 = await backend.readFile(path)
           const blob = base64ToBlob(b64, 'application/pdf')
           const url = URL.createObjectURL(blob)
+          setFilePathForTab('pdf', path)
           setTab('pdf')
           setTimeout(() => {
             window.dispatchEvent(new CustomEvent('pdf-open', { detail: { url, name: path } }))
@@ -502,6 +537,7 @@ ${t('sample.md.more')}
 
       // PDF 文件直接切换到 PDF Tab，用 blob URL 加载
       if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
+        setFilePathForTab('pdf', file.name)
         setTab('pdf')
         showToast(t('app.opening', { name: file.name }))
         // 通过 prop 传给 PdfViewer，避免全局事件在组件挂载前触发而丢失
@@ -525,25 +561,25 @@ ${t('sample.md.more')}
         if (decision.tab === 'spreadsheet') {
           setSheetInitial(decision.sheets)
           setSheetEpoch(e => e + 1)
-          setFilePath(file.name)
+          setFilePathForTab('spreadsheet', file.name)
           setTab('spreadsheet')
         } else if (decision.tab === 'markdown') {
           // 远程模式：从已选文件读取原文到 MD 编辑器
           setSheetInitial(null)
-          setFilePath(file.name)
+          setFilePathForTab('markdown', file.name)
           const text = await file.text()
           setMdContent(text)
           setTab('markdown')
         } else if (decision.tab === 'html') {
           setSheetInitial(null)
-          setFilePath(file.name)
+          setFilePathForTab('html', file.name)
           const text = await file.text()
           setHtmlContent(text)
           setTab('html')
         } else {
           setSheetInitial(null)
           setDoc(result.document)
-          setFilePath(file.name)
+          setFilePathForTab('document', file.name)
           setTab('document')
           triggerSpellCheck(JSON.stringify(result.document?.blocks || []))
         }
@@ -648,6 +684,61 @@ ${t('sample.md.more')}
     }
 
     // 本地模式：写盘
+    // 演示文稿选项卡：把幻灯片（EMU 坐标）序列化为真正的 .pptx
+    if (tab === 'slide') {
+      const snaps = slideSnapshot || slideInitial || []
+      if (!snaps.length) {
+        showToast(t('app.noSlides'))
+        return
+      }
+      const hasRealPath = /^[A-Za-z]:[\\/]/.test(filePath) && /\.pptx?$/i.test(filePath)
+      let target = filePath
+      if (opts.forceDialog || !hasRealPath) {
+        const baseName = filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || ''
+        const defaultName = baseName || t('app.untitled')
+        target = await backend.saveFileDialog(defaultName, 'pptx')
+        if (!target) return // 用户取消
+        if (!/\.pptx?$/i.test(target)) target += '.pptx'
+      }
+      setLoading(true)
+      try {
+        await backend.writePPTX(target, JSON.stringify({ pageW: 12192000, pageH: 6858000, slides: snaps }))
+        setFilePathForTab('slide', target)
+        const name = target.split(/[\\/]/).pop() || target
+        showToast(t('app.saved', { name }))
+      } catch (e: any) {
+        showToast(t('app.saveFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+    // Markdown / HTML 选项卡：直接写纯文本（保留原文），不走 UDM
+    if (tab === 'markdown' || tab === 'html') {
+      const text = tab === 'markdown' ? mdContent : htmlContent
+      const ext = tab === 'markdown' ? 'md' : 'html'
+      const hasRealPath = /^[A-Za-z]:[\\/]/.test(filePath) && filePath.toLowerCase().endsWith('.' + ext)
+      let target = filePath
+      if (opts.forceDialog || !hasRealPath) {
+        const baseName = filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || ''
+        const defaultName = baseName || t('app.untitled')
+        target = await backend.saveFileDialog(defaultName, ext)
+        if (!target) return // 用户取消
+        if (!target.toLowerCase().endsWith('.' + ext)) target += '.' + ext
+      }
+      try {
+        await backend.writeTextFile(target, text ?? '')
+        setFilePathForTab(tab, target)
+        const name = target.split(/[\\/]/).pop() || target
+        showToast(t('app.saved', { name }))
+      } catch (e: any) {
+        showToast(t('app.saveFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     const fmt = (format ||
       (filePath.toLowerCase().endsWith('.docx') ? 'docx' :
        filePath.toLowerCase().endsWith('.doc') ? 'doc' :
@@ -664,11 +755,26 @@ ${t('sample.md.more')}
       if (!target) return // 用户取消
     }
 
+    // Excel 文件走原生 xlsx 写盘（保留值/格式/合并/行列增删），绕开 UDM 中转
+    if (/\.xlsx?$/i.test(filePath) && tab === 'spreadsheet') {
+      try {
+        await backend.writeXLSX(target, JSON.stringify({ sheets: sheetSnapshot || [] }))
+        setFilePathForTab('spreadsheet', target)
+        const name = target.split(/[\\/]/).pop() || target
+        showToast(t('app.saved', { name }))
+      } catch (e: any) {
+        showToast(t('app.saveFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     setLoading(true)
     showToast(t('app.saving'))
     try {
       await backend.writeDocument(target, fmt, doc)
-      setFilePath(target)
+      setFilePathForTab('document', target)
       const name = target.split(/[\\/]/).pop() || target
       showToast(t('app.saved', { name }))
     } catch (e: any) {
@@ -736,13 +842,18 @@ ${t('sample.md.more')}
   // 插入图片不放在顶栏 — 每个编辑器内部有自己的插入图片按钮
   // 注意: 不用 useMemo — 否则 fileItems 闭包捕获的 handleSave 会捕获到 backend=null 的初始版本，
   // 后续 backend 初始化后 fileItems 不会重建，导致 it.onClick 调用的是 stale handleSave。
+  // 可保存/导出的选项卡（about 不可；pdf 为只读查看也不提供保存）
+  const saveable = tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html'
+
   const fileItems: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
     { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
   ]
-  if (tab === 'document') {
-    // “保存”：直接覆盖当前文件（Ctrl+S）；无真实路径时自动转“另存为”
+  if (saveable) {
+    // “保存”：直接覆盖当前选项卡文件（Ctrl+S）；无真实路径时自动转“另存为”
     fileItems.push({ icon: '💾', label: t('app.save'), onClick: () => handleSave('', { forceDialog: false }), shortcut: 'Ctrl+S' })
-    // “另存为”：始终弹系统对话框，可输入文件名
+  }
+  if (tab === 'document') {
+    // 文档格式专属的“另存为”选项
     fileItems.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx', { forceDialog: true }) })
     fileItems.push({ icon: '📃', label: t('app.saveDoc'), onClick: () => handleSave('doc', { forceDialog: true }) })
     fileItems.push({ icon: '📋', label: t('app.saveWps'), onClick: () => handleSave('wps', { forceDialog: true }) })
@@ -1000,8 +1111,8 @@ ${t('sample.md.more')}
               onToast={showToast}
             />
           )}
-          {tab === 'spreadsheet' && <SpreadsheetEditor key={sheetEpoch} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} />}
-          {tab === 'slide' && <SlideEditor key={slideEpoch} initialSlides={slideInitial || undefined} />}
+          {tab === 'spreadsheet' && <SpreadsheetEditor key={sheetEpoch} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} onSheetsChange={setSheetSnapshot} />}
+          {tab === 'slide' && <SlideEditor key={slideEpoch} initialSlides={slideInitial || undefined} onSlidesChange={setSlideSnapshot} />}
           {tab === 'markdown' && (
             <MarkdownHtmlEditor
               initialContent={mdContent}
@@ -1126,15 +1237,20 @@ ${t('sample.md.more')}
 
       {/* 底部状态栏 */}
       <footer
-        className="text-xs px-3 sm:px-5 py-1.5 flex items-center gap-3 flex-shrink-0 overflow-hidden"
+        className="text-xs px-3 sm:px-5 py-1.5 flex items-center gap-3 flex-shrink-0"
         style={{ background: 'var(--color-text)', color: 'var(--color-surface)', flexWrap: 'nowrap' }}
       >
         <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
           {loading && (
             <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0"></span>
           )}
-          <span className="truncate" style={{ maxWidth: '180px' }}>
-            {filePath || t('app.ready')}
+          <span
+            className="flex items-center gap-1 flex-shrink min-w-0"
+            style={{ maxWidth: '60vw', overflowX: 'auto', whiteSpace: 'nowrap', scrollbarWidth: 'thin' }}
+            title={filePath || t('app.ready')}
+          >
+            <span style={{ flex: '0 0 auto' }}>📄</span>
+            <span>{filePath || t('app.ready')}</span>
           </span>
         </div>
         <div className="flex-1 min-w-0" />

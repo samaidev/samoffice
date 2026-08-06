@@ -9,17 +9,25 @@ interface Cell {
   italic?: boolean; under?: boolean; strike?: boolean
   fontSize?: number; fontFamily?: string
   format?: 'percent' | 'decimal' | 'general'
+  border?: 'thin' | 'medium' | 'thick' | 'none'
+  borderColor?: string
   // 合并单元格：mergeRange = { rowSpan, colSpan } 表示此单元格是合并区域的左上角
   // 被合并覆盖的单元格用 hiddenBy = "r-c" 标记（指向左上角）
   mergeRange?: { rowSpan: number; colSpan: number }
   hiddenBy?: string
+}
+interface Selection {
+  r1: number; c1: number; r2: number; c2: number
+  mode: 'cell' | 'row' | 'col'
 }
 interface Props {
   initialRows?: number
   initialCols?: number
   title?: string
   // 外部传入的工作簿数据（如打开 xlsx 时），每个元素对应一个 sheet
-  initialSheets?: { name: string; cells: Record<string, Cell> }[]
+  initialSheets?: { name: string; rows?: number; cols?: number; cells: Record<string, Cell> }[]
+  // 编辑或切换 sheet 时把完整工作簿快照回传（供保存为 xlsx 使用）
+  onSheetsChange?: (snapshot: { name: string; rows: number; cols: number; cells: Record<string, Cell> }[]) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'data' | 'view'
@@ -126,7 +134,168 @@ function ChartSVG({ type, data, labels }: { type: string; data: number[]; labels
   return null
 }
 
-export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, initialSheets }: Props) {
+// === 轻量公式引擎：支持数字、单元格引用(A1/$A$1)、范围(A1:B3)、四则运算、
+//     括号、函数 SUM/AVERAGE/AVG/MIN/MAX/COUNT/ROUND/ABS ===
+function colToNum(name: string): number {
+  let n = 0
+  for (const ch of name.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n
+}
+function cellValue(data: Record<string, Cell>, ref: string): number | string {
+  const m = ref.match(/^\$?([A-Za-z]+)\$?(\d+)$/)
+  if (!m) return 0
+  const c = colToNum(m[1]) - 1
+  const r = parseInt(m[2], 10) - 1
+  const cell = data[`${r}-${c}`]
+  if (!cell) return 0
+  const v = (cell.value ?? '').trim()
+  if (v === '') return 0
+  const n = Number(v)
+  return isNaN(n) ? v : n
+}
+function rangeValues(a: string, b: string, data: Record<string, Cell>): number[] {
+  const ma = a.match(/^\$?([A-Za-z]+)\$?(\d+)$/)
+  const mb = b.match(/^\$?([A-Za-z]+)\$?(\d+)$/)
+  if (!ma || !mb) return []
+  const c1 = colToNum(ma[1]) - 1, r1 = parseInt(ma[2], 10) - 1
+  const c2 = colToNum(mb[1]) - 1, r2 = parseInt(mb[2], 10) - 1
+  const out: number[] = []
+  for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++) {
+    for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++) {
+      const cell = data[`${r}-${c}`]
+      const v = cell?.value ?? ''
+      const n = Number(v)
+      out.push(isNaN(n) ? 0 : n)
+    }
+  }
+  return out
+}
+function applyFunc(name: string, args: any[]): number | string {
+  const flat: number[] = []
+  const collect = (a: any) => {
+    if (Array.isArray(a)) a.forEach(collect)
+    else {
+      const n = typeof a === 'number' ? a : Number(a)
+      flat.push(isNaN(n) ? 0 : n)
+    }
+  }
+  switch (name.toUpperCase()) {
+    case 'SUM': args.forEach(collect); return flat.reduce((s, x) => s + x, 0)
+    case 'AVERAGE': case 'AVG': args.forEach(collect); return flat.length ? flat.reduce((s, x) => s + x, 0) / flat.length : 0
+    case 'MIN': args.forEach(collect); return flat.length ? Math.min(...flat) : 0
+    case 'MAX': args.forEach(collect); return flat.length ? Math.max(...flat) : 0
+    case 'COUNT': args.forEach(collect); return flat.length
+    case 'ROUND': return Math.round(Number(args[0]) * Math.pow(10, Number(args[1] ?? 0))) / Math.pow(10, Number(args[1] ?? 0))
+    case 'ABS': return Math.abs(Number(args[0]))
+    default: return '#NAME?'
+  }
+}
+interface Tok { t: string; v: string }
+function tokenize(s: string): Tok[] {
+  const toks: Tok[] = []
+  let i = 0
+  while (i < s.length) {
+    const ch = s[i]
+    if (/\s/.test(ch)) { i++; continue }
+    if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(s[i + 1] || ''))) {
+      let j = i, str = ''
+      while (j < s.length && /[0-9.]/.test(s[j])) { str += s[j]; j++ }
+      toks.push({ t: 'NUM', v: str }); i = j; continue
+    }
+    if (/[A-Za-z]/.test(ch)) {
+      let j = i, str = ''
+      while (j < s.length && /[A-Za-z]/.test(s[j])) { str += s[j]; j++ }
+      if (s[j] === '(') { toks.push({ t: 'FUNC', v: str }); i = j; continue }
+      let k = j, nums = ''
+      while (k < s.length && /[0-9]/.test(s[k])) { nums += s[k]; k++ }
+      toks.push({ t: 'REF', v: str + nums }); i = nums ? k : j; continue
+    }
+    if (ch === '$') { i++; continue }
+    if ('()+,:+-*/^'.includes(ch)) toks.push({ t: ch === '(' ? 'LPAREN' : ch === ')' ? 'RPAREN' : ch === ',' ? 'COMMA' : ch === ':' ? 'COLON' : 'OP', v: ch })
+    i++
+  }
+  return toks
+}
+function evalFormula(expr: string, data: Record<string, Cell>): number | string {
+  expr = expr.trim()
+  if (expr.startsWith('=')) expr = expr.slice(1)
+  if (expr === '') return ''
+  const tokens = tokenize(expr)
+  let i = 0
+  const peek = () => tokens[i]
+  const next = () => tokens[i++]
+
+  function parseRangeRef(): { kind: 'ref' | 'range'; a: string; b?: string } {
+    const a = next()
+    if (a.t !== 'REF') throw new Error('expected ref')
+    if (peek()?.t === 'COLON') { next(); const b = next(); return { kind: 'range', a: a.v, b: b.v } }
+    return { kind: 'ref', a: a.v }
+  }
+  function parseArg(): any {
+    if (peek()?.t === 'REF') {
+      const r = parseRangeRef()
+      return r.kind === 'range' ? rangeValues(r.a, r.b!, data) : cellValue(data, r.a)
+    }
+    return parseAddSub()
+  }
+  function parseAtom(): any {
+    const tk = peek()
+    if (!tk) throw new Error('unexpected end')
+    if (tk.t === 'NUM') { next(); return parseFloat(tk.v) }
+    if (tk.t === 'REF') {
+      const r = parseRangeRef()
+      return r.kind === 'range' ? rangeValues(r.a, r.b!, data) : cellValue(data, r.a)
+    }
+    if (tk.t === 'FUNC') {
+      next()
+      if (next()?.t !== 'LPAREN') throw new Error('expected (')
+      const args: any[] = []
+      if (peek() && peek()!.t !== 'RPAREN') {
+        args.push(parseArg())
+        while (peek()?.t === 'COMMA') { next(); args.push(parseArg()) }
+      }
+      if (next()?.t !== 'RPAREN') throw new Error('expected )')
+      return applyFunc(tk.v, args)
+    }
+    if (tk.t === 'LPAREN') {
+      next(); const v = parseAddSub()
+      if (next()?.t !== 'RPAREN') throw new Error('expected )')
+      return v
+    }
+    if (tk.t === 'OP' && tk.v === '-') { next(); return -parseAtom() as number }
+    if (tk.t === 'OP' && tk.v === '+') { next(); return parseAtom() }
+    throw new Error('unexpected token')
+  }
+  function parsePow(): any {
+    let left = parseAtom()
+    while (peek()?.t === 'OP' && peek()!.v === '^') { next(); left = Math.pow(Number(left), Number(parseAtom())) }
+    return left
+  }
+  function parseMulDiv(): any {
+    let left = parsePow()
+    while (peek()?.t === 'OP' && (peek()!.v === '*' || peek()!.v === '/')) {
+      const op = next()!.v; const right = parsePow()
+      left = op === '*' ? Number(left) * Number(right) : Number(left) / Number(right)
+    }
+    return left
+  }
+  function parseAddSub(): any {
+    let left = parseMulDiv()
+    while (peek()?.t === 'OP' && (peek()!.v === '+' || peek()!.v === '-')) {
+      const op = next()!.v; const right = parseMulDiv()
+      left = op === '+' ? Number(left) + Number(right) : Number(left) - Number(right)
+    }
+    return left
+  }
+  try {
+    const res = parseAddSub()
+    return typeof res === 'number' && !isFinite(res) ? '#ERROR' : res
+  } catch {
+    return '#ERROR'
+  }
+}
+
+export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, initialSheets, onSheetsChange }: Props) {
   const { t, tf } = useI18n()
 
   // 初始 sheet 标签：有外部数据时按传入的 sheet 名，否则给默认两个空 sheet
@@ -161,12 +330,34 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return init
   })
   const [active, setActive] = useState<{ r: number; c: number }>({ r: 0, c: 0 })
+  const [selection, setSelection] = useState<Selection>({ r1: 0, c1: 0, r2: 0, c2: 0, mode: 'cell' })
+  const [lastSelection, setLastSelection] = useState<Selection>({ r1: 0, c1: 0, r2: 0, c2: 0, mode: 'cell' })
+  // 撤销 / 重做历史栈（针对当前工作表单元格数据）
+  const [past, setPast] = useState<Record<string, Cell>[]>([])
+  const [future, setFuture] = useState<Record<string, Cell>[]>([])
+  const HISTORY_LIMIT = 100
+  const [dragging, setDragging] = useState(false)
+  const [colorMode, setColorMode] = useState<'font' | 'fill' | 'border'>('font')
+  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null)
+  const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
   const [sheets, setSheets] = useState(initialSheetList)
   const activeId = sheets.find(s => s.active)?.id ?? 1
   // 编辑后把当前 sheet 内容同步回 sheetData，保证切换 sheet 不丢数据
   useEffect(() => {
     setSheetData(sd => ({ ...sd, [activeId]: data }))
   }, [data, activeId])
+  // 把完整工作簿快照回传父组件（用于保存为 xlsx，含边框/合并/填充）
+  useEffect(() => {
+    if (!onSheetsChange) return
+    const snapshot = sheets.map(s => ({
+      name: s.name,
+      rows,
+      cols,
+      cells: sheetData[s.id] || {},
+    }))
+    onSheetsChange(snapshot)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetData, sheets, rows, cols])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [frozen, setFrozen] = useState(false)
@@ -208,19 +399,249 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return () => window.removeEventListener('keydown', onEsc)
   }, [anyPanelOpen])
 
+  // === 全局快捷键：撤销/重做、复制/剪切/粘贴、字体、清除、创建表、导航 ===
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (document.activeElement?.tagName || '').toUpperCase()
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
+      const mod = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+
+      // 撤销 / 重做（始终拦截，对标 Excel）
+      if (mod && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
+      if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return }
+
+      // 复制 / 剪切 / 粘贴
+      if (mod && key === 'c') { e.preventDefault(); copyCells(false); return }
+      if (mod && key === 'x') { e.preventDefault(); copyCells(true); return }
+      if (mod && key === 'v') { e.preventDefault(); pasteCells(); return }
+
+      // 字体格式 加粗 / 斜体 / 下划线
+      if (mod && key === 'b') { e.preventDefault(); setCellFmtRange({ bold: !getCell(active.r, active.c).bold }); return }
+      if (mod && key === 'i') { e.preventDefault(); setCellFmtRange({ italic: !getCell(active.r, active.c).italic }); return }
+      if (mod && key === 'u') { e.preventDefault(); setCellFmtRange({ under: !getCell(active.r, active.c).under }); return }
+
+      // 创建表（Excel 的 Ctrl+L）
+      if (mod && key === 'l') { e.preventDefault(); createTable(); return }
+
+      // 清除内容（Delete / Backspace，仅在非输入框时）
+      if (!mod && (key === 'delete' || key === 'backspace') && !inInput) { e.preventDefault(); clearCellsContent(); return }
+
+      // 单元格导航（方向键 / Tab / Enter），仅在非输入框时拦截
+      if (!mod && !inInput) {
+        const move = (dr: number, dc: number) => {
+          const nr = Math.max(0, Math.min(rows - 1, active.r + dr))
+          const nc = Math.max(0, Math.min(cols - 1, active.c + dc))
+          selectCell(nr, nc)
+        }
+        if (e.key === 'ArrowUp') { e.preventDefault(); move(-1, 0); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); move(1, 0); return }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); move(0, -1); return }
+        if (e.key === 'ArrowRight') { e.preventDefault(); move(0, 1); return }
+        if (e.key === 'Tab') { e.preventDefault(); move(0, e.shiftKey ? -1 : 1); return }
+        if (e.key === 'Enter') { e.preventDefault(); move(1, 0); return }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active, selection, clipboard, rows, cols, data, sheets, past, future])
+
+  // 鼠标在表格外松开时也结束选区拖拽
+  useEffect(() => {
+    const onUp = () => { if (dragging) setDragging(false) }
+    window.addEventListener('mouseup', onUp)
+    return () => window.removeEventListener('mouseup', onUp)
+  }, [dragging])
+
+  // 点击空白处关闭右键菜单
+  useEffect(() => {
+    if (!menu) return
+    const onDown = () => setMenu(null)
+    const onScroll = () => setMenu(null)
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [menu])
+
   const colName = (c: number) => {
     if (c < 26) return String.fromCharCode(65 + c)
     return String.fromCharCode(65 + Math.floor(c / 26) - 1) + String.fromCharCode(65 + (c % 26))
   }
   const getCell = (r: number, c: number): Cell => data[`${r}-${c}`] || { value: '' }
-  const setCell = (r: number, c: number, value: string) => setData(d => {
-    const existing = d[`${r}-${c}`] || {}
-    return { ...d, [`${r}-${c}`]: { ...existing, value } }
+  const setCell = (r: number, c: number, value: string) => {
+    pushHistory()
+    setData(d => {
+      const existing = d[`${r}-${c}`] || {}
+      return { ...d, [`${r}-${c}`]: { ...existing, value } }
+    })
+  }
+  const setCellFmt = (r: number, c: number, fmt: Partial<Cell>) => {
+    pushHistory()
+    setData(d => {
+      const existing = d[`${r}-${c}`] || { value: '' }
+      return { ...d, [`${r}-${c}`]: { ...existing, ...fmt } }
+    })
+  }
+  // 数据变化时重算所有公式单元格的显示值（不改字体色，仅更新 value）
+  useEffect(() => {
+    let changed = false
+    const next: Record<string, Cell> = {}
+    for (const key of Object.keys(data)) {
+      const cell = data[key]
+      if (cell.formula) {
+        const res = evalFormula(cell.formula, data)
+        const sres = res === '' ? '' : (typeof res === 'number' ? String(res) : res)
+        if (sres !== cell.value) {
+          next[key] = { ...cell, value: sres }
+          changed = true
+        } else {
+          next[key] = cell
+        }
+      } else {
+        next[key] = cell
+      }
+    }
+    if (changed) setData(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+  // 对当前选区内所有单元格批量应用格式（字体色 / 填充 / 边框 / 加粗等）
+  const setCellFmtRange = (fmt: Partial<Cell>) => {
+    pushHistory()
+    setData(d => {
+    const nd = { ...d }
+    const apply = (r: number, c: number) => {
+      const existing = nd[`${r}-${c}`] || { value: '' }
+      nd[`${r}-${c}`] = { ...existing, ...fmt }
+    }
+    if (selection.mode === 'row') {
+      const r = selection.r1
+      for (let c = 0; c < cols; c++) apply(r, c)
+    } else if (selection.mode === 'col') {
+      const c = selection.c1
+      for (let r = 0; r < rows; r++) apply(r, c)
+    } else {
+      const r1 = Math.min(selection.r1, selection.r2)
+      const r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2)
+      const c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++)
+        for (let c = c1; c <= c2; c++) apply(r, c)
+    }
+    return nd
   })
-  const setCellFmt = (r: number, c: number, fmt: Partial<Cell>) => setData(d => {
-    const existing = d[`${r}-${c}`] || { value: '' }
-    return { ...d, [`${r}-${c}`]: { ...existing, ...fmt } }
-  })
+  }
+  const inSelection = (r: number, c: number) => {
+    if (selection.mode === 'row') return selection.r1 === r
+    if (selection.mode === 'col') return selection.c1 === c
+    const r1 = Math.min(selection.r1, selection.r2)
+    const r2 = Math.max(selection.r1, selection.r2)
+    const c1 = Math.min(selection.c1, selection.c2)
+    const c2 = Math.max(selection.c1, selection.c2)
+    return r >= r1 && r <= r2 && c >= c1 && c <= c2
+  }
+  // 统一更新选区并记录上一次选区（供公式自动填充引用使用）
+  const commitSelection = (s: Selection) => {
+    setLastSelection(selection)
+    setSelection(s)
+  }
+  // 将选区转换为 A1 表示法（如 S2:S43）；单格返回 S2
+  const selToRef = (s: Selection): string => {
+    const r1 = Math.min(s.r1, s.r2), r2 = Math.max(s.r1, s.r2)
+    const c1 = Math.min(s.c1, s.c2), c2 = Math.max(s.c1, s.c2)
+    if (isNaN(r1) || isNaN(c1)) return ''
+    const a = colName(c1) + (r1 + 1)
+    if (r1 === r2 && c1 === c2) return a
+    return a + ':' + colName(c2) + (r2 + 1)
+  }
+  const selectCell = (r: number, c: number) => {
+    setActive({ r, c })
+    // 若点击位置已经在当前单元格选区范围内，则保持选区不变（便于整体复制/格式刷），
+    // 仅点击选区外部时才重置为单个单元格
+    const s = selection
+    if (s.mode === 'cell') {
+      const r1 = Math.min(s.r1, s.r2), r2 = Math.max(s.r1, s.r2)
+      const c1 = Math.min(s.c1, s.c2), c2 = Math.max(s.c1, s.c2)
+      if (r >= r1 && r <= r2 && c >= c1 && c <= c2) return
+    }
+    commitSelection({ r1: r, c1: c, r2: r, c2: c, mode: 'cell' })
+  }
+  const selectRange = (r1: number, c1: number, r2: number, c2: number) =>
+    commitSelection({ r1, c1, r2, c2, mode: 'cell' })
+  const selectRow = (r: number) => {
+    setActive({ r, c: selection.c1 })
+    commitSelection({ r1: r, c1: selection.c1, r2: r, c2: selection.c1, mode: 'row' })
+  }
+  const selectCol = (c: number) => {
+    setActive({ r: selection.r1, c })
+    commitSelection({ r1: selection.r1, c1: c, r2: selection.r1, c2: c, mode: 'col' })
+  }
+
+  // === 撤销 / 重做 ===
+  // 在用户编辑动作前调用：记录当前数据快照
+  const pushHistory = () => {
+    setPast(p => {
+      const np = [...p, JSON.parse(JSON.stringify(data))]
+      if (np.length > HISTORY_LIMIT) np.shift()
+      return np
+    })
+    setFuture([])
+  }
+  const undo = () => {
+    if (past.length === 0) return
+    const prev = past[past.length - 1]
+    setFuture(f => [...f, JSON.parse(JSON.stringify(data))])
+    setPast(past.slice(0, -1))
+    setData(prev)
+  }
+  const redo = () => {
+    if (future.length === 0) return
+    const next = future[future.length - 1]
+    setPast(p => [...p, JSON.parse(JSON.stringify(data))])
+    setFuture(future.slice(0, -1))
+    setData(next)
+  }
+  // 清除选区内容（保留格式）：Delete / Backspace 快捷键
+  const clearCellsContent = () => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++)
+        for (let c = c1; c <= c2; c++) {
+          const k = `${r}-${c}`
+          nd[k] = { ...(nd[k] || { value: '' }), value: '', formula: '' }
+        }
+      return nd
+    })
+  }
+  // 创建表（Ctrl+L）：为选区添加表头加粗 + 细边框 + 隔行底色
+  const createTable = () => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++)
+        for (let c = c1; c <= c2; c++) {
+          const k = `${r}-${c}`
+          const existing = nd[k] || { value: '' }
+          const isHeader = r === r1
+          const zebra = !isHeader && (r - r1) % 2 === 0
+          nd[k] = {
+            ...existing,
+            bold: isHeader ? true : existing.bold,
+            border: 'thin',
+            borderColor: '#9ca3af',
+            bg: zebra ? '#eef2ff' : (existing.bg || 'var(--color-surface)'),
+          }
+        }
+      return nd
+    })
+  }
 
   // === 合并单元格 ===
   // 合并从 (r1,c1) 到 (r2,c2) 的区域
@@ -275,8 +696,115 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return !!cell.hiddenBy
   }
 
+  // === 复制 / 剪切 / 粘贴 ===
+  const selRect = () => {
+    if (selection.mode === 'row') return { r1: selection.r1, c1: 0, r2: selection.r1, c2: cols - 1 }
+    if (selection.mode === 'col') return { r1: 0, c1: selection.c1, r2: rows - 1, c2: selection.c1 }
+    return {
+      r1: Math.min(selection.r1, selection.r2),
+      c1: Math.min(selection.c1, selection.c2),
+      r2: Math.max(selection.r1, selection.r2),
+      c2: Math.max(selection.c1, selection.c2),
+    }
+  }
+  const copyCells = (cut: boolean) => {
+    const { r1, c1, r2, c2 } = selRect()
+    const cells: Record<string, Cell> = {}
+    let txt = ''
+    for (let r = r1; r <= r2; r++) {
+      let rowTxt = ''
+      for (let c = c1; c <= c2; c++) {
+        const cc = getCell(r, c)
+        rowTxt += (cc.value ?? '') + (c === c2 ? '' : '\t')
+        if (cc.value || cc.bold || cc.color || cc.bg || cc.border) cells[`${r - r1}-${c - c1}`] = cc
+      }
+      txt += rowTxt + (r === r2 ? '' : '\n')
+    }
+    navigator.clipboard?.writeText(txt).catch(() => {})
+    setClipboard({ r1, c1, r2, c2, cells, isCut: cut })
+  }
+  const pasteCells = () => {
+    if (!clipboard) return
+    pushHistory()
+    const baseR = active.r, baseC = active.c
+    const { r1, c1, r2, c2, cells, isCut } = clipboard
+    const h = r2 - r1 + 1, w = c2 - c1 + 1
+    const srcRect = isCut ? { r1, c1, r2, c2 } : null
+    setData(d => {
+      const nd = { ...d }
+      // 写入目标
+      for (let r = 0; r < h; r++)
+        for (let c = 0; c < w; c++) {
+          const key = `${r}-${c}`
+          if (cells[key]) nd[`${baseR + r}-${baseC + c}`] = { ...cells[key] }
+        }
+      // 剪切：清除源区域
+      if (isCut && srcRect) {
+        for (let r = srcRect.r1; r <= srcRect.r2; r++)
+          for (let c = srcRect.c1; c <= srcRect.c2; c++)
+            delete nd[`${r}-${c}`]
+      }
+      return nd
+    })
+    if (isCut) setClipboard(null)
+  }
+
+  // === 插入 / 删除 行列（重排所有单元格坐标） ===
+  const rebuildRows = (d: Record<string, Cell>, fromRow: number, count: number): Record<string, Cell> => {
+    // count>0 插入；count<0 删除，删除以 fromRow 起始的 |count| 行
+    const nd: Record<string, Cell> = {}
+    const removeCount = count < 0 ? -count : 0
+    for (const key in d) {
+      const [r, c] = key.split('-').map(Number)
+      let nr = r
+      if (count > 0) { if (r >= fromRow) nr = r + count }
+      else { if (r >= fromRow + removeCount) nr = r - removeCount; else if (r >= fromRow) continue }
+      nd[`${nr}-${c}`] = d[key]
+    }
+    return nd
+  }
+  const rebuildCols = (d: Record<string, Cell>, fromCol: number, count: number): Record<string, Cell> => {
+    const nd: Record<string, Cell> = {}
+    const removeCount = count < 0 ? -count : 0
+    for (const key in d) {
+      const [r, c] = key.split('-').map(Number)
+      let nc = c
+      if (count > 0) { if (c >= fromCol) nc = c + count }
+      else { if (c >= fromCol + removeCount) nc = c - removeCount; else if (c >= fromCol) continue }
+      nd[`${r}-${nc}`] = d[key]
+    }
+    return nd
+  }
+  const insertRows = (at: number, count: number) => {
+    pushHistory()
+    setData(d => rebuildRows(d, at, count))
+    setRows(r => r + count)
+    commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
+    setActive({ r: at, c: active.c })
+  }
+  const deleteRows = (at: number, count: number) => {
+    pushHistory()
+    setData(d => rebuildRows(d, at, -count))
+    setRows(r => Math.max(1, r - count))
+    commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
+    setActive({ r: at, c: active.c })
+  }
+  const insertCols = (at: number, count: number) => {
+    pushHistory()
+    setData(d => rebuildCols(d, at, count))
+    setCols(c => c + count)
+    commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
+    setActive({ r: active.r, c: at })
+  }
+  const deleteCols = (at: number, count: number) => {
+    pushHistory()
+    setData(d => rebuildCols(d, at, -count))
+    setCols(c => Math.max(1, c - count))
+    commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
+    setActive({ r: active.r, c: at })
+  }
+
   // === 图表 ===
-  const [charts, setCharts] = useState<{ id: number; type: string; data: number[]; labels: string[]; title: string }[]>([])
   const addChart = (type: string) => {
     // 从当前列收集数据
     const values: number[] = []
@@ -290,8 +818,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setShowChartPanel(false)
   }
   const removeChart = (id: number) => setCharts(cs => cs.filter(c => c.id !== id))
+  const [charts, setCharts] = useState<{ id: number; type: string; data: number[]; labels: string[]; title: string }[]>([])
   const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheetData(sd => ({ ...sd, [activeId]: data, [id]: {} })); setData({}); setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
-  const switchSheet = (id: number) => { setSheetData(sd => ({ ...sd, [activeId]: data })); setData(sheetData[id] || {}); setSheets(s => s.map(x => ({ ...x, active: x.id === id }))) }
+  const switchSheet = (id: number) => { setSheetData(sd => ({ ...sd, [activeId]: data })); setData(sheetData[id] || {}); setSheets(s => s.map(x => ({ ...x, active: x.id === id }))); setPast([]); setFuture([]) }
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
   const activeSheet = sheets.find(s => s.active) || sheets[0]
 
@@ -334,22 +863,43 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
-            <RibbonButton icon="📋" label={t('sheet.copy')} onClick={() => navigator.clipboard.writeText(getCell(active.r, active.c).value)} />
-            <RibbonButton icon="📥" label={t('sheet.paste')} onClick={() => { navigator.clipboard.readText().then(t => setCell(active.r, active.c, t)) }} />
+            <RibbonButton icon="⧉" label={t('sheet.copy')} onClick={() => copyCells(false)} onMouseDown={(e: any) => e.preventDefault()} />
+            <RibbonButton icon="📋" label={t('sheet.paste')} onClick={() => pasteCells()} disabled={!clipboard} onMouseDown={(e: any) => e.preventDefault()} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.font')}>
-            <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmt(active.r, active.c, { bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
+            <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmtRange({ bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
+            <RibbonButton icon="I" label={t('sheet.italic')} onClick={() => setCellFmtRange({ italic: !getCell(active.r, active.c).italic })} active={getCell(active.r, active.c).italic} />
+            <RibbonButton icon="U" label={t('sheet.underline')} onClick={() => setCellFmtRange({ under: !getCell(active.r, active.c).under })} active={getCell(active.r, active.c).under} />
             <div className="relative">
               <RibbonButton icon="🎨" label={t('doc.color')} onClick={() => openPanel('color')} />
               {showColorPopup && (
-                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.5rem', zIndex: 50 }}>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.5rem', zIndex: 50, width: '180px' }}>
+                  <div className="flex gap-1 mb-2">
+                    <button onClick={() => setColorMode('font')} className="flex-1 text-xs py-1 rounded" style={{ background: colorMode === 'font' ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: colorMode === 'font' ? '#fff' : 'var(--color-text)' }}>{tf('sheet.fontColor', '字体色')}</button>
+                    <button onClick={() => setColorMode('fill')} className="flex-1 text-xs py-1 rounded" style={{ background: colorMode === 'fill' ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: colorMode === 'fill' ? '#fff' : 'var(--color-text)' }}>{tf('sheet.fillColor', '填充色')}</button>
+                    <button onClick={() => setColorMode('border')} className="flex-1 text-xs py-1 rounded" style={{ background: colorMode === 'border' ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: colorMode === 'border' ? '#fff' : 'var(--color-text)' }}>{tf('sheet.borderColor', '边框色')}</button>
+                  </div>
                   <div className="grid grid-cols-4 gap-1">
-                    {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899'].map(c => (
-                      <button key={c} onClick={() => { setCellFmt(active.r, active.c, { color: c }); closeAllPanels() }} className="w-6 h-6 rounded border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} title={c} />
+                    {['#000000','#ef4444','#f59e0b','#10b981','#3b82f6','#6366f1','#8b5cf6','#ec4899','#ffffff','#fde68a','#bbf7d0','#bfdbfe','#ddd6fe','#fbcfe8','#fca5a5','#9ca3af'].map(c => (
+                      <button key={c} onClick={() => {
+                        if (colorMode === 'font') setCellFmtRange({ color: c })
+                        else if (colorMode === 'fill') setCellFmtRange({ bg: c })
+                        else setCellFmtRange({ border: 'thin', borderColor: c })
+                        closeAllPanels()
+                      }} className="w-6 h-6 rounded border transition-transform hover:scale-110" style={{ background: c, borderColor: c === '#ffffff' ? 'var(--color-border)' : c }} title={c} />
                     ))}
                   </div>
                 </div>
               )}
+            </div>
+          </RibbonGroup>
+          <RibbonGroup label={tf('sheet.border', '边框')}>
+            <RibbonButton icon="▫" label={tf('sheet.borderThin', '细线')} onClick={() => setCellFmtRange({ border: 'thin', borderColor: '#000000' })} title={tf('sheet.borderThin', '细线边框')} />
+            <RibbonButton icon="▣" label={tf('sheet.borderMedium', '中线')} onClick={() => setCellFmtRange({ border: 'medium', borderColor: '#000000' })} title={tf('sheet.borderMedium', '中线边框')} />
+            <RibbonButton icon="▪" label={tf('sheet.borderThick', '粗线')} onClick={() => setCellFmtRange({ border: 'thick', borderColor: '#000000' })} title={tf('sheet.borderThick', '粗线边框')} />
+            <RibbonButton icon="✕" label={tf('sheet.borderNone', '无')} onClick={() => setCellFmtRange({ border: 'none' })} title={tf('sheet.borderNone', '清除边框')} />
+            <div className="relative">
+              <RibbonButton icon="🖌" label={tf('sheet.borderColor', '边框色')} onClick={() => { closeAllPanels(); setColorMode('border'); setShowColorPopup(true) }} />
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.alignment')}>
@@ -598,7 +1148,49 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
         <div className="font-mono font-semibold px-2 py-0.5 rounded" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)', minWidth: '50px', textAlign: 'center' }}>{colName(active.c)}{active.r + 1}</div>
         <span style={{ color: 'var(--color-text-muted)' }}>fx</span>
-        <input value={getCell(active.r, active.c).value} onChange={e => setCell(active.r, active.c, e.target.value)} className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs" style={{ background: 'transparent', color: getCell(active.r, active.c).color || 'var(--color-text)', fontWeight: getCell(active.r, active.c).bold ? 700 : 400 }} placeholder={t('sheet.formulaPlaceholder')} />
+        {(() => {
+          const ac = active ? getCell(active.r, active.c) : ({ value: '' } as Cell)
+          const display = ac.formula || ac.value
+          return (
+            <input
+              value={display}
+              onChange={e => {
+                const v = e.target.value
+                if (!active) return
+                // 输入形如 "=函数名(" 且括号内为空时，自动用当前/上一次选区填充引用范围
+                const m = v.match(/^=\s*[A-Za-z]+\(\s*$/)
+                if (m) {
+                  const singleActive = selection.mode === 'cell' && selection.r1 === selection.r2 && selection.c1 === selection.c2 && selection.r1 === active.r && selection.c1 === active.c
+                  const src = singleActive ? lastSelection : selection
+                  const ref = selToRef(src)
+                  if (ref) {
+                    setCellFmt(active.r, active.c, { formula: v + ref + ')', value: '' })
+                    return
+                  }
+                }
+                if (v.startsWith('=')) {
+                  setCellFmt(active.r, active.c, { formula: v, value: '' })
+                } else {
+                  setCellFmt(active.r, active.c, { formula: '', value: v })
+                }
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  const v = (e.target as HTMLInputElement).value
+                  if (!active) return
+                  if (v.startsWith('=')) {
+                    setCellFmt(active.r, active.c, { formula: v, value: '' })
+                  } else {
+                    setCellFmt(active.r, active.c, { formula: '', value: v })
+                  }
+                }
+              }}
+              className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs"
+              style={{ background: 'transparent', color: ac.color || 'var(--color-text)', fontWeight: ac.bold ? 700 : 400 }}
+              placeholder={t('sheet.formulaPlaceholder')}
+            />
+          )
+        })()}
       </div>
       )}
 
@@ -610,8 +1202,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <tr>
               <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}></th>
               {Array.from({ length: cols }).map((_, c) => (
-                <th key={c} className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 z-10 transition-colors ${active.c === c ? 'text-indigo-600' : ''}`}
-                  style={{ background: active.c === c ? 'var(--color-primary-light)' : 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: active.c === c ? 'var(--color-primary)' : 'var(--color-text-secondary)', minWidth: '80px' }}>{colName(c)}</th>
+                <th key={c}
+                  className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 z-10 transition-colors cursor-pointer select-none`}
+                  style={{ background: selection.mode === 'col' && selection.c1 === c ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', minWidth: '80px' }}
+                  onClick={() => selectCol(c)} title={tf('sheet.selectCol', '选择整列')}>{colName(c)}</th>
               ))}
             </tr>
           </thead>
@@ -620,8 +1214,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {Array.from({ length: rows }).map((_, r) => (
               <tr key={r}>
                 {showHeadings && (
-                <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors ${active.r === r ? 'text-indigo-600 font-semibold' : ''}`}
-                  style={{ background: active.r === r ? 'var(--color-primary-light)' : 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: active.r === r ? 'var(--color-primary)' : 'var(--color-text-muted)' }}>{r + 1}</td>
+                <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none`}
+                  style={{ background: selection.mode === 'row' && selection.r1 === r ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}
+                  onClick={() => selectRow(r)} title={tf('sheet.selectRow', '选择整行')}>{r + 1}</td>
                 )}
                 {Array.from({ length: cols }).map((_, c) => {
                   const cell = getCell(r, c)
@@ -629,11 +1224,25 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   if (cell.hiddenBy) return null
                   const isActive = active.r === r && active.c === c
                   const mergeRange = cell.mergeRange
+                  const sel = inSelection(r, c)
+                  const bw = cell.border === 'thick' ? '3px' : cell.border === 'medium' ? '2px' : cell.border === 'thin' ? '1px' : undefined
                   return (
                     <td key={c} className="border p-0 relative" rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
-                      background: isActive ? 'var(--color-primary-light)' : (cell.bg || 'var(--color-surface)'),
-                      borderColor: 'var(--color-border)', minWidth: '80px',
-                    }} onClick={() => setActive({ r, c })}>
+                      // 选中仅以淡蓝背景表示，绝不修改单元格自身的字体颜色
+                      background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (cell.bg || 'var(--color-surface)'),
+                      borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || '#000') : 'var(--color-border)',
+                      borderWidth: bw,
+                      minWidth: '80px',
+                    }}
+                      onMouseDown={() => { selectCell(r, c); setDragging(true) }}
+                      onMouseEnter={() => { if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c)) }}
+                      onMouseUp={() => setDragging(false)}
+                      onClick={() => selectCell(r, c)}
+                      onContextMenu={e => {
+                        e.preventDefault()
+                        if (!inSelection(r, c)) selectCell(r, c)
+                        setMenu({ x: e.clientX, y: e.clientY, r, c })
+                      }}>
                       {isActive && <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 0 2px var(--color-primary)' }}></div>}
                       {(() => {
                         const v = cell.value
@@ -641,7 +1250,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                           return <img src={v.slice(5)} alt="" className="w-full h-full object-contain pointer-events-none" />
                         }
                         const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
-                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => setActive({ r, c })} className="w-full h-7 px-2 outline-none bg-transparent" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }} />
+                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); selectCell(Math.min(rows - 1, r + 1), c) }
+                          else if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
+                        }} className="w-full h-7 px-2 outline-none bg-transparent" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }} />
                       })()}
                     </td>
                   )
@@ -651,6 +1263,39 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </tbody>
         </table>
       </div>
+
+      {/* 右键上下文菜单 */}
+      {menu && (() => {
+        const sr = selRect()
+        const selIsMerged = selection.mode === 'cell' && (getCell(Math.min(selection.r1, selection.r2), Math.min(selection.c1, selection.c2)).mergeRange || false)
+        const ctxItem = (label: string, icon: string, fn: () => void, disabled = false) => (
+          <button key={label} onClick={() => { fn(); setMenu(null) }}
+            disabled={disabled}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs rounded whitespace-nowrap transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--color-primary-light)]"
+            style={{ color: 'var(--color-text)' }}>
+            <span style={{ width: '16px', textAlign: 'center' }}>{icon}</span>{label}
+          </button>
+        )
+        const sep = <div key={'sep' + Math.random()} className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
+        return (
+          <div className="fixed z-[100] py-1 rounded-lg shadow-xl border" style={{ left: menu.x, top: menu.y, background: 'var(--color-surface)', borderColor: 'var(--color-border)' }} onContextMenu={e => e.preventDefault()} onMouseDown={e => e.stopPropagation()}>
+            {ctxItem(tf('sheet.cut', '剪切'), '✂', () => copyCells(true))}
+            {ctxItem(tf('sheet.copy', '复制'), '⧉', () => copyCells(false))}
+            {ctxItem(tf('sheet.paste', '粘贴'), '📋', () => pasteCells(), !clipboard)}
+            {sep}
+            {ctxItem(tf('sheet.insertRowAbove', '在上方插入行'), '↥', () => insertRows(sr.r1, 1))}
+            {ctxItem(tf('sheet.insertRowBelow', '在下方插入行'), '↧', () => insertRows(sr.r2 + 1, 1))}
+            {ctxItem(tf('sheet.insertColLeft', '在左侧插入列'), '↤', () => insertCols(sr.c1, 1))}
+            {ctxItem(tf('sheet.insertColRight', '在右侧插入列'), '↦', () => insertCols(sr.c2 + 1, 1))}
+            {sep}
+            {ctxItem(tf('sheet.deleteRows', '删除行'), '🗑', () => deleteRows(sr.r1, sr.r2 - sr.r1 + 1))}
+            {ctxItem(tf('sheet.deleteCols', '删除列'), '🗑', () => deleteCols(sr.c1, sr.c2 - sr.c1 + 1))}
+            {sep}
+            {!selIsMerged && ctxItem(tf('sheet.merge', '合并单元格'), '▦', () => mergeCells(sr.r1, sr.c1, sr.r2, sr.c2))}
+            {selIsMerged && ctxItem(tf('sheet.unmerge', '拆分单元格'), '▫', () => splitCell(Math.min(selection.r1, selection.r2), Math.min(selection.c1, selection.c2)))}
+          </div>
+        )
+      })()}
 
       {/* 图表渲染区 */}
       {charts.length > 0 && (

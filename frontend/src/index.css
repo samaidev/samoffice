@@ -850,6 +850,20 @@ table td, table th {
 .sl-anim-zoom { animation: slZoom 0.45s var(--ease-spring) both }
 .sl-anim-wipe { animation: slWipe 0.6s var(--ease-out) both }
 .sl-anim-bounce { animation: slBounce 0.6s var(--ease-spring) both }
+
+/* 幻灯片切换效果（放映整页切换） */
+.sl-trans-none { animation: none }
+.sl-trans-fade { animation: slFade 0.6s var(--ease-out) both }
+.sl-trans-push { animation: slPush 0.5s var(--ease-out) both }
+.sl-trans-wipe { animation: slWipe 0.6s var(--ease-out) both }
+.sl-trans-cover { animation: slCover 0.55s var(--ease-out) both }
+.sl-trans-cut { animation: slCut 0.25s steps(2, end) both }
+.sl-trans-zoom { animation: slZoom 0.5s var(--ease-spring) both }
+.sl-trans-morph { animation: slMorph 0.6s var(--ease-out) both }
+@keyframes slPush { from { opacity: 0; transform: translateX(120%) } to { opacity: 1; transform: translateX(0) } }
+@keyframes slCover { from { opacity: 0; transform: scale(1.08) } to { opacity: 1; transform: scale(1) } }
+@keyframes slCut { from { opacity: 0.2 } 50% { opacity: 1 } to { opacity: 1 } }
+@keyframes slMorph { from { opacity: 0; transform: scale(0.92) rotate(-1deg) } to { opacity: 1; transform: scale(1) rotate(0) } }
 .ProseMirror table.pm-table th {
   background: #f1f5f9;
   font-weight: 600;

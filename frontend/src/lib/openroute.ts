@@ -17,8 +17,9 @@ export type OpenTab =
 
 export interface SlideShape {
   kind: string // text | rect | pic
+  type?: string // rect/ellipse/triangle/... 几何预设（保存时映射为 PPTX prstGeom）
   x: number; y: number; cx: number; cy: number // EMU
-  fill?: string // #RRGGBB
+  fill?: string // #RRGGBB 或 url("data:...")
   text?: string
   color?: string
   sizePt?: number

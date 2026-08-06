@@ -21,6 +21,8 @@ export function OpenFileDialog():Promise<string>;
 
 export function ReadFile(arg1:string):Promise<string>;
 
+export function ReadXLSX(arg1:string):Promise<string>;
+
 export function SaveFileDialog(arg1:string,arg2:string):Promise<string>;
 
 export function SetClipboardHtml(arg1:string,arg2:string):Promise<void>;
@@ -38,3 +40,9 @@ export function WindowMinimize():Promise<void>;
 export function WindowStartDrag():Promise<void>;
 
 export function WriteDocument(arg1:string,arg2:string,arg3:core.Document):Promise<void>;
+
+export function WritePPTX(arg1:string,arg2:string):Promise<void>;
+
+export function WriteTextFile(arg1:string,arg2:string):Promise<void>;
+
+export function WriteXLSX(arg1:string,arg2:string):Promise<void>;

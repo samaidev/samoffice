@@ -441,7 +441,7 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                       ]}
                     />
                   </div>
-                  {settings.pptContent === 'handout' && (
+                  {settings.pptContent !== 'notes' && settings.pptContent !== 'outline' && (
                     <div>
                       <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.slidesPerPage')}</label>
                       <div className="grid grid-cols-3 gap-2">
@@ -452,7 +452,7 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                             data-testid={`print-slides-${n}`}
                             className={`text-sm py-2 rounded-md border ${settings.slidesPerPage === n ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-gray-200'}`}
                           >
-                            {n}
+                            {n} {t('print.perPageUnit')}
                           </button>
                         ))}
                       </div>

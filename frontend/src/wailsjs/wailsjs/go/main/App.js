@@ -38,6 +38,10 @@ export function ReadFile(arg1) {
   return window['go']['main']['App']['ReadFile'](arg1);
 }
 
+export function ReadXLSX(arg1) {
+  return window['go']['main']['App']['ReadXLSX'](arg1);
+}
+
 export function SaveFileDialog(arg1, arg2) {
   return window['go']['main']['App']['SaveFileDialog'](arg1, arg2);
 }
@@ -72,4 +76,16 @@ export function WindowStartDrag() {
 
 export function WriteDocument(arg1, arg2, arg3) {
   return window['go']['main']['App']['WriteDocument'](arg1, arg2, arg3);
+}
+
+export function WritePPTX(arg1, arg2) {
+  return window['go']['main']['App']['WritePPTX'](arg1, arg2);
+}
+
+export function WriteTextFile(arg1, arg2) {
+  return window['go']['main']['App']['WriteTextFile'](arg1, arg2);
+}
+
+export function WriteXLSX(arg1, arg2) {
+  return window['go']['main']['App']['WriteXLSX'](arg1, arg2);
 }
