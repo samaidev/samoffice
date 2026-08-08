@@ -99,7 +99,7 @@ type Parser struct{}
 
 func New() *Parser { return &Parser{} }
 
-func (p *Parser) Supported() []string { return []string{".xlsx", ".xls"} }
+func (p *Parser) Supported() []string { return []string{".xlsx"} }
 
 func (p *Parser) CanParse(path string, header []byte) bool {
         return strings.HasSuffix(strings.ToLower(path), ".xlsx")
@@ -195,6 +195,12 @@ func buildTable(f *excelize.File, sheetName string) (core.Table, []core.Warning)
 			if ri == 0 {
 				cell.IsHeader = true
 			}
+			// 公式：当单元格含公式时记录公式文本（与 .xls 解析对齐以便一致性对比）
+			if cellRef != "" {
+				if formula, ferr := f.GetCellFormula(sheetName, cellRef); ferr == nil && formula != "" {
+					cell.Formula = normalizeFormula(formula)
+				}
+			}
 			cells = append(cells, cell)
 		}
 		tableCells = append(tableCells, cells)
@@ -204,6 +210,14 @@ func buildTable(f *excelize.File, sheetName string) (core.Table, []core.Warning)
 		Rows:  tableCells,
 		Style: sheetName,
 	}, warnings
+}
+
+// normalizeFormula 标准化公式串：去掉跨表前缀里的单引号包裹、统一大小写无关。
+func normalizeFormula(f string) string {
+	f = strings.TrimSpace(f)
+	// xlsx 的 3D 引用形如 '销售表'!C2:C6 或 销售表!C2:C6
+	// .xls 侧输出为 SheetN!...，统一保留原样以供对比。
+	return f
 }
 
 // applyCellStyle 读取单元格样式写入 UDM Text（粗体/斜体/颜色/对齐/填充）

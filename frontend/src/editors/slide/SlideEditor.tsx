@@ -207,28 +207,33 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   // 文本内联编辑（双击元素编辑文字，对标 MS PPT）
   const [editing, setEditing] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
   const editAreaRef = useRef<HTMLTextAreaElement | null>(null)
+  // 最新 slides 镜像，供历史栈与快捷键读取，避免闭包陈旧导致撤销无效
+  const slidesRef = useRef(slides)
+  slidesRef.current = slides
 
   // 撤销/重做历史栈
   const [past, setPast] = useState<Slide[][]>([])
   const [future, setFuture] = useState<Slide[][]>([])
-  const recordHistory = (snapshot: Slide[]) => { setPast(p => [...p, snapshot]); setFuture([]) }
+  const recordHistory = () => { setPast(p => [...p, slidesRef.current]); setFuture([]) }
   const undo = () => {
     if (!past.length) return
     const prev = past[past.length - 1]
+    const cur = slidesRef.current
     setPast(p => p.slice(0, -1))
-    setFuture(f => [slides, ...f])
+    setFuture(f => [cur, ...f])
     setSlides(prev)
   }
   const redo = () => {
     if (!future.length) return
     const next = future[0]
+    const cur = slidesRef.current
     setFuture(f => f.slice(1))
-    setPast(p => [...p, slides])
+    setPast(p => [...p, cur])
     setSlides(next)
   }
 
   const insertSlide = (at: number, layout: 'title' | 'section' | 'blank' | 'content') => {
-    recordHistory(slides)
+    recordHistory()
     const n = slides.length + 1
     let slide: Slide
     if (layout === 'title') {
@@ -245,9 +250,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     setShowInsertSlide(false)
   }
   const addSlide = () => insertSlide(slides.length - 1, 'content')
-  const deleteSlide = (idx: number) => { if (slides.length <= 1) return; recordHistory(slides); setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
-  const duplicateSlide = (idx: number) => { recordHistory(slides); setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
-  const updateActive = (patch: Partial<Slide>) => { recordHistory(slides); setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl)) }
+  const deleteSlide = (idx: number) => { if (slides.length <= 1) return; recordHistory(); setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
+  const duplicateSlide = (idx: number) => { recordHistory(); setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
+  const updateActive = (patch: Partial<Slide>, record = true) => { if (record) recordHistory(); setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl)) }
   const switchSlide = (i: number) => { if (i === active) return; setActive(i) }
   const current = slides[active] || slides[0]
   const isDark = current.bg === '#1e293b' || current.bg === '#312e81'
@@ -323,23 +328,20 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
   // 形状操作
   const addShape = (type: string) => {
-    recordHistory(slides)
     const newShape: ShapeItem = { type, x: 200 + Math.random()*100, y: 200 + Math.random()*100, w: 200, h: 120, fill: '#4f46e5', text: '', shadow: false, glow: false, gradient: '', rotation: 0 }
     updateActive({ shapes: [...current.shapes, newShape] })
     setShowShapePanel(false)
   }
-  const removeShape = (idx: number) => { recordHistory(slides); updateActive({ shapes: current.shapes.filter((_, i) => i !== idx) }) }
+  const removeShape = (idx: number) => { updateActive({ shapes: current.shapes.filter((_, i) => i !== idx) }) }
   const updateShape = (idx: number, patch: Partial<ShapeItem>, record = true) => {
-    if (record) recordHistory(slides)
     const newShapes = current.shapes.map((s, i) => i === idx ? { ...s, ...patch } : s)
-    updateActive({ shapes: newShapes })
+    updateActive({ shapes: newShapes }, record)
   }
 
   // 艺术字操作
   const addArtText = (preset: any) => {
     const text = prompt(t('slide.prompt.wordArt'), 'SamOffice')
     if (!text) return
-    recordHistory(slides)
     const newArt: ArtTextItem = {
       text, x: 100, y: 100, w: 400, h: 80,
       fontSize: 36, color: preset.color, gradient: preset.gradient || '',
@@ -348,16 +350,14 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     updateActive({ artTexts: [...current.artTexts, newArt] })
     setShowArtPanel(false)
   }
-  const removeArtText = (idx: number) => { recordHistory(slides); updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
+  const removeArtText = (idx: number) => { updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
   const updateArtText = (idx: number, patch: Partial<ArtTextItem>, record = true) => {
-    if (record) recordHistory(slides)
     const newArts = current.artTexts.map((a, i) => i === idx ? { ...a, ...patch } : a)
-    updateActive({ artTexts: newArts })
+    updateActive({ artTexts: newArts }, record)
   }
 
   // 叠放层次（z-order，对标 MS PPT：置于顶层/底层、上移/下移一层）
   const reorderShape = (idx: number, to: 'front' | 'back' | 'forward' | 'backward') => {
-    recordHistory(slides)
     const shapes = [...current.shapes]
     const [item] = shapes.splice(idx, 1)
     if (to === 'front') shapes.push(item)
@@ -367,7 +367,6 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     updateActive({ shapes })
   }
   const reorderArt = (idx: number, to: 'front' | 'back' | 'forward' | 'backward') => {
-    recordHistory(slides)
     const arts = [...current.artTexts]
     const [item] = arts.splice(idx, 1)
     if (to === 'front') arts.push(item)
@@ -393,7 +392,6 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const pasteClipboard = () => {
     const clip = clipboardRef.current
     if (!clip) return
-    recordHistory(slides)
     if (clip.type === 'shape') {
       const copy = { ...(clip.data as ShapeItem), x: (clip.data as ShapeItem).x + 16, y: (clip.data as ShapeItem).y + 16 }
       const shapes = [...current.shapes, copy]
@@ -465,14 +463,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
   // 动画操作
   const addAnimation = (effect: string, category: string) => {
-    recordHistory(slides)
     const targetIdx = selectedEl?.type === 'shape' ? selectedEl.index : current.shapes.length - 1
     const target = `shape_${targetIdx}`
     const newAnim: AnimItem = { target, effect, category, delay: current.animations.length * 300, sound: pendingSound }
     updateActive({ animations: [...current.animations, newAnim] })
     setShowAnimPanel(false)
   }
-  const removeAnimation = (idx: number) => { recordHistory(slides); updateActive({ animations: current.animations.filter((_, i) => i !== idx) }) }
+  const removeAnimation = (idx: number) => { updateActive({ animations: current.animations.filter((_, i) => i !== idx) }) }
 
   // 放映控制
   const [presentAnimStep, setPresentAnimStep] = useState(0)
@@ -535,19 +532,21 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
         return
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
-        e.preventDefault()
-        if (e.shiftKey) redo(); else undo()
-        return
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
-        e.preventDefault()
-        redo()
+      // 焦点在输入框/文本域等可编辑元素时，交给浏览器默认行为（如文本框内复制、撤销）
+      const tag = (e.target as HTMLElement)?.tagName
+      const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const k = e.key.toLowerCase()
+        if (k === 'z') { if (!editable) { e.preventDefault(); if (e.shiftKey) redo(); else undo() } return }
+        if (k === 'y') { if (!editable) { e.preventDefault(); redo() } return }
+        if (k === 'c') { if (!editable && selectedEl) { e.preventDefault(); copySelected() } return }
+        if (k === 'x') { if (!editable && selectedEl) { e.preventDefault(); cutSelected() } return }
+        if (k === 'v') { if (!editable) { e.preventDefault(); pasteClipboard() } return }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [anyPanelOpen, presenting, past.length, future.length])
+  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl])
 
   // 点击/滚动/ESC 关闭右键菜单
   useEffect(() => {
@@ -741,7 +740,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 if (!file) return
                 const reader = new FileReader()
                 reader.onload = () => {
-                  recordHistory(slides)
+                  recordHistory()
                   updateActive({ shapes: [...current.shapes, { type: 'rect', x: 160, y: 120, w: 480, h: 270, fill: '', text: '', shadow: false, glow: false, gradient: '', rotation: 0, media: { type: 'video', src: String(reader.result) } } as ShapeItem] })
                 }
                 reader.readAsDataURL(file)
@@ -757,7 +756,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 if (!file) return
                 const reader = new FileReader()
                 reader.onload = () => {
-                  recordHistory(slides)
+                  recordHistory()
                   updateActive({ shapes: [...current.shapes, { type: 'rect', x: 280, y: 200, w: 240, h: 48, fill: '#1f2937', text: file.name, shadow: false, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 11, media: { type: 'audio', src: String(reader.result) } } as ShapeItem] })
                 }
                 reader.readAsDataURL(file)
@@ -1232,7 +1231,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
-                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
+                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
                   onDoubleClick={(e) => { e.stopPropagation(); startEdit('shape', i) }}
                   onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'shape', index: i }) }}
                   style={{
@@ -1290,15 +1289,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   </div>
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
-                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
-                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
                   </>}
                 </div>
               ))}
 
               {/* 艺术字渲染层 — zIndex 21 > 文字内容 z-10 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
                   {editing?.type === 'art' && editing?.index === i ? (
                     <textarea ref={editAreaRef} defaultValue={at.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="outline-none bg-transparent resize-none" style={{ fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700, color: at.color, textAlign: 'center', background: 'rgba(255,255,255,0.15)', padding: 2, minWidth: 80 }} />
                   ) : (
@@ -1314,7 +1313,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   }}>{at.text}</span>
                   )}
                   <button onClick={() => removeArtText(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
-                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(slides); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
+                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
                 </div>
               ))}
 

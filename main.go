@@ -287,7 +287,7 @@ func (a *App) GetStartupArgs() []string {
 		if strings.HasSuffix(lower, ".docx") || strings.HasSuffix(lower, ".doc") ||
 			strings.HasSuffix(lower, ".xlsx") || strings.HasSuffix(lower, ".xls") ||
 			strings.HasSuffix(lower, ".csv") || strings.HasSuffix(lower, ".tsv") ||
-			strings.HasSuffix(lower, ".pptx") ||
+			strings.HasSuffix(lower, ".pptx") || strings.HasSuffix(lower, ".ppt") ||
 			strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
 			strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".sam") ||
 			strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") {
@@ -305,7 +305,7 @@ func (a *App) OpenFileDialog() (string, error) {
 		return "", fmt.Errorf("app not started")
 	}
 	filters := []runtime.FileFilter{
-		{DisplayName: "Office 文档 (*.docx;*.md;*.markdown;*.xlsx;*.pptx)", Pattern: "*.docx;*.md;*.markdown;*.xlsx;*.pptx"},
+		{DisplayName: "Office 文档 (*.docx;*.doc;*.md;*.markdown;*.xlsx;*.xls;*.pptx;*.ppt)", Pattern: "*.docx;*.doc;*.md;*.markdown;*.xlsx;*.xls;*.pptx;*.ppt"},
 		{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
 	}
 	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{

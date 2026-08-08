@@ -1,0 +1,137 @@
+﻿{
+  "path": "_verify/source.ppt",
+  "warns": [],
+  "blocks": [
+    {
+      "kind": "slide",
+      "data": {
+        "bg": "",
+        "bullets": [
+          "副标题Beta"
+        ],
+        "notes": "",
+        "pageH": 6858000,
+        "pageW": 12192000,
+        "shapes": [
+          {
+            "align": "center",
+            "bold": true,
+            "color": "#1a1a2e",
+            "cx": 10372320,
+            "cy": 1371600,
+            "fill": "none",
+            "kind": "text",
+            "sizePt": 36,
+            "text": "第一页标题Alpha",
+            "vanchor": "center",
+            "x": 914400,
+            "y": 457200
+          },
+          {
+            "align": "left",
+            "bold": false,
+            "color": "#333333",
+            "cx": 10372320,
+            "cy": 3962400,
+            "fill": "none",
+            "kind": "text",
+            "sizePt": 20,
+            "text": "副标题Beta",
+            "vanchor": "top",
+            "x": 914400,
+            "y": 2108200
+          }
+        ],
+        "title": "第一页标题Alpha"
+      }
+    },
+    {
+      "kind": "slide",
+      "data": {
+        "bg": "",
+        "bullets": [
+          "要点一 One",
+          "要点二 中文Two",
+          "要点三 Three"
+        ],
+        "notes": "",
+        "pageH": 6858000,
+        "pageW": 12192000,
+        "shapes": [
+          {
+            "align": "center",
+            "bold": true,
+            "color": "#1a1a2e",
+            "cx": 10372320,
+            "cy": 1371600,
+            "fill": "none",
+            "kind": "text",
+            "sizePt": 36,
+            "text": "第二页标题中文测试",
+            "vanchor": "center",
+            "x": 914400,
+            "y": 457200
+          },
+          {
+            "align": "left",
+            "bold": false,
+            "color": "#333333",
+            "cx": 10372320,
+            "cy": 3962400,
+            "fill": "none",
+            "kind": "text",
+            "sizePt": 20,
+            "text": "要点一 One\n要点二 中文Two\n要点三 Three",
+            "vanchor": "top",
+            "x": 914400,
+            "y": 2108200
+          }
+        ],
+        "title": "第二页标题中文测试"
+      }
+    },
+    {
+      "kind": "slide",
+      "data": {
+        "bg": "",
+        "bullets": [
+          "Hello世界 123"
+        ],
+        "notes": "",
+        "pageH": 6858000,
+        "pageW": 12192000,
+        "shapes": [
+          {
+            "align": "center",
+            "bold": true,
+            "color": "#1a1a2e",
+            "cx": 10372320,
+            "cy": 1371600,
+            "fill": "none",
+            "kind": "text",
+            "sizePt": 36,
+            "text": "Wang五与混合ABC测试",
+            "vanchor": "center",
+            "x": 914400,
+            "y": 457200
+          },
+          {
+            "align": "left",
+            "bold": false,
+            "color": "#333333",
+            "cx": 10372320,
+            "cy": 3962400,
+            "fill": "none",
+            "kind": "text",
+            "sizePt": 20,
+            "text": "Hello世界 123",
+            "vanchor": "top",
+            "x": 914400,
+            "y": 2108200
+          }
+        ],
+        "title": "Wang五与混合ABC测试"
+      }
+    }
+  ]
+}

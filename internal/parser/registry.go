@@ -13,7 +13,9 @@ import (
 	"github.com/zai/samoffice/internal/parser/doc"
 	"github.com/zai/samoffice/internal/parser/docx"
 	"github.com/zai/samoffice/internal/parser/markdown"
+	"github.com/zai/samoffice/internal/parser/ppt"
 	"github.com/zai/samoffice/internal/parser/pptx"
+	"github.com/zai/samoffice/internal/parser/xls"
 	"github.com/zai/samoffice/internal/parser/xlsx"
 )
 
@@ -36,6 +38,8 @@ func NewRegistry() *Registry {
 	r.Register(&doc.Parser{})
 	r.Register(&xlsx.Parser{})
 	r.Register(&pptx.Parser{})
+	r.Register(&ppt.Parser{})
+	r.Register(&xls.Parser{})
 	r.Register(&markdown.Parser{})
 	r.Register(&csv.Parser{})
 	return r

@@ -161,6 +161,7 @@ type TableCell struct {
 	RowSpan  int      `json:"rowSpan,omitempty"`
 	ColSpan  int      `json:"colSpan,omitempty"`
 	IsHeader bool     `json:"isHeader,omitempty"`
+	Formula  string   `json:"formula,omitempty"` // 单元格公式（xls/xlsx 解析填充）
 	// VMerge 为垂直合并中间态（不进 JSON）：0=不合并 1=被合并占位 3=合并起点。
 	VMerge int `json:"-"`
 }

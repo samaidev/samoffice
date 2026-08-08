@@ -1,0 +1,796 @@
+﻿{
+  "path": "complex.xls",
+  "warns": [],
+  "blocks": [
+    {
+      "rows": [
+        [
+          {
+            "inline": [
+              {
+                "content": "姓名",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "部门",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "销售额",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "isHeader": true
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "Wang五",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "销售"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12000"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "李四"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "市场"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "9800"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "张三"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "销售"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "15000"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "赵六"
+              }
+            ]
+          },
+          {},
+          {
+            "inline": [
+              {
+                "content": "5000"
+              }
+            ]
+          }
+        ],
+        [
+          {},
+          {
+            "inline": [
+              {
+                "content": "财务"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "7500"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "合计",
+                "bold": true,
+                "color": "#FFFFFF",
+                "fontSize": 11
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "",
+                "bold": true,
+                "color": "#FFFFFF",
+                "fontSize": 11
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          }
+        ]
+      ],
+      "style": "销售表"
+    },
+    {
+      "rows": [
+        [
+          {
+            "inline": [
+              {
+                "content": "项目",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "colSpan": 2,
+            "isHeader": true
+          },
+          {}
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "总计"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "平均"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12266.67"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "利润"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "-4200.5"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "增长率"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "0.1234"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "备注"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "这是一段较长的中文备注文本用于测试字符串解析是否正常"
+              }
+            ]
+          }
+        ]
+      ],
+      "style": "汇总"
+    },
+    {
+      "rows": [
+        [
+          {
+            "inline": [
+              {
+                "content": "序号",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "数值",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "双倍",
+                "color": "#000000",
+                "fontSize": 11
+              }
+            ],
+            "isHeader": true
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "1"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "3.14"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "6.28"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "2"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "6.28"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12.56"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "3"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "9.42"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "18.84"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "4"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12.56"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "25.12"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "5"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "15.7"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "31.4"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "6"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "18.84"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "37.68"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "7"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "21.98"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "43.96"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "8"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "25.12"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "50.24"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "9"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "28.26"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "56.52"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "10"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "31.4"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "62.8"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "11"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "34.54"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "69.08"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "12"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "37.68"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "75.36"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "13"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "40.82"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "81.64"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "14"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "43.96"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "87.92"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "15"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "47.1"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "94.2"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "16"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "50.24"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "100.48"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "17"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "53.38"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "106.76"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "18"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "56.52"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "113.04"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "19"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "59.66"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "119.32"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "20"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "62.8"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "125.6"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "合计"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          }
+        ]
+      ],
+      "style": "数据表"
+    }
+  ]
+}

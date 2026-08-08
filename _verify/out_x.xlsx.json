@@ -1,0 +1,992 @@
+﻿{
+  "path": "complex.xlsx",
+  "warns": [],
+  "blocks": [
+    {
+      "rows": [
+        [
+          {
+            "inline": [
+              {
+                "content": "姓名",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "部门",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "销售额",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "Wang五",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "销售",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12000",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "李四",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "市场",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "9800",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "张三",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "销售",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "15000",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "赵六",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "5000",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "财务",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "7500",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "合计",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ],
+            "formula": "SUM(C2:C6)"
+          }
+        ]
+      ],
+      "style": "销售表"
+    },
+    {
+      "rows": [
+        [
+          {
+            "inline": [
+              {
+                "content": "项目",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ],
+            "isHeader": true
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "总计",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ],
+            "formula": "SUM(销售表!C2:C6)"
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "平均",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12266.67",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "利润",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "-4200.5",
+                "italic": true,
+                "color": "#FF0000"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "增长率",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "0.1234",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "备注",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "这是一段较长的中文备注文本用于测试字符串解析是否正常",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ]
+      ],
+      "style": "汇总"
+    },
+    {
+      "rows": [
+        [
+          {
+            "inline": [
+              {
+                "content": "序号",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "数值",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          },
+          {
+            "inline": [
+              {
+                "content": "双倍",
+                "bold": true,
+                "color": "#FFFFFF",
+                "align": "center",
+                "bg": "#305496"
+              }
+            ],
+            "isHeader": true
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "1",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "3.14",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "6.28",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "2",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "6.28",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12.56",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "3",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "9.42",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "18.84",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "4",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "12.56",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "25.12",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "5",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "15.7",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "31.4",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "6",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "18.84",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "37.68",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "7",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "21.98",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "43.96",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "8",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "25.12",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "50.24",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "9",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "28.26",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "56.52",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "10",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "31.4",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "62.8",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "11",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "34.54",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "69.08",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "12",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "37.68",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "75.36",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "13",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "40.82",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "81.64",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "14",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "43.96",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "87.92",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "15",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "47.1",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "94.2",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "16",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "50.24",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "100.48",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "17",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "53.38",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "106.76",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "18",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "56.52",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "113.04",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "19",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "59.66",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "119.32",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "20",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "62.8",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": "125.6",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "inline": [
+              {
+                "content": "合计",
+                "fontSize": 11,
+                "fontFamily": "Calibri"
+              }
+            ]
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ],
+            "formula": "SUM(B2:B21)"
+          },
+          {
+            "inline": [
+              {
+                "content": ""
+              }
+            ],
+            "formula": "SUM(C2:C21)"
+          }
+        ]
+      ],
+      "style": "数据表"
+    }
+  ]
+}
