@@ -75,8 +75,22 @@ export const schema = new Schema({
         if (a.spaceBefore > 0) s.push(`margin-top: ${a.spaceBefore}pt`)
         if (a.spaceAfter > 0) s.push(`margin-bottom: ${a.spaceAfter}pt`)
         if (a.shading) s.push(`background-color: ${a.shading}`)
-        if (a.border === 'all') s.push('border: 1px solid #ccc; padding: 4px')
-        if (a.border === 'left') s.push('border-left: 3px solid #4f46e5; padding-left: 8px')
+        // 段落边框：支持四方向组合，border 为空格分隔的方向集合（'all'/'left'/'top'/'right'/'bottom' 或组合）
+        if (a.border) {
+          if (a.border === 'redBottom') {
+            s.push('border-bottom: 2px solid #d40000; padding-bottom: 2px')
+          } else {
+            const sides = a.border.split(/\s+/).filter(Boolean)
+            const all = sides.includes('all')
+            const has = (side: string) => all || sides.includes(side)
+            let pad = false
+            if (has('top')) { s.push('border-top: 1px solid #ccc'); pad = true }
+            if (has('right')) { s.push('border-right: 1px solid #ccc'); pad = true }
+            if (has('bottom')) { s.push('border-bottom: 1px solid #ccc'); pad = true }
+            if (has('left')) { s.push('border-left: 3px solid #4f46e5'); pad = true }
+            if (pad) s.push('padding: 4px')
+          }
+        }
         if (a.letterSpacing) s.push(`letter-spacing: ${a.letterSpacing}`)
         if (a.rtl) s.push('direction: rtl')
         if (a.keepWithNext) s.push('break-after: avoid')
@@ -100,7 +114,15 @@ export const schema = new Schema({
           spaceBefore: parseInt(dom.style.marginTop) || 0,
           spaceAfter: parseInt(dom.style.marginBottom) || 0,
           shading: dom.style.backgroundColor || '',
-          border: dom.style.border ? 'all' : (dom.style.borderLeft ? 'left' : ''),
+          border: (() => {
+            if (dom.style.borderBottom && (dom.style.borderBottom as string).includes('d40000') && (dom.style.borderBottom as string).includes('2px')) return 'redBottom'
+            const sides: string[] = []
+            if (dom.style.borderTop) sides.push('top')
+            if (dom.style.borderRight) sides.push('right')
+            if (dom.style.borderBottom) sides.push('bottom')
+            if (dom.style.borderLeft) sides.push('left')
+            return sides.length ? sides.join(' ') : ''
+          })(),
           letterSpacing: dom.style.letterSpacing || '',
           rtl: dom.style.direction === 'rtl',
           outlineLevel: parseInt(dom.getAttribute('data-outline') || '') || 0,
@@ -422,10 +444,17 @@ export const schema = new Schema({
         shape: { default: 'rect' },     // rect | roundRect | ellipse | triangle | diamond | rightArrow | star5 | heart
         width: { default: 0 },          // 0 = auto
         float: { default: '' },         // '' | 'left' | 'right'
+        borderW: { default: 1 },        // 边框线宽 pt
+        lineStyle: { default: 'solid' },// solid | dash | dot | dashDot
       },
       toDOM: (node) => {
         const shape = node.attrs.shape || 'rect'
-        const baseStyle = `background: ${node.attrs.bgColor}; border: 2px solid ${node.attrs.borderColor}; padding: 12px 16px; margin: 8px 0; min-width: 120px; min-height: 80px;`
+        const bw = node.attrs.borderW || 0
+        const ls = node.attrs.lineStyle || 'solid'
+        // 线型映射：dash->dashed, dot->dotted, dashDot 无原生值，用 dashed 近似
+        const cssLS = ls === 'dot' ? 'dotted' : ls === 'dash' || ls === 'dashDot' ? 'dashed' : 'solid'
+        const borderStyle = `${bw}px ${cssLS} ${node.attrs.borderColor}`
+        const baseStyle = `background: ${node.attrs.bgColor}; border: ${borderStyle}; padding: 12px 16px; margin: 8px 0; min-width: 120px; min-height: 80px;`
         const shapeStyles: Record<string, string> = {
           rect: 'border-radius: 0;',
           roundRect: 'border-radius: 12px;',
@@ -447,13 +476,22 @@ export const schema = new Schema({
       },
       parseDOM: [{
         tag: 'div.text-box',
-        getAttrs: (dom: HTMLElement) => ({
-          bgColor: dom.style.backgroundColor || '#fef3c7',
-          borderColor: dom.style.borderColor || '#f59e0b',
-          shape: dom.getAttribute('data-shape') || 'rect',
-          width: parseInt(dom.style.width) || 0,
-          float: dom.style.float === 'left' ? 'left' : dom.style.float === 'right' ? 'right' : '',
-        })
+        getAttrs: (dom: HTMLElement) => {
+          const border = dom.style.border || ''
+          const bwMatch = border.match(/^(\d+(?:\.\d+)?)px/)
+          const borderW = bwMatch ? parseFloat(bwMatch[1]) : 1
+          const bs = dom.style.borderStyle
+          const lineStyle = bs === 'dotted' ? 'dot' : (bs === 'dashed' || !bs) ? 'dash' : 'solid'
+          return {
+            bgColor: dom.style.backgroundColor || '#fef3c7',
+            borderColor: dom.style.borderColor || '#f59e0b',
+            shape: dom.getAttribute('data-shape') || 'rect',
+            width: parseInt(dom.style.width) || 0,
+            float: dom.style.float === 'left' ? 'left' : dom.style.float === 'right' ? 'right' : '',
+            borderW,
+            lineStyle,
+          }
+        },
       }],
     },
 
@@ -548,8 +586,11 @@ export const schema = new Schema({
     },
     fontFamily: {
       attrs: { font: { validate: 'string' } },
-      toDOM: (mark) => ['span', { style: `font-family: ${mark.attrs.font}` }, 0],
-      parseDOM: [{ tag: 'span[style]', getAttrs: (d: HTMLElement) => d.style.fontFamily ? { font: d.style.fontFamily } : false }]
+      // 渲染时追加系统兜底字体链：商业字体（如方正系列）在大多数机器上
+      // 未安装，WebView2 会直接 fallback 到默认西文字体导致中文显示异常。
+      // 追加 SimSun / Microsoft YaHei / sans-serif 保证中文始终正确渲染。
+      toDOM: (mark) => ['span', { style: `font-family: "${mark.attrs.font}", SimSun, "Microsoft YaHei", sans-serif` }, 0],
+      parseDOM: [{ tag: 'span[style]', getAttrs: (d: HTMLElement) => d.style.fontFamily ? { font: d.style.fontFamily.split(',')[0].replace(/["']/g, '').trim() } : false }]
     },
     textColor: {
       attrs: { color: { validate: 'string' } },

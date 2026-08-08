@@ -141,12 +141,20 @@ export interface RawInline {
   data: Record<string, unknown>
 }
 
+// 文档保护（密码锁定）配置：重新打开文档时若 enabled 为 true，编辑器进入只读并要求输入密码解锁。
+// hash 为密码的哈希值（前端计算），盘上不存明文密码。
+export interface DocumentProtect {
+  enabled: boolean
+  hash: string
+}
+
 export interface Document {
   meta: Meta
   blocks: Block[]
   comments?: Comment[]
   styles?: StyleDef[]
   pageNumber?: PageNumberConfig
+  protect?: DocumentProtect
   warnings?: Warning[]
   raw?: Record<string, unknown>
 }

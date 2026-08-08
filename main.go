@@ -13,8 +13,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -48,7 +50,7 @@ type App struct {
 	startupArgs []string
 }
 
-// pendingOpenPath 返回“待打开文件”落盘路径（第二个实例把路径写到这里，首个实例轮询读取）
+// pendingOpenPath 返回"待打开文件"落盘路径（第二个实例把路径写到这里，首个实例轮询读取）
 func pendingOpenPath() string {
         dir, err := os.UserCacheDir()
         if err != nil {
@@ -64,7 +66,13 @@ func pendingOpenPath() string {
 // - 否则：创建全局命名互斥体并持有，返回 true（本进程是首个实例）。
 // 非 Windows 平台退化为直接返回 true（不阻止多开）。
 func tryEarlySingleInstance() bool {
-        const mutexName = "Global\\SamOffice-SingleInstance"
+	// 新建窗口模式：本进程由 NewWindow() 以 --new-window 启动，跳过单实例互斥，允许并发生成新窗口
+	for _, arg := range os.Args[1:] {
+		if arg == "--new-window" {
+			return true
+		}
+	}
+	const mutexName = "Global\\SamOffice-SingleInstance"
         _, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(mutexName))
         if err == nil {
                 // 创建成功：本进程是第一个，继续
@@ -101,6 +109,18 @@ func tryEarlySingleInstance() bool {
         return true
 }
 
+// NewWindow 打开一个新的空 SamOffice 桌面窗口。
+// Wails v2.13 的 runtime 未提供 WindowNew，这里通过启动自身新进程（带 --new-window 标志）
+// 来实现独立窗口，并在 tryEarlySingleInstance 中识别该标志以跳过单实例互斥体。
+func (a *App) NewWindow() {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return
+	}
+	cmd := exec.Command(exe, "--new-window")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
+	_ = cmd.Start()
+}
 // pollPendingOpens 由首个实例在 OnStartup 后启动，轮询第二个实例写入的待打开文件，
 // 收到后通过事件通知前端打开，并将窗口恢复/最大化（复用当前窗口而非新开）。
 func (a *App) pollPendingOpens() {
@@ -212,7 +232,7 @@ func normalizePath(p string) string {
 
 // OpenFile 通过文件路径打开文档
 func (a *App) OpenFile(path string) (map[string]any, error) {
-	// 规范化路径：邮件/Windows“打开方式”可能传入带引号或 file:// 前缀的路径，
+	// 规范化路径：邮件/Windows"打开方式"可能传入带引号或 file:// 前缀的路径，
 	// 直接 os.ReadFile 会因路径非法而失败。这里统一去掉引号与 file:// 前缀。
 	path = normalizePath(path)
 
@@ -299,7 +319,7 @@ func (a *App) GetStartupArgs() []string {
 
 // === 本地文件对话框与写盘（Wails Binding）===
 
-// OpenFileDialog 弹出系统“打开文件”对话框，返回选中文件的完整路径；用户取消则返回空字符串。
+// OpenFileDialog 弹出系统"打开文件"对话框，返回选中文件的完整路径；用户取消则返回空字符串。
 func (a *App) OpenFileDialog() (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("app not started")
@@ -339,7 +359,7 @@ func (a *App) LogError(msg string) {
 	fmt.Fprintln(f, msg)
 }
 
-// SaveFileDialog 弹出系统“保存/另存为”对话框，返回用户选择的完整路径；用户取消则返回空字符串。
+// SaveFileDialog 弹出系统"保存/另存为"对话框，返回用户选择的完整路径；用户取消则返回空字符串。
 func (a *App) SaveFileDialog(defaultName, format string) (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("app not started")
@@ -435,7 +455,7 @@ func (a *App) startHTTPServer() {
 
 func main() {
         // 极早期单实例检测：若已有实例在运行，第二个实例把文档参数写出后立即退出，
-        // 不再加载词典/初始化 Wails（否则“再打开”会和首次一样慢）。
+        // 不再加载词典/初始化 Wails（否则"再打开"会和首次一样慢）。
         tryEarlySingleInstance()
 
         app := NewApp()
@@ -455,6 +475,7 @@ func main() {
                 MinWidth:  800,
                 MinHeight: 600,
                 Frameless: true, // 无系统标题栏，由前端自绘窗口控制按钮
+                DragAndDrop: &options.DragAndDrop{EnableFileDrop: true}, // 启用文件拖放：window.runtime.OnFileDrop 才能收到真实路径
                 AssetServer: &assetserver.Options{
                         Assets: dist,
                 },
@@ -465,7 +486,7 @@ func main() {
                         if len(os.Args) > 1 {
                                 app.startupArgs = append(app.startupArgs, os.Args[1:]...)
                         }
-                        // 清空可能残留的“待打开文件”，并启动轮询第二个实例写入的路径
+                        // 清空可能残留的"待打开文件"，并启动轮询第二个实例写入的路径
                         _ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
                         go app.pollPendingOpens()
                 },

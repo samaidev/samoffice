@@ -532,7 +532,10 @@ func parseFontTable(table []byte, fc, lcb uint32) []string {
 		ffn := st[pos : pos+cch]
 		pos += cch
 		name := ""
-		if len(ffn) > 40 {
+		// 字体名为 FFN 偏移 39 起的 UTF-16 零终结串。FFN 头部固定 39 字节，
+		// 故只要 ffn 长度能容纳至少 1 个 UTF-16 字符 (≥41) 即尝试解析，
+		// 不可要求 >40 而丢弃合法的短字体名（部分东亚字体 FFN 总长恰为 40）。
+		if len(ffn) >= 41 {
 			var u []uint16
 			for j := 39; j+1 < len(ffn); j += 2 {
 				v := binary.LittleEndian.Uint16(ffn[j:])
@@ -541,7 +544,7 @@ func parseFontTable(table []byte, fc, lcb uint32) []string {
 				}
 				u = append(u, v)
 			}
-			name = string(utf16.Decode(u))
+			name = strings.TrimSpace(string(utf16.Decode(u)))
 		}
 		out = append(out, name)
 	}
@@ -1172,6 +1175,8 @@ func collectInlinesText(inls []core.Inline, sb *strings.Builder) {
 		switch v := in.(type) {
 		case core.Text:
 			sb.WriteString(v.Content)
+		case core.Track:
+			sb.WriteString(v.Content)
 		case core.FootnoteRef:
 			// 不计入脚注引用本身，避免自我重叠
 		case core.InlineImage:
@@ -1482,10 +1487,10 @@ func buildInlines(runes []rune, from, to, istd int, defCHP chp, styles map[int]s
 		}
 		var fn string
 		if hasCJK(content) {
+			// 东亚文本优先用东亚字体 (ftcFE)；若文档未单独设置东亚字体
+			// (ftcFE 为空)，则不要回退到西文字体 (ftcAscii)，否则中文会被
+			// 套上微软雅黑等西文字体名导致渲染/导出时无法正确显示中文。
 			fn = ftcToName(cur.ftcFE, fonts)
-			if fn == "" {
-				fn = ftcToName(cur.ftcAscii, fonts)
-			}
 		} else {
 			fn = ftcToName(cur.ftcAscii, fonts)
 			if fn == "" {

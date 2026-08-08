@@ -76,6 +76,20 @@ function blockToPM(b: Block, schema: Schema): Node {
       const m = b as any
       return schema.node('math', { latex: m.formula || m.latex || '', inline: !!m.inline })
     }
+    case 'textbox': {
+      const tb = b as any
+      // 内部块递归转为 PM 节点
+      const inner = (Array.isArray(tb.inline) ? tb.inline : []).map((ib: Block) => blockToPM(ib, schema))
+      return schema.node('text_box', {
+        bgColor: tb.bgColor || '#fef3c7',
+        borderColor: tb.borderColor || '#f59e0b',
+        shape: tb.shape || 'rect',
+        width: Number(tb.width) || 0,
+        float: tb.float || '',
+        borderW: Number(tb.borderW) || 1,
+        lineStyle: tb.lineStyle || 'solid',
+      }, inner)
+    }
     case 'formula' in (b as any) && (b as any).formula: {
       const m = b as any
       return schema.node('math', { latex: m.formula || '', inline: !!m.inline })
@@ -173,6 +187,11 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
     } else if ('content' in inline) {
       const t = inline as any
       const marks: Mark[] = []
+      // 修订追踪：type==='track' 时还原 insert/delete 标记
+      if (t.type === 'track' && (t.track === 'insert' || t.track === 'delete')) {
+        const mk = t.track === 'insert' ? 'insert_track' : 'delete_track'
+        marks.push((schema.marks as any)[mk].create({ author: t.author || '' }))
+      }
       if (t.bold) marks.push(schema.marks.bold.create())
       if (t.italic) marks.push(schema.marks.italic.create())
       if (t.under) marks.push(schema.marks.underline.create())
@@ -181,10 +200,16 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
       if (t.superscript) marks.push(schema.marks.superscript.create())
       if (t.subscript) marks.push(schema.marks.subscript.create())
       if (t.font) marks.push(schema.marks.fontFamily.create({ font: t.font }))
-      // 字号：优先后端 fontSize（单位：磅），兼容旧 size（CSS 字符串）
+      // 字号：优先后端 fontSize（单位：磅），统一转换为 px 存入 mark，避免与工具栏(pt/px 混用)不一致。
+      // 1pt = 96/72 px。导出时再转回磅值写回后端。
       const fs = (t as any).fontSize
-      if (fs) marks.push(schema.marks.fontSize.create({ size: `${fs}pt` }))
-      else if (t.size) marks.push(schema.marks.fontSize.create({ size: t.size }))
+      if (fs != null) {
+        const pt = typeof fs === 'number' ? fs : parseFloat(fs)
+        if (!isNaN(pt)) {
+          const px = Math.max(1, Math.round(pt * 96 / 72))
+          marks.push(schema.marks.fontSize.create({ size: `${px}px` }))
+        }
+      } else if (t.size) marks.push(schema.marks.fontSize.create({ size: t.size }))
       if (t.color) marks.push(schema.marks.textColor.create({ color: t.color }))
       if (t.highlight) marks.push(schema.marks.highlight.create({ color: t.highlight }))
       if (t.content) result.push(schema.text(t.content, marks))
@@ -237,6 +262,21 @@ function pmToBlock(node: Node): Block | null {
       return { restart: !!node.attrs.restart, startNumber: Number(node.attrs.startNumber) || 1 }
     case 'math':
       return { formula: node.attrs.latex || '', inline: !!node.attrs.inline }
+    case 'text_box': {
+      const tb = node as any
+      const inner = tb.children.map((ib: Node) => pmToBlock(ib)).filter(Boolean)
+      return {
+        type: 'textbox',
+        inline: inner,
+        bgColor: tb.attrs.bgColor || '#fef3c7',
+        borderColor: tb.attrs.borderColor || '#f59e0b',
+        shape: tb.attrs.shape || 'rect',
+        width: Number(tb.attrs.width) || 0,
+        float: tb.attrs.float || '',
+        borderW: Number(tb.attrs.borderW) || 1,
+        lineStyle: tb.attrs.lineStyle || 'solid',
+      } as any
+    }
     case 'footnote':
       return { type: 'footnote', num: Number(node.attrs.num) || 1, content: node.attrs.content || '' } as any
     case 'footnote_section': {
@@ -274,6 +314,37 @@ function pmToInline(node: Node): Inline[] {
     }
     const marks = child.marks
     const text = child.text || ''
+    // 修订追踪：检测 insert/delete track mark，输出为 track 行内以持久化
+    const insMark = marks.find((m) => m.type.name === 'insert_track')
+    const delMark = marks.find((m) => m.type.name === 'delete_track')
+    const trackMark = insMark || delMark
+    if (trackMark) {
+      const bold = marks.some((m) => m.type.name === 'bold')
+      const italic = marks.some((m) => m.type.name === 'italic')
+      const under = marks.some((m) => m.type.name === 'underline')
+      const strike = marks.some((m) => m.type.name === 'strikethrough')
+      const code = marks.some((m) => m.type.name === 'code')
+      const sup = marks.some((m) => m.type.name === 'superscript')
+      const sub = marks.some((m) => m.type.name === 'subscript')
+      const fontMark = marks.find((m) => m.type.name === 'fontFamily')
+      const sizeMark = marks.find((m) => m.type.name === 'fontSize')
+      const colorMark = marks.find((m) => m.type.name === 'textColor')
+      const hlMark = marks.find((m) => m.type.name === 'highlight')
+      result.push({
+        type: 'track',
+        track: insMark ? 'insert' : 'delete',
+        author: trackMark.attrs.author || '',
+        content: text, bold, italic, under, strike,
+        style: code ? 'code' : '',
+        superscript: sup || undefined,
+        subscript: sub || undefined,
+        font: fontMark?.attrs.font,
+        fontSize: sizeMark ? Math.max(0.5, Math.round(parseFloat(sizeMark.attrs.size) * 72 / 96 * 2) / 2) : undefined,
+        color: colorMark?.attrs.color,
+        highlight: hlMark?.attrs.color,
+      } as any)
+      return
+    }
     const bold = marks.some((m) => m.type.name === 'bold')
     const italic = marks.some((m) => m.type.name === 'italic')
     const under = marks.some((m) => m.type.name === 'underline')
@@ -298,7 +369,7 @@ function pmToInline(node: Node): Inline[] {
         superscript: sup || undefined,
         subscript: sub || undefined,
         font: fontMark?.attrs.font,
-        size: sizeMark?.attrs.size,
+        fontSize: sizeMark ? Math.max(0.5, Math.round(parseFloat(sizeMark.attrs.size) * 72 / 96 * 2) / 2) : undefined,
         color: colorMark?.attrs.color,
         highlight: hlMark?.attrs.color,
       } as any)

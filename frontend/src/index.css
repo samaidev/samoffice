@@ -354,13 +354,22 @@ body {
   margin-top: 0;
 }
 
-/* === 显示编辑标记模式 (¶ 段落标记 / 分页符 / 分隔线) === */
+/* === 显示编辑标记模式 (¶ 段落标记 / 分页符 / 分隔线) ===
+   注意：所有标记伪元素必须使用绝对定位 + 不占文档流，
+   否则 inline 标记会撑高行盒，使页面高度偏离真实文本高度。 */
+.show-edit-marks .ProseMirror p {
+  position: relative;
+}
 .show-edit-marks .ProseMirror p::after {
   content: '¶';
+  position: absolute;
+  right: 0;
+  top: 0;
   color: #94a3b8;
   font-size: 0.8em;
   margin-left: 2px;
   opacity: 0.6;
+  pointer-events: none;
 }
 .show-edit-marks .ProseMirror div[data-page-break] {
   background: repeating-linear-gradient(45deg, #fef3c7, #fef3c7 6px, #fff 6px, #fff 12px) !important;
@@ -373,11 +382,13 @@ body {
   border-top: 2px dashed #6366f1 !important;
   position: relative;
 }
-.show-edit-marks .ProseMirror br::after {
-  content: '↵';
-  color: #94a3b8;
-  font-size: 0.8em;
-  opacity: 0.6;
+.show-edit-marks .ProseMirror h1,
+.show-edit-marks .ProseMirror h2,
+.show-edit-marks .ProseMirror h3,
+.show-edit-marks .ProseMirror h4,
+.show-edit-marks .ProseMirror h5,
+.show-edit-marks .ProseMirror h6 {
+  position: relative;
 }
 .show-edit-marks .ProseMirror h1::after,
 .show-edit-marks .ProseMirror h2::after,
@@ -385,22 +396,40 @@ body {
 .show-edit-marks .ProseMirror h4::after,
 .show-edit-marks .ProseMirror h5::after,
 .show-edit-marks .ProseMirror h6::after {
-  content: ' ¶';
+  content: '¶';
+  position: absolute;
+  right: 0;
+  top: 0;
   color: #94a3b8;
   font-size: 0.7em;
   opacity: 0.5;
+  pointer-events: none;
+}
+.show-edit-marks .ProseMirror li {
+  position: relative;
 }
 .show-edit-marks .ProseMirror li::after {
-  content: ' ·';
+  content: '·';
+  position: absolute;
+  right: 0;
+  top: 0;
   color: #94a3b8;
   font-size: 0.7em;
   opacity: 0.5;
+  pointer-events: none;
+}
+.show-edit-marks .ProseMirror .text-box {
+  position: relative;
 }
 .show-edit-marks .ProseMirror .text-box::after {
   content: ' [文本框]';
+  position: absolute;
+  right: 0;
+  top: 0;
   color: #f59e0b;
   font-size: 0.7em;
   opacity: 0.5;
+  pointer-events: none;
 }
 
 /* 移动端 ProseMirror */
@@ -985,11 +1014,8 @@ table td, table th {
 .ProseMirror .text-box.ProseMirror-selectednode {
   outline: 3px solid var(--color-primary, #4f46e5);
   outline-offset: 2px;
-  resize: both;
-  overflow: auto;
   min-width: 120px;
   min-height: 80px;
-  display: inline-block;
 }
 /* Resize handle indicator for selected shapes */
 .ProseMirror .text-box.ProseMirror-selectednode::after {
@@ -1056,6 +1082,26 @@ table td, table th {
   header, footer, .toolbar-btn, .no-print { display: none !important; }
   .ProseMirror { padding: 0 !important; }
   body { background: white !important; }
+}
+
+/* === 并排对比：差异高亮 === */
+.ProseMirror .diff-add {
+  background: rgba(16, 185, 129, 0.22);
+  border-left: 3px solid #10b981;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.35);
+}
+.ProseMirror .diff-del {
+  background: rgba(239, 68, 68, 0.18);
+  border-left: 3px solid #ef4444;
+  text-decoration: line-through;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.30);
+}
+/* 右侧只读对比视图基础版式 */
+[ref-scope="compare"] .ProseMirror,
+div > div[style*="flex: 1 1 50%"] .ProseMirror {
+  padding: 24px 22px !important;
+  min-height: 100%;
+  background: var(--color-surface);
 }
 
 /* === Markdown/HTML 预览 === */

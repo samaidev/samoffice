@@ -249,13 +249,14 @@ func (d *Document) UnmarshalJSON(data []byte) error {
 // unmarshalBlock 根据 JSON 结构特征判断 Block 类型
 func unmarshalBlock(data []byte) (Block, error) {
         var probe struct {
+                Type     string          `json:"type"`     // 显式判别（Textbox/FootnoteSection 等）
                 Level    *int            `json:"level"`    // Heading
                 Items    json.RawMessage `json:"items"`    // BulletList
                 Rows     json.RawMessage `json:"rows"`     // Table
                 Code     string          `json:"code"`     // CodeBlock
                 Src      string          `json:"src"`      // Image
                 Kind     string          `json:"kind"`     // RawBlock
-                Inline   json.RawMessage `json:"inline"`   // Paragraph
+                Inline   json.RawMessage `json:"inline"`   // Paragraph / Textbox
                 Formula  string          `json:"formula"`  // Math
                 Restart  *bool           `json:"restart"`  // PageBreak
                 PageNum  *bool           `json:"enabled"`  // 仅 PageNumber 用，block 不会命中
@@ -297,6 +298,10 @@ func unmarshalBlock(data []byte) (Block, error) {
                 var pb PageBreak
                 err := json.Unmarshal(data, &pb)
                 return &pb, err
+        case probe.Type == "textbox":
+                var tb Textbox
+                err := json.Unmarshal(data, &tb)
+                return &tb, err
         case len(probe.Inline) > 0:
                 var p Paragraph
                 err := json.Unmarshal(data, &p)
@@ -368,12 +373,17 @@ func unmarshalInline(data []byte) (Inline, error) {
                 Content string `json:"content"` // Text
                 Src     string `json:"src"`     // InlineImage
                 Kind    string `json:"kind"`    // RawInline
+                Track   string `json:"track"`   // Track (修订追踪)
         }
         if err := json.Unmarshal(data, &probe); err != nil {
                 return nil, err
         }
 
         switch {
+        case probe.Track != "":
+                var t Track
+                err := json.Unmarshal(data, &t)
+                return &t, err
         case probe.URL != "":
                 var h Hyperlink
                 err := json.Unmarshal(data, &h)

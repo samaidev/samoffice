@@ -65,6 +65,12 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
 	if err := writeZip(w, "docProps/core.xml", renderCoreProps(doc.Meta)); err != nil {
 		return nil, err
 	}
+	// 文档保护（密码锁定）信息：私有 part，Word/WPS 会忽略，本应用重新打开时读取。
+	if doc.Protect != nil {
+		if err := writeZip(w, "docProps/samoffice_protect.xml", renderProtect(doc.Protect)); err != nil {
+			return nil, err
+		}
+	}
 	// word/_rels/document.xml.rels（包含 image + footer relationship）
 	if err := writeZip(w, "word/_rels/document.xml.rels", renderDocRels(images, footerRels)); err != nil {
 		return nil, err
@@ -283,6 +289,7 @@ func renderContentTypes(images []*embedImage, hasFooter bool) string {
 	}
 	sb.WriteString(`  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/samoffice_protect.xml" ContentType="application/vnd.samoffice.protect+xml"/>
 </Types>`)
 	return sb.String()
 }
@@ -329,7 +336,12 @@ func renderDocumentXML(doc *core.Document, images []*embedImage, footers []footR
   xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
   xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
   xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-  xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+  xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+  xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  mc:Ignorable="w14 wp14">
 <w:body>
 `)
 	for _, b := range doc.Blocks {
@@ -380,6 +392,8 @@ func renderBlock(sb *strings.Builder, b core.Block, images map[string]*embedImag
                 renderImage(sb, v, images)
         case *core.Math:
                 renderMath(sb, v)
+        case *core.Textbox:
+                renderTextbox(sb, v, images)
         case *core.FootnoteSection:
                 // 脚注区：docx 导出时以文末段落组呈现（保证保存后不丢失
                 // 脚注正文，如作者简介）。每条写成 "n. 内容" 的段落。
@@ -587,6 +601,121 @@ func renderMath(sb *strings.Builder, m *core.Math) {
 	}
 }
 
+// prstForShape 将前端 shape 值映射为 OOXML prstGeom 预设名
+func prstForShape(shape string) string {
+	switch shape {
+	case "roundRect":
+		return "roundRect"
+	case "ellipse":
+		return "ellipse"
+	case "triangle":
+		return "triangle"
+	case "diamond":
+		return "diamond"
+	case "rightArrow":
+		return "rightArrow"
+	case "star5":
+		return "star5"
+	case "heart":
+		return "heart"
+	default:
+		return "rect"
+	}
+}
+
+// dashValForLineStyle 将线型映射为 OOXML prstDash 值
+func dashValForLineStyle(ls string) string {
+	switch ls {
+	case "dash":
+		return "dash"
+	case "dot":
+		return "dot"
+	case "dashDot":
+		return "dashDot"
+	default:
+		return "solid"
+	}
+}
+
+// renderTextbox 渲染文本框/形状块为 OOXML wps:txbx 结构，包含边框、填充、圆角与内部内容。
+func renderTextbox(sb *strings.Builder, tb *core.Textbox, images map[string]*embedImage) {
+	em := func(cm float64) int {
+		if cm <= 0 {
+			return 0
+		}
+		return int(cm * 360000)
+	}
+	w := em(tb.W)
+	h := em(tb.H)
+	if w == 0 {
+		w = 3429000 // 默认 9.53cm
+	}
+	if h == 0 {
+		h = 1701000 // 默认 4.73cm
+	}
+	borderEMU := int(tb.BorderW * 12700)
+	lnStyle := dashValForLineStyle(tb.LineStyle)
+	bc := strings.TrimPrefix(tb.BorderColor, "#")
+	fc := strings.TrimPrefix(tb.FillColor, "#")
+	if len(bc) == 0 {
+		bc = "000000"
+	}
+	shapePr := prstForShape(tb.Shape)
+	wrap := tb.Wrap
+	if wrap == "" {
+		wrap = "square"
+	}
+	// 圆角比例（仅 roundRect）
+	var avLst string
+	if shapePr == "roundRect" {
+		adj := 25000
+		if tb.Radius > 0 {
+			// 半径(pt) / 最小边(cm*28.35 pt) 约为圆角占比
+			minEdgeCm := tb.W
+			if tb.H < minEdgeCm || minEdgeCm == 0 {
+				minEdgeCm = tb.H
+			}
+			if minEdgeCm > 0 {
+				ratio := tb.Radius / (minEdgeCm * 28.35)
+				if ratio > 0 {
+					adj = int(ratio * 100000)
+				}
+			}
+		}
+		avLst = fmt.Sprintf(`<a:avLst><a:gd name="adj" fmla="val %d"/></a:avLst>`, adj)
+	}
+	// 边框与填充
+	ln := fmt.Sprintf(`<a:ln w="%d"><a:prstDash val="%s"/></a:ln>`, borderEMU, lnStyle)
+	if bc != "" {
+		ln = fmt.Sprintf(`<a:ln w="%d"><a:prstDash val="%s"/><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln>`, borderEMU, lnStyle, bc)
+	}
+	fill := ""
+	if fc != "" {
+		fill = fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"/></a:solidFill>`, fc)
+	}
+	sb.WriteString(`<w:p><w:r><w:pict>`)
+	sb.WriteString(`<wps:txbx>`)
+	// 文本框占位（w:txbxContent 需要至少一个段落）
+	sb.WriteString(`<w:txbxContent>`)
+	if len(tb.Blocks) == 0 {
+		sb.WriteString(`<w:p/>`)
+	} else {
+		for _, blk := range tb.Blocks {
+			renderBlock(sb, blk, images)
+		}
+	}
+	sb.WriteString(`</w:txbxContent>`)
+	sb.WriteString(`</wps:txbx>`)
+	// 形状外观（边框/填充/圆角）放在 spPr
+	sb.WriteString(`<w:spPr>`)
+	sb.WriteString(fmt.Sprintf(`<a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>`, em(tb.X), em(tb.Y), w, h))
+	sb.WriteString(fmt.Sprintf(`<a:prstGeom prst="%s">%s</a:prstGeom>`, shapePr, avLst))
+	sb.WriteString(fill)
+	sb.WriteString(ln)
+	sb.WriteString(`</w:spPr>`)
+	sb.WriteString(`</w:pict></w:r></w:p>` + "\n")
+}
+
 func renderBulletList(sb *strings.Builder, l *core.BulletList) {
         for _, item := range l.Items {
                 sb.WriteString("<w:p>")
@@ -756,6 +885,10 @@ func renderInline(sb *strings.Builder, in core.Inline) {
                 renderText(sb, *v)
         case core.Text:
                 renderText(sb, v)
+        case *core.Track:
+                renderTrack(sb, *v)
+        case core.Track:
+                renderTrack(sb, v)
         case *core.Hyperlink:
                 sb.WriteString(`<w:hyperlink r:id="`)
                 sb.WriteString(fmt.Sprintf("rId%d", hashString(v.URL)))
@@ -781,14 +914,68 @@ func renderInline(sb *strings.Builder, in core.Inline) {
         }
 }
 
-// renderText 渲染文本 run（含粗体/斜体等标记）
+// renderTrack 渲染修订追踪行内：插入保留文本，删除加删除线。
+func renderTrack(sb *strings.Builder, t core.Track) {
+        if t.Content == "" {
+                return
+        }
+        sb.WriteString("<w:r>")
+        sb.WriteString("<w:rPr>")
+        if t.Bold {
+                sb.WriteString("<w:b/>")
+        }
+        if t.Italic {
+                sb.WriteString("<w:i/>")
+        }
+        if t.Under {
+                sb.WriteString(`<w:u w:val="single"/>`)
+        }
+        if t.Strike {
+                sb.WriteString("<w:strike/>")
+        }
+        if t.Font != "" {
+                sb.WriteString(`<w:rFonts w:ascii="` + escapeXML(t.Font) + `" w:hAnsi="` + escapeXML(t.Font) + `" w:eastAsia="` + escapeXML(t.Font) + `"/>`)
+        }
+        if t.FontSize != 0 {
+                sb.WriteString(`<w:sz w:val="` + fmt.Sprintf("%d", int(t.FontSize*2)) + `"/>`)
+        }
+        if t.Color != "" {
+                sb.WriteString(`<w:color w:val="` + normalizeColor(t.Color) + `"/>`)
+        }
+        if t.Highlight != "" {
+                sb.WriteString(`<w:highlight w:val="` + wordHighlight(t.Highlight) + `"/>`)
+        }
+        if t.Track == "delete" {
+                // 修订删除：用删除线标记
+                sb.WriteString("<w:strike/>")
+        }
+        if t.Track == "insert" {
+                // 修订插入：用下划线标记
+                sb.WriteString(`<w:u w:val="single"/>`)
+        }
+        sb.WriteString("</w:rPr>")
+        sb.WriteString(`<w:t xml:space="preserve">`)
+        sb.WriteString(escapeXML(t.Content))
+        sb.WriteString("</w:t></w:r>")
+}
+
+// renderText 渲染文本 run（含粗体/斜体、字体、字号、颜色等标记）
 func renderText(sb *strings.Builder, t core.Text) {
         if t.Content == "" {
                 return
         }
         sb.WriteString("<w:r>")
-        if t.Bold || t.Italic || t.Under || t.Strike || t.Style == "code" {
+        if t.Bold || t.Italic || t.Under || t.Strike || t.Style == "code" || t.Font != "" || t.FontSize != 0 || t.Color != "" || t.Highlight != "" {
                 sb.WriteString("<w:rPr>")
+                if t.Font != "" {
+                        sb.WriteString(`<w:rFonts w:ascii="` + escapeXML(t.Font) + `" w:hAnsi="` + escapeXML(t.Font) + `" w:eastAsia="` + escapeXML(t.Font) + `"/>`)
+                }
+                if t.FontSize != 0 {
+                        sb.WriteString(`<w:sz w:val="` + fmt.Sprintf("%d", int(t.FontSize*2)) + `"/>`)
+                }
+                if t.Color != "" {
+                        sb.WriteString(`<w:color w:val="` + normalizeColor(t.Color) + `"/>`)
+                }
                 if t.Bold {
                         sb.WriteString("<w:b/>")
                 }
@@ -801,6 +988,9 @@ func renderText(sb *strings.Builder, t core.Text) {
                 if t.Strike {
                         sb.WriteString("<w:strike/>")
                 }
+                if t.Highlight != "" {
+                        sb.WriteString(`<w:highlight w:val="` + wordHighlight(t.Highlight) + `"/>`)
+                }
                 if t.Style == "code" {
                         sb.WriteString(`<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>`)
                 }
@@ -809,6 +999,50 @@ func renderText(sb *strings.Builder, t core.Text) {
         sb.WriteString(`<w:t xml:space="preserve">`)
         sb.WriteString(escapeXML(t.Content))
         sb.WriteString("</w:t></w:r>")
+}
+
+// normalizeColor 将前端颜色（#rrggbb 或颜色名）规范为 6 位十六进制（无 #），供 OOXML 使用。
+func normalizeColor(c string) string {
+        c = strings.TrimSpace(c)
+        c = strings.TrimPrefix(c, "#")
+        if len(c) == 3 {
+                c = string([]byte{c[0], c[0], c[1], c[1], c[2], c[2]})
+        }
+        return strings.ToLower(c)
+}
+
+// wordHighlight 将前端高亮颜色映射为 OOXML 标准高亮名。
+func wordHighlight(c string) string {
+        switch strings.ToLower(strings.TrimPrefix(c, "#")) {
+        case "ffff00", "yellow":
+                return "yellow"
+        case "00ff00", "green":
+                return "green"
+        case "00ffff", "cyan":
+                return "cyan"
+        case "ff00ff", "magenta":
+                return "magenta"
+        case "0000ff", "blue":
+                return "blue"
+        case "ff0000", "red":
+                return "red"
+        case "000000", "black":
+                return "black"
+        case "ffffff", "white":
+                return "white"
+        default:
+                return "yellow"
+        }
+}
+
+// renderProtect 将文档保护信息写入 docProps/samoffice_protect.xml。
+// 该部件为 SamOffice 私有，存储密码哈希，不存明文。
+func renderProtect(p *core.DocumentProtect) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<samProtect xmlns="http://schemas.samoffice.com/protect">
+  <enabled>%t</enabled>
+  <hash>%s</hash>
+</samProtect>`, p.Enabled, p.Hash)
 }
 
 func renderCoreProps(meta core.Meta) string {

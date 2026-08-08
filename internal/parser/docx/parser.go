@@ -75,10 +75,20 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 
         // 提取元数据
         if coreFile, ok := files["docProps/core.xml"]; ok {
-                if rc, err := coreFile.Open(); err == nil {
-                        parseCoreProps(rc, &doc.Meta)
-                        rc.Close()
-                }
+        	if rc, err := coreFile.Open(); err == nil {
+        		parseCoreProps(rc, &doc.Meta)
+        		rc.Close()
+        	}
+        }
+
+        // 提取 SamOffice 文档保护（密码锁定）信息
+        if protectFile, ok := files["docProps/samoffice_protect.xml"]; ok {
+        	if rc, err := protectFile.Open(); err == nil {
+        		if p, perr := parseProtect(rc); perr == nil {
+        			doc.Protect = p
+        		}
+        		rc.Close()
+        	}
         }
 
 		// 解析脚注（word/footnotes.xml），id -> 文本
@@ -166,6 +176,46 @@ func parseDocumentXML(r io.Reader, footnotes map[string]string) ([]core.Block, [
    		}
 	return blocks, warnings, fn, ntf
 	}
+
+// parseProtect 解析 docProps/samoffice_protect.xml，返回文档保护配置。
+func parseProtect(r io.Reader) (*core.DocumentProtect, error) {
+	dec := xml.NewDecoder(r)
+	var (
+		inEnabled bool
+		inHash    bool
+		enabled   bool
+		hash      strings.Builder
+	)
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "enabled":
+				inEnabled = true
+			case "hash":
+				inHash = true
+			}
+		case xml.CharData:
+			if inEnabled {
+				enabled = strings.EqualFold(strings.TrimSpace(string(t)), "true")
+				inEnabled = false
+			}
+			if inHash {
+				hash.Write(t)
+				inHash = false
+			}
+		case xml.EndElement:
+			if t.Name.Local == "samProtect" {
+				return &core.DocumentProtect{Enabled: enabled, Hash: strings.TrimSpace(hash.String())}, nil
+			}
+		}
+	}
+	return &core.DocumentProtect{Enabled: enabled, Hash: strings.TrimSpace(hash.String())}, nil
+}
 
 // parseFootnotes 从 word/footnotes.xml 提取脚注 id -> 文本。
 // 分隔符脚注（id 为 -1 / 0）会被跳过。

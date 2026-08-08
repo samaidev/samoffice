@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { EditorState, NodeSelection, TextSelection, Plugin } from 'prosemirror-state'
 import { DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
-import { EditorView } from 'prosemirror-view'
+import { EditorView, Decoration, DecorationSet } from 'prosemirror-view'
 import { schema } from './schema'
 import { createPaginationPlugin } from './pagination'
 import { keymap } from 'prosemirror-keymap'
@@ -18,6 +18,8 @@ import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
 import { Ruler } from '../../components/Ruler'
+import { MathEditorModal } from './MathEditorModal'
+import { TextBoxStylePanel } from './TextBoxStylePanel'
 import type { Document, SpellError, PageNumberConfig, Backend } from '../../types/udm'
 
 interface Props {
@@ -307,28 +309,45 @@ function extractFootnotes(doc: any): FootnoteData[] {
 export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange, backend, onToast }: Props) {
   const { t } = useI18n()
 
-  // 系统字体库 — 通过 queryLocalFonts() 加载 (Chrome/Edge 支持), 回退到常用字体列表
-  const [systemFonts, setSystemFonts] = useState<string[]>([
+  // 系统字体库 — 通过 queryLocalFonts() 补充系统已安装字体。
+  // 注意：queryLocalFonts 在 WebView2 下返回的 family 多为英文/音译名（如 SimSun），
+  // 不会包含「宋体」这类中文显示名；所以不能整体覆盖，要与内置中文字体合并且去重。
+  const BUILTIN_FONTS = [
     '宋体', '黑体', '楷体', '仿宋', '微软雅黑', '等线',
     'SimSun', 'SimHei', 'KaiTi', 'FangSong', 'Microsoft YaHei', 'Microsoft JhengHei',
     'Arial', 'Times New Roman', 'Calibri', 'Cambria', 'Georgia', 'Verdana',
     'Tahoma', 'Trebuchet MS', 'Courier New', 'Consolas', 'Lucida Console',
-  ])
+  ]
+  const [systemFonts, setSystemFonts] = useState<string[]>([])
   useEffect(() => {
     const w = window as any
     if (w.queryLocalFonts) {
       w.queryLocalFonts().then((fonts: any[]) => {
         if (fonts && fonts.length) {
-          const names = Array.from(new Set(fonts.map((f: any) => f.family))).sort()
-          setSystemFonts(names.length > 0 ? names : systemFonts)
+          const names = Array.from(new Set(fonts.map((f: any) => f.family)))
+          setSystemFonts(names)
         }
       }).catch(() => {})
     }
   }, [])
 
+  // 字体下拉列表：内置中文字体优先（保证「宋体/黑体」等一定出现且不被截断），
+  // 系统枚举字体作为补充放在后面并限制数量。下拉菜单本身可滚动 (maxHeight 280)。
+  // 注意：真实环境 queryLocalFonts 可能返回大量大小写变体（如 "arial"/"Arial"、"cambria"/"Cambria"），
+  // 必须与内置字体一起按大小写不敏感去重，否则 FONTS 会出现重复 value → React 渲染菜单时 key 冲突 → removeChild 崩溃。
+  const FONT_CAP = 400
+  const allFontNames = [...BUILTIN_FONTS, ...systemFonts]
+  const seenFont = new Set<string>()
+  const dedupedFonts: string[] = []
+  for (const f of allFontNames) {
+    const key = String(f).toLowerCase()
+    if (seenFont.has(key)) continue
+    seenFont.add(key)
+    dedupedFonts.push(f)
+  }
   const FONTS = [
     { name: t('doc.font.default'), value: '' },
-    ...systemFonts.slice(0, 120).map(f => ({ name: f, value: f })),
+    ...dedupedFonts.sort().slice(0, FONT_CAP).map(f => ({ name: f, value: f })),
   ]
   const FONT_SIZES = [
     { name: t('doc.size.small'), value: '12px' }, { name: t('doc.size.body'), value: '15px' },
@@ -351,14 +370,20 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const getActiveMarks = (): Record<string, any> => {
     const v = viewRef.current; if (!v) return {}
     const { state } = v
-    const { from, to } = state.selection
+    const { from, to, empty } = state.selection
     const marks: Record<string, any> = {}
-    // 遍历选区内所有文本节点，收集其字符格式标记（避免 $from.marks() 在 mark 边界返回空的问题）
-    state.doc.nodesBetween(from, to, (node: any) => {
-      if (node.isText && node.marks) {
-        node.marks.forEach((m: any) => { marks[m.type.name] = m.attrs })
-      }
-    })
+    if (!empty) {
+      // 遍历选区内所有文本节点，收集其字符格式标记
+      state.doc.nodesBetween(from, to, (node: any) => {
+        if (node.isText && node.marks) {
+          node.marks.forEach((m: any) => { marks[m.type.name] = m.attrs })
+        }
+      })
+    } else {
+      // 仅光标（未选词/段落）：读取光标处生效的字符 marks（兼容“光标置于格式文本上即暂存”）
+      const $pos = state.doc.resolve(from)
+      $pos.marks().forEach((m: any) => { marks[m.type.name] = m.attrs })
+    }
     return marks
   }
   // 格式刷：暂存源格式标记，等待应用到下一次选区。
@@ -370,6 +395,35 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const setPainter = (v: { marks: Record<string, any>; lock: boolean } | null) => {
     formatPainterRef.current = v
     setFormatPainter(v)
+  }
+  // 格式刷单击/双击的区分：浏览器双击会先触发两次 click 再触发 dblclick，
+  // 若不处理会导致两次单击把 lock 态改乱、双击无法关闭。用短延时合并——单击延迟执行，
+  // 若期间发生双击则取消单击，由 onDoubleClick 统一处理（进入/退出锁定）。
+  const painterClickTimer = useRef<number | null>(null)
+  const handlePainterClick = () => {
+    if (painterClickTimer.current) return
+    painterClickTimer.current = window.setTimeout(() => {
+      painterClickTimer.current = null
+      // 单击：未激活则开启（非锁定），已激活则关闭
+      if (formatPainterRef.current) setPainter(null)
+      else setPainter({ marks: getActiveMarks(), lock: false })
+    }, 220)
+  }
+  const handlePainterDouble = () => {
+    if (painterClickTimer.current) { clearTimeout(painterClickTimer.current); painterClickTimer.current = null }
+    // 双击：已在锁定模式则关闭，否则进入锁定模式
+    if (formatPainterRef.current?.lock) setPainter(null)
+    else setPainter({ marks: getActiveMarks(), lock: true })
+  }
+  // 单击模式：套用后延迟清除格式刷。用防抖而非立即清除，
+  // 否则拖选过程中 appendTransaction 每次 mousemove 都会触发并立即清空，导致只刷中前一小段。
+  const painterClearTimer = useRef<number | null>(null)
+  const schedulePainterClear = () => {
+    if (painterClearTimer.current) clearTimeout(painterClearTimer.current)
+    painterClearTimer.current = window.setTimeout(() => {
+      painterClearTimer.current = null
+      setPainter(null)
+    }, 350)
   }
   // Esc 退出格式刷锁定模式
   useEffect(() => {
@@ -514,6 +568,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const onChangeRef = useRef(onChange)
   const onSpellCheckRef = useRef(onSpellCheck)
+  // 用 ref 持有最新 document，供 ProseMirror 闭包（dispatchTransaction）读取，避免捕获到过期的 props。
+  const documentRef = useRef<any>(document)
+  documentRef.current = document
   const trackChangesRef = useRef(false)
   // 记录本组件最近一次通过 onChange 向外发出的 UDM 引用，
   // 用于区分「外部加载了新文档」与「自身编辑回流」，避免把用户编辑覆盖回旧内容。
@@ -546,6 +603,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [activeCharSpacing, setActiveCharSpacing] = useState('')
   const [activeIsImage, setActiveIsImage] = useState(false)
   const [activeIsShape, setActiveIsShape] = useState(false)
+  // 当前选中的 text_box 节点（用于浮动属性面板）
+  const [activeTextBox, setActiveTextBox] = useState<{ node: any; pos: number } | null>(null)
   const [, setTick] = useState(0)
   const [focused, setFocused] = useState(false)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
@@ -574,11 +633,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [miniToolbarPos, setMiniToolbarPos] = useState({ x: 0, y: 0 })
   const [showContextMenu, setShowContextMenu] = useState(false)
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
+  // 右键菜单触发时，光标/点击是否落在 text_box（文本框/形状）上
+  const [contextMenuOnTextBox, setContextMenuOnTextBox] = useState(false)
+  const contextMenuBoxRef = useRef<HTMLElement | null>(null)
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
-  const [showFormulaPanel, setShowFormulaPanel] = useState(false)
-  const [showSymbolPanel, setShowSymbolPanel] = useState(false)
-  const [symbolCategory, setSymbolCategory] = useState<'greek' | 'latin' | 'circled' | 'roman' | 'math' | 'arrows'>('greek')
+  // 独立公式编辑器弹窗（全屏模态）
+  const [showMathModal, setShowMathModal] = useState(false)
+  const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null }>({ latex: '', inline: false, pos: null })
   // 二级颜色/底纹/背景弹出菜单 — 统一改为 click 触发，避免 hover 残留导致重叠
   const [showColorPopup, setShowColorPopup] = useState(false)
   const [showHighlightPopup, setShowHighlightPopup] = useState(false)
@@ -595,23 +657,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     setShowHighlightPopup(which === 'highlight' ? !showHighlightPopup : false)
     setShowShadingPopup(which === 'shading' ? !showShadingPopup : false)
     setShowBgColorPopup(which === 'bgColor' ? !showBgColorPopup : false)
-    setShowFormulaPanel(false)
-    setShowSymbolPanel(false)
-  }
-  const openPanel2 = (which: 'formula' | 'symbol') => {
-    setShowFormulaPanel(which === 'formula' ? !showFormulaPanel : false)
-    setShowSymbolPanel(which === 'symbol' ? !showSymbolPanel : false)
-    setShowShapePanel(false); setShowArtPanel(false)
-    setShowColorPopup(false); setShowHighlightPopup(false)
-    setShowShadingPopup(false); setShowBgColorPopup(false)
   }
   const closeAllPanels = () => {
     setShowShapePanel(false); setShowArtPanel(false)
     setShowColorPopup(false); setShowHighlightPopup(false)
     setShowShadingPopup(false); setShowBgColorPopup(false)
-    setShowFormulaPanel(false); setShowSymbolPanel(false)
   }
-  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup || showFormulaPanel || showSymbolPanel
+  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
   const [bgColor, setBgColor] = useState<string>(() => {
     try { return localStorage.getItem('samoffice_bg_color') || '#ffffff' } catch { return '#ffffff' }
@@ -634,10 +686,32 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [showPageNumDialog, setShowPageNumDialog] = useState(false)
   const [showParaDialog, setShowParaDialog] = useState(false)
   const [paraDraft, setParaDraft] = useState<any>({})
-  const [compareOpen, setCompareOpen] = useState(false)
-  const [compareDiff, setCompareDiff] = useState<{ type: 'add' | 'del' | 'eq'; text: string }[]>([])
+  // 并排对比：右侧只读文档视图（含目标文档与名称）
+  const [compareTarget, setCompareTarget] = useState<{ name: string; doc: Document } | null>(null)
+  const compareRef = useRef<HTMLDivElement>(null)
+  const compareViewRef = useRef<EditorView | null>(null)
+  const leftScrollRef = useRef<HTMLDivElement>(null)
+  const syncLockRef = useRef(false)
+  // 差异高亮集合（按段落文本匹配）：右侧新增段落、左侧被删段落
+  const diffAddRef = useRef<Set<string>>(new Set())
+  const diffDelRef = useRef<Set<string>>(new Set())
   const [protectedMode, setProtectedMode] = useState(false)
-  const protectPwdRef = useRef<string>('')
+  // 已解锁的文档保护哈希（空表示当前未处于受保护态，或已解锁）。
+  // 打开带保护的文档时该值为空，需输入正确密码后填入对应哈希才能编辑。
+  const unlockHashRef = useRef<string>('')
+  // 解锁密码输入弹窗
+  const [showUnlock, setShowUnlock] = useState(false)
+  const [unlockInput, setUnlockInput] = useState('')
+  const [unlockError, setUnlockError] = useState(false)
+  // 简单稳定的字符串哈希（用于密码校验，盘上仅存哈希不存明文）
+  const hashPwd = (s: string): string => {
+    let h = 0x811c9dc5
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    return (h >>> 0).toString(16)
+  }
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
   const [showMarks, setShowMarks] = useState<boolean>(() => readBool('samoffice_show_marks'))
   const setShowMarksPersist = (v: boolean) => { persistBool('samoffice_show_marks', v); setShowMarks(v) }
@@ -733,24 +807,43 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
         createPaginationPlugin(() => metricsRef.current, setPageCount, setPageRects, setBlockPages),
+        // 差异对比高亮（左侧：被删除段落标红），仅在并排对比时生效
+        diffDecorationPlugin(diffDelRef),
         // 格式刷：暂存源格式后，下一次在目标选区上直接套用源 marks。
         // 单击模式（lock=false）套用一次即解除；锁定模式（lock=true）可连续套用。
         new Plugin({
           appendTransaction: (_transactions: any, _oldState: any, newState: any) => {
             const fp = formatPainterRef.current
             if (!fp) return null
+            const names = Object.keys(fp.marks)
+            if (names.length === 0) return null // 源格式为空，无意义，跳过
             const sel = newState.selection
-            if (sel.empty || sel instanceof NodeSelection) return null
-            const { from, to } = sel
+            if (sel instanceof NodeSelection) return null
+            // 目标范围：拖选则取选区；仅光标（单击）则套用到光标所在文本块（段落），符合 Office 单击格式刷行为
+            let from: number, to: number
+            if (sel.empty) {
+              const pos = Math.min(sel.from, newState.doc.content.size)
+              const $pos = newState.doc.resolve(pos)
+              from = $pos.start()
+              to = $pos.end()
+            } else {
+              from = sel.from
+              to = sel.to
+            }
+            if (from >= to) return null
             let tr: any = newState.tr
             let added = 0
-            for (const [name, attrs] of Object.entries(fp.marks)) {
+            for (const name of names) {
+              const attrs = (fp.marks as any)[name]
               const m = (schema.marks as any)[name]; if (!m) continue
               tr = tr.addMark(from, to, m.create(attrs || {}))
               added++
             }
-            if (added === 0) { setPainter(null); return null }
-            if (!fp.lock) setPainter(null)
+            // 注意：appendTransaction 运行在 ProseMirror 应用 transaction 的同步流程中（DOM 处于中间态）。
+            // 此处绝不能同步调用 React setState（setPainter），否则 React 重渲染会与 ProseMirror 竞争同一 DOM 子树，
+            // 导致 "Failed to execute 'removeChild'" 崩溃。必须用 queueMicrotask 推迟到 DOM 更新完成之后。
+            if (added === 0) return null
+            if (!fp.lock) schedulePainterClear()
             return tr
           },
         }),
@@ -844,7 +937,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           view.dispatch = wrappedDispatch
           return { dom }
         },
-        math: (node) => {
+        math: (node, _view, getPos) => {
           const dom = window.document.createElement(node.attrs.inline ? 'span' : 'div')
           dom.className = 'sam-math' + (node.attrs.inline ? ' sam-math-inline' : '')
           const render = () => {
@@ -867,21 +960,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           render()
           dom.addEventListener('dblclick', (e) => {
             e.preventDefault()
-            const cur = node.attrs.latex || ''
-            const input = prompt('编辑 LaTeX 公式：', cur)
-            if (input === null) return
-            const v = viewRef.current
-            if (!v) return
-            const pos = v.state.doc.resolve(v.state.selection.from)
-            let mathPos = -1
-            v.state.doc.descendants((n, p) => {
-              if (n.type.name === 'math' && n.attrs.latex === cur && mathPos < 0) { mathPos = p; return false }
-              return true
+            // 打开富公式编辑模态框，预填当前公式并定位到该节点，确认后替换原节点。
+            // 注意：getPos 返回该 math 节点的绝对位置，比按 latex 全文搜索定位更可靠
+            // （同文档存在多个相同 latex 的公式时旧逻辑会误改第一个）。
+            const pos = typeof getPos === 'function' ? getPos() : null
+            setMathEdit({
+              latex: node.attrs.latex || '',
+              inline: !!node.attrs.inline,
+              pos: typeof pos === 'number' ? pos : null,
             })
-            if (mathPos >= 0) {
-              const newNode = schema.nodes.math.create({ latex: input, inline: node.attrs.inline })
-              v.dispatch(v.state.tr.replaceWith(mathPos, mathPos + 1, newNode))
-            }
+            setShowMathModal(true)
           })
           return {
             dom,
@@ -904,6 +992,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           if (Object.keys(overrides).length) {
             ;(udm as any).styles = Object.keys(overrides).map((name) => ({ name, type: 'paragraph', props: overrides[name] }))
           }
+          // 透传文档保护信息，避免编辑时丢失密码锁定配置
+          const curProtect = (documentRef.current as any)?.protect
+          if (curProtect) (udm as any).protect = curProtect
           lastEmittedRef.current = udm
           onChangeRef.current(udm)
         }
@@ -922,7 +1013,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           else { setShowMiniToolbar(false) }
           return false
         },
-        contextmenu: (view: any, e: any) => { e.preventDefault(); setShowContextMenu(true); setContextMenuPos({ x: e.clientX, y: e.clientY }); return false },
+        contextmenu: (view: any, e: any) => {
+          e.preventDefault()
+          const target = e.target as HTMLElement | null
+          const box = (target && target.closest && target.closest('.text-box')) as HTMLElement | null
+          contextMenuBoxRef.current = box
+          setContextMenuOnTextBox(!!box)
+          setShowContextMenu(true)
+          setContextMenuPos({ x: e.clientX, y: e.clientY })
+          return false
+        },
 
         click: (_view: any, event: any) => {
           const el = event.target as HTMLElement
@@ -1018,6 +1118,39 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if (onSpellCheckRef.current) onSpellCheckRef.current(newDoc.textContent)
   }, [document])
 
+  // 并排对比：当对比目标变化时，挂载/重建右侧只读视图，并计算差异高亮集合
+  useEffect(() => {
+    if (!compareTarget || !compareRef.current) {
+      // 退出对比：清空差异集合并刷新左侧装饰
+      diffAddRef.current = new Set()
+      diffDelRef.current = new Set()
+      refreshDiffDecorations()
+      return
+    }
+    const leftTexts = collectParagraphTexts(viewRef.current)
+    const pmDoc = udmToProseMirror(compareTarget.doc, schema)
+    const state = EditorState.create({
+      doc: pmDoc,
+      plugins: [
+        // 右侧只读视图：差异高亮（新增段落标绿）
+        diffDecorationPlugin(diffAddRef),
+      ],
+    })
+    const view = new EditorView(compareRef.current, {
+      state,
+      editable: () => false,
+      // 只读视图不需要丰富的编辑插件；保持轻量
+    })
+    compareViewRef.current = view
+    // 计算差异：右侧新增、左侧被删
+    const rightTexts = collectParagraphTexts(view)
+    const { add, del } = computeDiffSets(leftTexts, rightTexts)
+    diffAddRef.current = add
+    diffDelRef.current = del
+    refreshDiffDecorations()
+    return () => { view.destroy(); compareViewRef.current = null }
+  }, [compareTarget])
+
   const updateActiveState = (state: EditorState) => {
     const marks = new Set<string>()
     const { from, $from, to, empty } = state.selection
@@ -1035,6 +1168,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const selNode = sel instanceof NodeSelection ? sel.node : null
     setActiveIsImage(!!selNode && selNode.type.name === 'image')
     setActiveIsShape(!!selNode && selNode.type.name === 'text_box')
+    setActiveTextBox(selNode && selNode.type.name === 'text_box' ? { node: selNode, pos: sel.from } : null)
     setTick(t => t + 1)
   }
 
@@ -1305,7 +1439,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         })()
         setShowContextMenu(false); break
       }
-      case 'formatPainter': { setPainter({ marks: getActiveMarks(), lock: false }); break }
+      case 'formatPainter': {
+        // 单击格式刷：未激活则开启（非锁定），已激活则关闭（toggle）
+        if (formatPainterRef.current) setPainter(null)
+        else setPainter({ marks: getActiveMarks(), lock: false })
+        break
+      }
       case 'clearFormat': {
         const { state, dispatch } = v
         const { from, to } = state.selection
@@ -1481,6 +1620,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     })
     if (changed) { v.dispatch(tr); if (focusAfter) v.focus() }
   }
+  // 段落边框辅助：border 为空格分隔的方向集合（'all' 为四边别名）
+  const borderHas = (b: string, side: string) => {
+    const s = (b || '').split(/\s+/).filter(Boolean)
+    return s.includes('all') || s.includes(side)
+  }
+  const toggleBorderSide = (side: string) => {
+    const cur = activeAttrs.border || ''
+    const sides = cur === 'all' ? ['top', 'right', 'bottom', 'left'] : cur.split(/\s+/).filter(Boolean)
+    const idx = sides.indexOf(side)
+    if (idx >= 0) sides.splice(idx, 1); else sides.push(side)
+    setParaAttr('border', sides.length ? sides.join(' ') : '')
+  }
+  const toggleBorderAll = () => setParaAttr('border', borderHas(activeAttrs.border, 'all') ? '' : 'all')
   // 缩进增减（按字符单位 em，贴近 Word 的“增加/减少缩进量”）
   // 段前/段后间距快捷调节（pt）
   const changeSpace = (which: 'before' | 'after', delta: number) => {
@@ -1561,7 +1713,32 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       v.focus()
     }
   }
-  const setFont = (font: string) => { const v = viewRef.current; if (!v) return; if (font) toggleMark(schema.marks.fontFamily, { font })(v.state, v.dispatch); else v.dispatch(v.state.tr.removeMark(v.state.selection.from, v.state.selection.to, schema.marks.fontFamily)); v.focus() }
+  const setFont = (font: string) => {
+    const v = viewRef.current; if (!v) return
+    const { state, dispatch } = v
+    const { from, to, empty } = state.selection
+    const m = schema.marks.fontFamily
+    if (!font) {
+      // 清除字体
+      if (empty) {
+        const stored = state.storedMarks ? state.storedMarks.slice() : state.selection.$from.marks()
+        dispatch(state.tr.setStoredMarks(stored.filter(mk => mk.type !== m)))
+      } else {
+        dispatch(state.tr.removeMark(from, to, m))
+      }
+      v.focus(); return
+    }
+    // 关键：始终设置为目标字体（先移除旧 fontFamily 再添加新），不能用 toggleMark——
+    // 否则选区已有任意字体时 toggleMark 会误判为"已存在"而移除，导致第一次点击跳回默认、需点两次。
+    const mark = m.create({ font })
+    if (empty) {
+      const stored = state.storedMarks ? state.storedMarks.slice() : state.selection.$from.marks()
+      dispatch(state.tr.setStoredMarks([...stored.filter(mk => mk.type !== m), mark]))
+    } else {
+      dispatch(state.tr.removeMark(from, to, m).addMark(from, to, mark))
+    }
+    v.focus()
+  }
   const setFontSize = (size: string) => {
     const v = viewRef.current; if (!v) return
     const { state, dispatch } = v
@@ -1578,6 +1755,31 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     }
     // 注意：输入过程中不调用 v.focus()，否则焦点会被抢回编辑器，
     // 导致后续输入的数字被当作正文内容写入（艺术字内容变成输入数值的现象）。
+  }
+  // 字号加减：直接读取编辑器当前选区/光标处的真实有效字号作为基准（不依赖可能滞后的 activeFontSize 状态）
+  const bumpFontSize = (delta: number) => {
+    const v = viewRef.current; if (!v) return
+    const { state } = v
+    const { empty, from, $from } = state.selection
+    let cur = NaN
+    const readSize = (s: string) => {
+      const num = parseFloat(s)
+      if (isNaN(num)) return NaN
+      // 兼容旧文档可能残留的 pt 单位：pt 需换算成 px 再作基准
+      return s.includes('pt') ? num * 96 / 72 : num
+    }
+    if (empty) {
+      const ms = state.storedMarks ? state.storedMarks : $from.marks()
+      const fm = ms.find(m => m.type.name === 'fontSize')
+      if (fm) cur = readSize(fm.attrs.size)
+    } else {
+      const fm = state.doc.nodeAt(from)?.marks.find(m => m.type.name === 'fontSize')
+      if (fm) cur = readSize(fm.attrs.size)
+    }
+    const base = isNaN(cur) ? 15 : cur
+    const next = Math.max(1, Math.round(base + delta))
+    setFontSize(`${next}px`)
+    v.focus()
   }
   // 字符间距（字间距）：与字号一样是字符级标记，作用于选区/后续输入
   const setCharSpacing = (val: string) => {
@@ -1611,19 +1813,73 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if (count > 0) onToast?.(t('doc.replacedCount', { count }))
   }
   const handlePrint = () => { setPrintPreview(false); setTimeout(() => window.print(), 100) }
-  const insertFormula = () => { openPanel2('formula') }
+  const insertFormula = () => {
+    // 打开独立公式编辑器弹窗（若有选中 math 节点则预填用于编辑）
+    const v = viewRef.current
+    let init = { latex: '', inline: false, pos: null as number | null }
+    if (v) {
+      const sel = v.state.selection
+      const node = sel instanceof NodeSelection ? sel.node : null
+      if (node && node.type.name === 'math') {
+        init = { latex: node.attrs.latex || '', inline: !!node.attrs.inline, pos: sel.from }
+      }
+    }
+    setMathEdit(init)
+    setShowMathModal(true)
+  }
   const insertSymbol = (sym: string) => {
     const v = viewRef.current; if (!v) return
     v.dispatch(v.state.tr.replaceSelectionWith(schema.text(sym)))
     v.focus()
   }
-  const insertLatexFormula = (latex: string) => {
+  // 更新选中 text_box 节点的样式属性（边框宽度/线型/颜色/填充/圆角/形状）
+  const updateTextBox = (attrs: Record<string, any>) => {
     const v = viewRef.current; if (!v) return
-    if (!latex) { setShowFormulaPanel(false); return }
-    const mathNode = schema.nodes.math.create({ latex, inline: false })
-    v.dispatch(v.state.tr.replaceSelectionWith(mathNode))
+    const cur = activeTextBox
+    if (!cur) return
+    const old = cur.node
+    const newNode = schema.nodes.text_box.create({ ...old.attrs, ...attrs }, old.content)
+    const tr = v.state.tr.replaceWith(cur.pos, cur.pos + old.nodeSize, newNode)
+    v.dispatch(tr)
     v.focus()
-    setShowFormulaPanel(false)
+    // 同步浮动面板状态
+    setActiveTextBox({ node: newNode, pos: cur.pos })
+  }
+  // 右键菜单"编辑样式"：选中被右键的文本框/形状（NodeSelection），使浮动样式面板弹出
+  const editTextBoxStyle = () => {
+    const v = viewRef.current
+    const box = contextMenuBoxRef.current
+    setShowContextMenu(false)
+    if (!v || !box) return
+    // 用文本框中心坐标定位其内部 pos，再向上回溯到 text_box 节点的起始位置
+    const rect = box.getBoundingClientRect()
+    const at = v.posAtCoords({ left: rect.left + rect.width / 2, top: rect.top + rect.height / 2 })
+    if (!at) return
+    const $pos = v.state.doc.resolve(at.pos)
+    for (let d = $pos.depth; d > 0; d--) {
+      if ($pos.node(d).type.name === 'text_box') {
+        const pos = $pos.before(d)
+        v.dispatch(v.state.tr.setSelection(NodeSelection.create(v.state.doc, pos)))
+        v.focus()
+        return
+      }
+    }
+  }
+  // 公式弹窗插入/更新
+  const handleMathInsert = (latex: string, inline: boolean) => {
+    const v = viewRef.current; if (!v) { setShowMathModal(false); return }
+    const mathNode = schema.nodes.math.create({ latex, inline })
+    const tr = v.state.tr
+    if (mathEdit.pos != null) {
+      // 编辑已有公式：替换原节点
+      const old = v.state.doc.nodeAt(mathEdit.pos)
+      if (old) tr.replaceWith(mathEdit.pos, mathEdit.pos + old.nodeSize, mathNode)
+    } else {
+      tr.replaceSelectionWith(mathNode)
+    }
+    v.dispatch(tr)
+    v.focus()
+    setShowMathModal(false)
   }
 
   // 从文件 base64 中提取纯文本（txt/md/json 直接解码；docx 提取 <w:t> 文本）
@@ -1644,52 +1900,147 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     }
   }
 
-  // 简单的行级差异
-  const diffLines = (a: string, b: string) => {
-    const al = a.split(/\r?\n/), bl = b.split(/\r?\n/)
-    const res: { type: 'add' | 'del' | 'eq'; text: string }[] = []
-    let i = 0, j = 0
-    while (i < al.length && j < bl.length) {
-      if (al[i] === bl[j]) { res.push({ type: 'eq', text: al[i] }); i++; j++ }
-      else { res.push({ type: 'del', text: al[i] }); res.push({ type: 'add', text: bl[j] }); i++; j++ }
-    }
-    while (i < al.length) res.push({ type: 'del', text: al[i++] })
-    while (j < bl.length) res.push({ type: 'add', text: bl[j++] })
-    return res
+  // 收集文档所有顶级块（段落/标题/列表项等）的纯文本，用于差异对比
+  const collectParagraphTexts = (v: EditorView | null): string[] => {
+    const out: string[] = []
+    if (!v) return out
+    v.state.doc.descendants((node) => {
+      if (node.isBlock && node.isTextblock) {
+        const txt = node.textContent.trim()
+        if (txt) out.push(txt)
+        return false
+      }
+      return true
+    })
+    return out
+  }
+
+  // 计算差异集合：rightAdds（右侧有、左侧无）、leftDels（左侧有、右侧无）
+  const computeDiffSets = (left: string[], right: string[]) => {
+    const add = new Set<string>()
+    const del = new Set<string>()
+    const lset = new Set(left)
+    const rset = new Set(right)
+    right.forEach((t) => { if (!lset.has(t)) add.add(t) })
+    left.forEach((t) => { if (!rset.has(t)) del.add(t) })
+    return { add, del }
+  }
+
+  // 差异高亮插件：根据传入的段落文本集合，对匹配的文本块添加背景装饰
+  const diffDecorationPlugin = (setRef: React.MutableRefObject<Set<string>>) => {
+    return new Plugin({
+      props: {
+        decorations: (state: any) => {
+          const set = setRef.current
+          if (set.size === 0) return DecorationSet.empty
+          const decos: any[] = []
+          state.doc.descendants((node: any, pos: number) => {
+            if (node.isBlock && node.isTextblock) {
+              const txt = node.textContent.trim()
+              if (txt && set.has(txt)) {
+                decos.push(Decoration.node(pos, pos + node.nodeSize, { class: set === diffAddRef.current ? 'diff-add' : 'diff-del' }))
+              }
+              return false
+            }
+            return true
+          })
+          return DecorationSet.create(state.doc, decos)
+        },
+      },
+    })
+  }
+
+  // 触发两侧视图重新计算差异装饰
+  const refreshDiffDecorations = () => {
+    const lv = viewRef.current, rv = compareViewRef.current
+    if (lv) lv.dispatch(lv.state.tr.setMeta('diffUpdate', true).setMeta('addToHistory', false))
+    if (rv) rv.dispatch(rv.state.tr.setMeta('diffUpdate', true).setMeta('addToHistory', false))
   }
 
   const runCompare = async () => {
     try {
       const path = await backend?.openFileDialog?.()
       if (!path) return
-      const b64 = await backend?.readFile(path)
-      if (!b64) return
-      const otherText = extractFileText(b64, path)
-      const curText = viewRef.current ? viewRef.current.state.doc.textContent : ''
-      setCompareDiff(diffLines(curText, otherText))
-      setCompareOpen(true)
+      // 复用后端解析能力，得到完整 UDM 文档（保留富文本结构）
+      const result: any = backend?.openFile ? await backend.openFile(path) : null
+      const doc: Document | undefined = result?.document
+      if (!doc) { alert(t('doc.compareError') + ': ' + (t('doc.compareUnsupported') || 'unsupported file')); return }
+      setCompareTarget({ name: path.split(/[\\/]/).pop() || path, doc })
     } catch (e: any) {
       alert(t('doc.compareError') + ': ' + (e?.message || e))
     }
   }
 
+  // 同步滚动：按滚动百分比同步两侧
+  const syncScroll = (from: 'left' | 'right') => {
+    if (syncLockRef.current) return
+    const left = leftScrollRef.current
+    const right = compareRef.current
+    if (!left || !right) return
+    syncLockRef.current = true
+    if (from === 'left') {
+      const ratio = left.scrollTop / Math.max(1, left.scrollHeight - left.clientHeight)
+      right.scrollTop = ratio * Math.max(0, right.scrollHeight - right.clientHeight)
+    } else {
+      const ratio = right.scrollTop / Math.max(1, right.scrollHeight - right.clientHeight)
+      left.scrollTop = ratio * Math.max(0, left.scrollHeight - left.clientHeight)
+    }
+    requestAnimationFrame(() => { syncLockRef.current = false })
+  }
+
   const toggleProtect = () => {
     const v = viewRef.current; if (!v) return
     if (!protectedMode) {
+      // 设置保护：输入密码，将哈希写入 document.protect 并持久化
       const pwd = prompt(t('doc.protectSetPwd'))
       if (!pwd) return
-      protectPwdRef.current = pwd
+      const hash = hashPwd(pwd)
+      const updated: any = { ...document, protect: { enabled: true, hash } }
+      onChange?.(updated)
+      unlockHashRef.current = hash
       setProtectedMode(true)
       v.setProps({ editable: () => false })
     } else {
+      // 取消保护：需要先验证密码
       const pwd = prompt(t('doc.protectEnterPwd'))
-      if (pwd === protectPwdRef.current) {
+      if (pwd == null) return
+      if (hashPwd(pwd) === (document.protect?.hash ?? '')) {
+        const updated: any = { ...document, protect: { enabled: false, hash: document.protect?.hash ?? '' } }
+        onChange?.(updated)
+        unlockHashRef.current = ''
         setProtectedMode(false)
-        protectPwdRef.current = ''
+        setShowUnlock(false)
         v.setProps({ editable: () => true })
       } else {
         alert(t('doc.protectWrongPwd'))
       }
+    }
+  }
+
+  // 打开受保护文档时，若尚未解锁则进入只读并弹出密码框
+  useEffect(() => {
+    if (document.protect?.enabled) {
+      if (unlockHashRef.current !== document.protect.hash) {
+        setProtectedMode(true)
+        setShowUnlock(true)
+        const v = viewRef.current
+        if (v) v.setProps({ editable: () => false })
+      }
+    }
+  }, [document])
+
+  // 提交解锁密码
+  const submitUnlock = () => {
+    const v = viewRef.current; if (!v) return
+    if (hashPwd(unlockInput) === (document.protect?.hash ?? '')) {
+      unlockHashRef.current = document.protect!.hash
+      setProtectedMode(false)
+      setShowUnlock(false)
+      setUnlockInput('')
+      setUnlockError(false)
+      v.setProps({ editable: () => true })
+    } else {
+      setUnlockError(true)
     }
   }
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
@@ -1777,7 +2128,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.clipboard')}>
             <RibbonButton icon="↶" label={t('doc.undo')} onClick={() => exec('undo')} title="Ctrl+Z" />
             <RibbonButton icon="↷" label={t('doc.redo')} onClick={() => exec('redo')} title="Ctrl+Y" />
-            <RibbonButton icon="🖌" label={t('doc.formatPainter')} onClick={() => exec('formatPainter')} onDoubleClick={() => setPainter({ marks: getActiveMarks(), lock: true })} active={!!formatPainter} title={t('doc.formatPainter') + (formatPainter?.lock ? '（锁定：连续刷，Esc 退出）' : '（双击锁定连续刷）')} />
+            <RibbonButton icon="🖌" label={t('doc.formatPainter')} onClick={handlePainterClick} onDoubleClick={handlePainterDouble} active={!!formatPainter} title={t('doc.formatPainter') + (formatPainter?.lock ? '（锁定：连续刷，再次双击或 Esc 退出）' : '（单击开启/关闭，双击锁定连续刷）')} />
             <RibbonButton icon="⌫" label={t('doc.clearFormat')} onClick={() => exec('clearFormat')} title={t('doc.clearFormat')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.font')}>
@@ -1797,6 +2148,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   return opts
                 })()}
               />
+                <button onClick={() => bumpFontSize(-1)} className="toolbar-btn" title={t('doc.fontSize') + ' -'} type="button" style={{ width: 24, height: 26, fontSize: '15px', fontWeight: 700, lineHeight: 1 }}>-</button>
+                <button onClick={() => bumpFontSize(1)} className="toolbar-btn" title={t('doc.fontSize') + ' +'} type="button" style={{ width: 24, height: 26, fontSize: '15px', fontWeight: 700, lineHeight: 1 }}>+</button>
                 <Dropdown
                   className="text-xs rounded-md px-2 ribbon-input"
                   style={{ width: 76, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
@@ -2026,76 +2379,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           <RibbonGroup label={t('doc.text')}>
             <RibbonButton icon="📦" label={t('doc.textBox')} onClick={() => exec('textBox')} />
-            <div className="relative">
-              <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} data-testid="insert-formula" />
-              {showFormulaPanel && (
-                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, padding: '12px', minWidth: 320 }}>
-                  <div className="text-xs font-medium mb-2">{t('doc.commonFormulas') || '常用公式'}</div>
-                  <div className="grid grid-cols-4 gap-1 mb-3">
-                    {[
-                      { l: 'a²+b²=c²', v: 'a^2+b^2=c^2' },
-                      { l: '½', v: '\\frac{1}{2}' },
-                      { l: '√x', v: '\\sqrt{x}' },
-                      { l: 'x²', v: 'x^2' },
-                      { l: 'xₙ', v: 'x_n' },
-                      { l: '∑', v: '\\sum_{i=1}^{n}' },
-                      { l: '∫', v: '\\int_0^1' },
-                      { l: '∞', v: '\\infty' },
-                      { l: '≠', v: '\\neq' },
-                      { l: '≤', v: '\\leq' },
-                      { l: '≥', v: '\\geq' },
-                      { l: '±', v: '\\pm' },
-                    ].map(f => (
-                      <button key={f.l} data-testid="formula-quick" onClick={() => insertLatexFormula(f.v)} className="p-2 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 48 }}>{f.l}</button>
-                    ))}
-                  </div>
-                  <div className="text-xs font-medium mb-2">{t('doc.customFormula') || '自定义 LaTeX'}</div>
-                  <div className="flex gap-2">
-                    <input type="text" placeholder="x = (-b ± √(b²-4ac)) / 2a" id="formula-input" className="flex-1 text-xs rounded px-2 py-1" style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} onKeyDown={e => { if (e.key === 'Enter') { const v = (e.target as HTMLInputElement).value; if (v) insertLatexFormula(v) } }} />
-                    <button onClick={() => { const inp = window.document.getElementById('formula-input') as HTMLInputElement; if (inp && inp.value) insertLatexFormula(inp.value) }} className="btn btn-primary btn-sm">OK</button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="relative">
-              <RibbonButton icon="Ω" label={t('doc.symbols') || '符号'} onClick={() => openPanel2('symbol')} />
-              {showSymbolPanel && (
-                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, padding: '12px', minWidth: 360 }}>
-                  <div className="flex gap-1 mb-2 flex-wrap">
-                    {[
-                      { k: 'greek', l: t('sym.greek') || '希腊' },
-                      { k: 'latin', l: t('sym.latin') || '拉丁' },
-                      { k: 'circled', l: t('sym.circled') || '圈号' },
-                      { k: 'roman', l: t('sym.roman') || '罗马' },
-                      { k: 'math', l: t('sym.math') || '数学' },
-                      { k: 'arrows', l: t('sym.arrows') || '箭头' },
-                    ].map(c => (
-                      <button key={c.k} onClick={() => setSymbolCategory(c.k as any)} className="text-xs px-2 py-1 rounded" style={{ background: symbolCategory === c.k ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: symbolCategory === c.k ? 'white' : 'var(--color-text)' }}>{c.l}</button>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-8 gap-1" style={{ maxHeight: 200, overflowY: 'auto' }}>
-                    {symbolCategory === 'greek' && 'αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ'.split('').map((s, i) => (
-                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
-                    ))}
-                    {symbolCategory === 'latin' && 'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ'.split('').map((s, i) => (
-                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
-                    ))}
-                    {symbolCategory === 'circled' && '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⓪ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙ'.split('').map((s, i) => (
-                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
-                    ))}
-                    {symbolCategory === 'roman' && 'ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹⅺⅻ'.split('').map((s, i) => (
-                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
-                    ))}
-                    {symbolCategory === 'math' && '±×÷·∗∘∝∞∠∡∇∂√∫∮∑∏⊕⊗⊥∥≡≅≈≠≤≥≪≫∈∉∩∪⊂⊃⊆⊇∅∀∃¬∧∨⇒⇔'.split('').map((s, i) => (
-                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
-                    ))}
-                    {symbolCategory === 'arrows' && '←↑→↓↔↕↖↗↘↙⇄⇅⇒⇐⇔⇑⇓⇕⟶⟵⟷'.split('').map((s, i) => (
-                      <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} data-testid="insert-formula" />
+            <RibbonButton icon="Ω" label={t('doc.symbols')} onClick={() => { setMathEdit({ latex: '', inline: false, pos: null }); setShowMathModal(true) }} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.link')}>
             <RibbonButton icon="⚓" label={t('doc.bookmark')} onClick={() => exec('bookmark')} />
@@ -2114,8 +2399,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
         {ribbonTab === 'layout' && (<>
           <RibbonGroup label={t('doc.border')}>
-            <RibbonButton icon="▢" label={t('doc.borderAll')} onClick={() => setParaAttr('border', activeAttrs.border === 'all' ? '' : 'all')} active={activeAttrs.border === 'all'} />
-            <RibbonButton icon="▏" label={t('doc.borderLeft')} onClick={() => setParaAttr('border', activeAttrs.border === 'left' ? '' : 'left')} active={activeAttrs.border === 'left'} />
+            <RibbonButton icon="▢" label={t('doc.borderAll')} onClick={toggleBorderAll} active={borderHas(activeAttrs.border, 'all')} />
+            <RibbonButton icon="▔" label={t('doc.borderTop')} onClick={() => toggleBorderSide('top')} active={borderHas(activeAttrs.border, 'top')} />
+            <RibbonButton icon="▕" label={t('doc.borderRight')} onClick={() => toggleBorderSide('right')} active={borderHas(activeAttrs.border, 'right')} />
+            <RibbonButton icon="▁" label={t('doc.borderBottom')} onClick={() => toggleBorderSide('bottom')} active={borderHas(activeAttrs.border, 'bottom')} />
+            <RibbonButton icon="▏" label={t('doc.borderLeft')} onClick={() => toggleBorderSide('left')} active={borderHas(activeAttrs.border, 'left')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.shading')}>
             <div className="relative">
@@ -2265,7 +2553,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           {/* 比较与保护 */}
           <RibbonGroup label={t('doc.compareProtect')}>
-            <RibbonButton icon="⚖️" label={t('doc.compare')} onClick={runCompare} active={compareOpen} title={t('doc.compareTitle')} />
+            <RibbonButton icon="⚖️" label={t('doc.compare')} onClick={runCompare} active={!!compareTarget} title={t('doc.compareTitle')} />
             <RibbonButton icon="🔒" label={t('doc.protect')} onClick={toggleProtect} active={protectedMode} title={protectedMode ? t('doc.protectOn') : t('doc.protectTitle')} />
           </RibbonGroup>
         </>)}
@@ -2319,7 +2607,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           {/* 窗口 */}
           <RibbonGroup label={t('doc.window')}>
-            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const v = viewRef.current; if (!v) return; const state2 = EditorState.create({ doc: v.state.doc, plugins: v.state.plugins }); const newView = new EditorView(window.window.document.createElement('div'), { state: state2 }); (window as any).__pmView2 = newView; alert(t('doc.newWindowMsg') || '已创建新编辑器视图（在同一窗口内拆分显示）') }} title={t('doc.newWindowTitle')} />
+            <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('doc.newWindowTitle')} />
             <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindowPersist(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
@@ -2386,7 +2674,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       {/* 右键菜单 — 边界检测防止越界 */}
       {showContextMenu && (() => {
-        const MENU_W = 180, MENU_H = 230
+        const MENU_W = 180, MENU_H = 270
         const vw = window.innerWidth, vh = window.innerHeight
         let cx = contextMenuPos.x, cy = contextMenuPos.y
         if (cx + MENU_W > vw - 8) cx = Math.max(8, vw - MENU_W - 8)
@@ -2409,6 +2697,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <button onClick={() => { setSearchOpen(true); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🔍 {t('doc.findReplace')}</button>
             <button onClick={() => exec('comment')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>💬 {t('doc.addComment')}</button>
             <button onClick={() => { setRibbonTab('insert'); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📊 {t('doc.insertTable')}</button>
+            {contextMenuOnTextBox && (
+              <>
+                <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+                <button onClick={editTextBoxStyle} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🎨 {t('doc.editStyle')}</button>
+              </>
+            )}
           </div>
         </>
         )
@@ -2438,9 +2732,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </div>
       )}
 
+      <div style={{ flex: '1 1 auto', display: 'flex', minHeight: 0, flexDirection: compareTarget ? 'row' : 'column' }}>
       <div
-        className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${splitWindow ? 'flex' : ''}`}
-        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}
+        ref={leftScrollRef}
+        onScroll={() => syncScroll('left')}
+        className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${(splitWindow || compareTarget) ? 'flex' : ''}`}
+        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', flex: compareTarget ? '1 1 50%' : '1 1 auto', minWidth: 0, borderRight: compareTarget ? '2px solid var(--color-border)' : 'none' }}
       >
       <div
         ref={pageRef}
@@ -2537,9 +2834,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           ))}
         </div>
         <div style={{ position: 'relative', zIndex: 1 }}>
-          {/* 水平标尺（Word 风格：厘米刻度 + 页边距 + 可拖拽缩进滑块） */}
+          {/* 水平标尺（Word 风格：厘米刻度 + 页边距 + 可拖拽缩进滑块）。
+              加常量 key 固定身份：本节点同为 ProseMirror 宿主容器的前置兄弟，
+              切换标尺时不得让后续兄弟发生跨位置 reconcile。 */}
           {showRuler && (
             <Ruler
+              key="doc-ruler"
               width={pageWidthPx}
               marginLeft={docMargins.left}
               marginRight={docMargins.right}
@@ -2557,9 +2857,15 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               }}
             />
           )}
-          {/* 页眉 */}
-          {(docHeader || docLineNumbers) && (
-            <div style={{
+          {/* 页眉。
+              必须常驻渲染（用 display 控制显隐）而非 `{cond && ...}`：本节点是下方 ProseMirror
+              宿主容器的前置兄弟，一旦条件挂载/卸载就会改变宿主容器在 children 中的下标，
+              触发 React 跨位置 reconcile，对 ProseMirror 自持的 DOM 调用 removeChild 导致崩溃。
+              注意原实现的外层条件里含 docLineNumbers —— 切换「行号」会让本节点整体增删，
+              正是 removeChild 崩溃的触发源之一。 */}
+          <div
+            key="doc-header"
+            style={{
               padding: `${Math.round(docMargins.top * 0.3)}px ${docMargins.right}px ${docMargins.top * 0.3}px ${docMargins.left}px`,
               borderBottom: '1px solid var(--color-border)',
               fontSize: '12px',
@@ -2568,14 +2874,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               minHeight: docHeader ? 'auto' : '0',
               display: docHeader ? 'block' : 'none',
             }}>
-              {docHeader}
-            </div>
-          )}
+            {docHeader}
+          </div>
           {/* 编辑器主体 — 应用页边距 + 分栏 */}
           <div style={{ position: 'relative', display: 'flex', flex: 1 }}>
-            {/* 行号 */}
-            {docLineNumbers && (
-              <div style={{
+            {/* 行号层。
+                该层是 ProseMirror 宿主容器的兄弟节点，且它是绝对定位的纯装饰层。
+                此处必须用「常驻 + key + display 切换」而不是 `{cond && ...}` 条件渲染：
+                条件渲染会让宿主容器在父节点 children 数组中的下标发生变化，触发 React 跨位置
+                reconcile / commitDeletion，进而对 ProseMirror 已接管的 DOM 调用 removeChild 而崩溃。 */}
+            <div
+              key="line-numbers"
+              style={{
+                display: docLineNumbers ? 'block' : 'none',
                 position: 'absolute',
                 left: 0,
                 top: 0,
@@ -2590,13 +2901,24 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 userSelect: 'none',
                 zIndex: 2,
               }}>
-                {Array.from({ length: 30 }, (_, i) => (
-                  <div key={i} style={{ minHeight: '1.8em' }}>{i + 1}</div>
-                ))}
-              </div>
-            )}
+              {docLineNumbers && Array.from({ length: 30 }, (_, i) => (
+                <div key={i} style={{ minHeight: '1.8em' }}>{i + 1}</div>
+              ))}
+            </div>
+            {/* ProseMirror 宿主容器。
+                关键：该 div 内部的 DOM 完全由 ProseMirror 拥有（EditorView 会在其中注入并持续增删
+                .ProseMirror 子树）。React 绝不能参与该子树的 reconcile，否则在兄弟节点条件渲染
+                （如行号层 docLineNumbers、页底脚注兜底区）挂载/卸载引发的 commitDeletion 递归中，
+                React 会按自己过时的 fiber 记录对已被 ProseMirror 替换的节点调用 removeChild，
+                抛出 "Failed to execute 'removeChild' on 'Node'"。
+                因此：
+                1) key 固定为常量 'pm-host'，保证 React 永远把它识别为同一元素、不跨兄弟位置复用；
+                2) 始终渲染 children={undefined} 且不放任何 JSX 子节点，React 视其为空宿主，
+                   不会尝试卸载 ProseMirror 注入的子树。 */}
             <div
+              key="pm-host"
               ref={editorRef as any}
+              suppressHydrationWarning
               style={{
                 width: '100%',
                 margin: '0 auto',
@@ -2698,6 +3020,30 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         )}
       </div>
 
+      {/* 并排对比：右侧只读视图（独立滚动 + 同步滚动 + 差异高亮） */}
+      {compareTarget && (
+        <div style={{ flex: '1 1 50%', minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--color-bg-alt)' }}>
+          <div className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', background: 'var(--color-surface)' }}>
+            <span className="flex items-center gap-2">
+              <span style={{ fontWeight: 600 }}>{t('doc.compareWith') || '对比:'}</span>
+              <span className="truncate max-w-[200px]">{compareTarget.name}</span>
+            </span>
+            <span className="flex items-center gap-3">
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 10, background: 'rgba(16,185,129,0.35)', border: '1px solid #10b981', display: 'inline-block', borderRadius: 2 }} /> {t('doc.diffAdd') || '新增'}</span>
+              <span className="flex items-center gap-1"><span style={{ width: 10, height: 10, background: 'rgba(239,68,68,0.30)', border: '1px solid #ef4444', display: 'inline-block', borderRadius: 2 }} /> {t('doc.diffDel') || '删除'}</span>
+              <button className="px-2 py-0.5 rounded hover:bg-slate-100" onClick={() => setCompareTarget(null)} title={t('doc.close')}>✕</button>
+            </span>
+          </div>
+          <div
+            ref={compareRef}
+            onScroll={() => syncScroll('right')}
+            className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
+            style={{ position: 'relative', zIndex: 1 }}
+          />
+        </div>
+      )}
+      </div>
+
       {/* 页码设置对话框 */}
       {showPageNumDialog && (
         <PageNumberDialog
@@ -2712,27 +3058,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           onClose={() => setShowParaDialog(false)}
           onSave={(d) => { applyParagraphFormat(d); setShowParaDialog(false) }}
         />
-      )}
-
-      {/* 文档对比面板 */}
-      {compareOpen && (
-        <div className="modal-overlay" onMouseDown={() => setCompareOpen(false)}>
-          <div className="modal compare-panel" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-title">{t('doc.compareResult')}</div>
-            <div className="compare-body">
-              {compareDiff.length === 0 && <div className="compare-empty">{t('doc.compareEmpty')}</div>}
-              {compareDiff.map((d, i) => (
-                <div key={i} className={`compare-line compare-${d.type}`}>
-                  <span className="compare-sign">{d.type === 'add' ? '+' : d.type === 'del' ? '−' : ' '}</span>
-                  <span className="compare-text">{d.text || ' '}</span>
-                </div>
-              ))}
-            </div>
-            <div className="modal-actions">
-              <button className="btn btn-ghost btn-sm" onClick={() => setCompareOpen(false)}>{t('doc.close')}</button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* 样式库面板 */}
@@ -2791,6 +3116,62 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </div>
         )}
       />
+      {showMathModal && (
+        <MathEditorModal
+          initialLatex={mathEdit.latex}
+          initialInline={mathEdit.inline}
+          initialTab={mathEdit.pos != null ? 'formula' : 'formula'}
+          onClose={() => setShowMathModal(false)}
+          onInsert={handleMathInsert}
+        />
+      )}
+      {activeTextBox && (
+        <TextBoxStylePanel
+          node={activeTextBox.node}
+          onChange={updateTextBox}
+          onClose={() => setActiveTextBox(null)}
+        />
+      )}
+
+      {/* 文档保护：打开受保护文档时，强制要求输入密码才能编辑 */}
+      {showUnlock && (
+        <div
+          className="modal-overlay"
+          style={{ background: 'rgba(15,23,42,0.45)', zIndex: 200 }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <div
+            className="modal"
+            style={{ maxWidth: 360 }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <span>🔒 {t('doc.protectUnlockTitle') || '文档受保护'}</span>
+            </div>
+            <div style={{ padding: '16px' }}>
+              <p style={{ fontSize: '13px', color: 'var(--color-text-secondary)', margin: '0 0 12px' }}>
+                {t('doc.protectUnlockHint') || '该文档已设置密码保护，请输入密码以解除保护进行编辑。'}
+              </p>
+              <input
+                type="password"
+                autoFocus
+                value={unlockInput}
+                onChange={(e) => { setUnlockInput(e.target.value); setUnlockError(false) }}
+                onKeyDown={(e) => { if (e.key === 'Enter') submitUnlock() }}
+                placeholder={t('doc.protectEnterPwd') || '输入密码'}
+                className="comment-edit-input"
+                style={{ width: '100%', fontSize: '13px', borderRadius: '4px', border: `1px solid ${unlockError ? '#ef4444' : 'var(--color-border)'}`, padding: '6px 8px', background: 'var(--color-bg)', color: 'var(--color-text)' }}
+              />
+              {unlockError && (
+                <div style={{ color: '#ef4444', fontSize: '12px', marginTop: '6px' }}>{t('doc.protectWrongPwd') || '密码错误'}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
+                <button className="btn btn-primary btn-sm" onClick={submitUnlock}>{t('doc.protectUnlock') || '解除保护'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

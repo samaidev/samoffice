@@ -1,5 +1,7 @@
 package core
 
+import "encoding/json"
+
 // Document 是 SamOffice 的统一文档模型 (UDM)。
 // 所有格式 (docx/xlsx/pptx/md) 先解析为 UDM，再渲染或导出。
 //
@@ -13,8 +15,18 @@ type Document struct {
 	Comments   []Comment        `json:"comments,omitempty"`
 	Styles     []StyleDef       `json:"styles,omitempty"`
 	PageNumber *PageNumberConfig `json:"pageNumber,omitempty"`
+	Protect    *DocumentProtect  `json:"protect,omitempty"`
 	Warnings   []Warning        `json:"warnings,omitempty"`
 	Raw        map[string]any   `json:"raw,omitempty"`
+}
+
+// DocumentProtect 描述文档保护（密码锁定）配置。
+// 保存时该信息会随 UDM 一并持久化（docx 写入 docProps/samoffice_protect.xml），
+// 重新打开文档后若 Enabled 为 true，编辑器进入只读并要求输入密码解锁。
+// Hash 为密码的哈希值（前端计算），盘上不存明文密码。
+type DocumentProtect struct {
+	Enabled bool   `json:"enabled"`
+	Hash    string `json:"hash"`
 }
 
 // PageNumberConfig 描述页脚中页码字段的样式与格式。
@@ -196,6 +208,72 @@ type Math struct {
 func (Math) isBlock()        {}
 func (Math) BlockType() string { return "math" }
 
+// Textbox 文本框/形状块。包含内部块（标题、段落、图片等），以及几何与
+// 样式属性：边框宽度 borderW(pt)、线型 lineStyle(solid|dash|dot|dashDot)、
+// 边框色 borderColor(#RRGGBB)、填充色 bgColor(#RRGGBB，空=无填充)、
+// 形状 shape(rect|roundRect|ellipse|triangle|diamond|rightArrow|star5|heart)、
+// 宽度 width(px，0=auto)、绕排 float(''|left|right)。
+type Textbox struct {
+	Type        string  `json:"type"`          // 固定 "textbox"，用于 JSON 反序列化判别
+	Blocks      []Block `json:"inline,omitempty"` // 前端发送 "inline" 键，值为 blocks 数组
+	W           float64 `json:"w,omitempty"`
+	H           float64 `json:"h,omitempty"`
+	X           float64 `json:"x,omitempty"`
+	Y           float64 `json:"y,omitempty"`
+	BorderW     float64 `json:"borderW,omitempty"`
+	LineStyle   string  `json:"lineStyle,omitempty"`
+	BorderColor string  `json:"borderColor,omitempty"`
+	FillColor   string  `json:"bgColor,omitempty"`
+	Shape       string  `json:"shape,omitempty"`
+	Width       float64 `json:"width,omitempty"`
+	Wrap        string  `json:"float,omitempty"`
+	Radius      float64 `json:"radius,omitempty"`
+	Rotation    float64 `json:"rotation,omitempty"`
+}
+
+func (Textbox) isBlock()        {}
+func (Textbox) BlockType() string { return "textbox" }
+
+// Textbox 自定义反序列化：处理 Blocks 接口字段（前端以 "inline" 键发送 blocks 数组）
+func (b *Textbox) UnmarshalJSON(data []byte) error {
+	type alias struct {
+		Type        string            `json:"type"`
+		Blocks      []json.RawMessage `json:"inline"`
+		W           float64           `json:"w"`
+		H           float64           `json:"h"`
+		X           float64           `json:"x"`
+		Y           float64           `json:"y"`
+		BorderW     float64           `json:"borderW"`
+		LineStyle   string            `json:"lineStyle"`
+		BorderColor string            `json:"borderColor"`
+		FillColor   string            `json:"bgColor"`
+		Shape       string            `json:"shape"`
+		Width       float64           `json:"width"`
+		Wrap        string            `json:"float"`
+		Radius      float64           `json:"radius"`
+		Rotation    float64           `json:"rotation"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	b.Type = a.Type
+	b.W, b.H, b.X, b.Y = a.W, a.H, a.X, a.Y
+	b.BorderW, b.LineStyle = a.BorderW, a.LineStyle
+	b.BorderColor, b.FillColor = a.BorderColor, a.FillColor
+	b.Shape, b.Width, b.Wrap = a.Shape, a.Width, a.Wrap
+	b.Radius, b.Rotation = a.Radius, a.Rotation
+	b.Blocks = make([]Block, 0, len(a.Blocks))
+	for _, raw := range a.Blocks {
+		blk, err := unmarshalBlock(raw)
+		if err != nil {
+			continue // 容错跳过
+		}
+		b.Blocks = append(b.Blocks, blk)
+	}
+	return nil
+}
+
 type RawBlock struct {
 	Kind string         `json:"kind"`
 	Data map[string]any `json:"data"`
@@ -221,10 +299,33 @@ type Text struct {
 	Bg         string  `json:"bg,omitempty"`       // 单元格填充色，#RRGGBB
 	FontSize   float64 `json:"fontSize,omitempty"` // 字号（磅）
 	FontFamily string  `json:"fontFamily,omitempty"` // 字体名（xlsx 单元格）
+	Highlight  string  `json:"highlight,omitempty"` // 高亮色，#RRGGBB
 }
 
 func (Text) isInline()         {}
 func (Text) InlineType() string { return "text" }
+
+// Track 修订追踪行内：保存文档时保留 insert/delete 修订状态。
+type Track struct {
+	Track  string `json:"track"` // "insert" | "delete"
+	Author string `json:"author,omitempty"`
+	// 与 Text 相同的格式字段
+	Content   string  `json:"content"`
+	Bold      bool    `json:"bold,omitempty"`
+	Italic    bool    `json:"italic,omitempty"`
+	Under     bool    `json:"under,omitempty"`
+	Strike    bool    `json:"strike,omitempty"`
+	Style     string  `json:"style,omitempty"`
+	Font      string  `json:"font,omitempty"`
+	Color     string  `json:"color,omitempty"`
+	Highlight string  `json:"highlight,omitempty"`
+	FontSize  float64 `json:"fontSize,omitempty"`
+	Superscript bool `json:"superscript,omitempty"`
+	Subscript   bool `json:"subscript,omitempty"`
+}
+
+func (Track) isInline()         {}
+func (Track) InlineType() string { return "track" }
 
 type Hyperlink struct {
 	URL  string   `json:"url"`

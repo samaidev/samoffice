@@ -220,17 +220,115 @@ func renderBlock(fb *fontBook, pdf *gopdf.GoPdf, b core.Block, x, y float64) (fl
 		return renderImage(pdf, v, x, y)
 	case *core.Table:
 		return renderTable(fb, pdf, v, x, y)
+	case *core.Textbox:
+		return renderTextbox(fb, pdf, v, x, y)
 	}
         return x, y
 }
 
-// runStyle 是一个带格式片段
+// hexRGB 解析 #RRGGBB 为 RGB，失败返回 false
+func hexRGB(hex string) (uint8, uint8, uint8, bool) {
+	c := strings.TrimPrefix(hex, "#")
+	if len(c) < 6 {
+		return 0, 0, 0, false
+	}
+	var r, g, b uint8
+	if _, err := fmt.Sscanf(c[0:2], "%02x", &r); err != nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(c[2:4], "%02x", &g); err != nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(c[4:6], "%02x", &b); err != nil {
+		return 0, 0, 0, false
+	}
+	return r, g, b, true
+}
+
+// renderTextbox 在 PDF 中绘制文本框/形状：边框（线宽/线型）、填充、圆角，并渲染内部块。
+func renderTextbox(fb *fontBook, pdf *gopdf.GoPdf, tb *core.Textbox, x, y float64) (float64, float64) {
+	const pxToPt = 0.75
+	wpt := tb.Width * pxToPt
+	if wpt <= 0 {
+		wpt = 342.0 // 约 9.5cm
+	}
+	// 估算框高：按内部块数量 * 行高，最小 60pt
+	const lineH = 18.0
+	boxH := float64(len(tb.Blocks)) * lineH * 1.2
+	if boxH < 50 {
+		boxH = 50
+	}
+	if tb.H > 0 {
+		boxH = tb.H * 28.35 * 0.04 // 粗略：cm 转 pt（H 通常小）
+		if boxH < 50 {
+			boxH = 50
+		}
+	}
+	isRound := tb.Shape == "roundRect"
+	// 填充
+	fr, fg, fb_, hasFill := hexRGB(tb.FillColor)
+	// 边框色
+	br, bg, bb, hasBorder := hexRGB(tb.BorderColor)
+	if !hasBorder {
+		br, bg, bb = 0, 0, 0
+	}
+	pdf.SetStrokeColor(br, bg, bb)
+	// 线型
+	switch tb.LineStyle {
+	case "dash":
+		pdf.SetLineType("dashed")
+	case "dot":
+		pdf.SetLineType("dotted")
+	case "dashDot":
+		pdf.SetCustomLineType([]float64{5, 2, 1, 2}, 0)
+	default:
+		pdf.SetLineType("")
+	}
+	pdf.SetLineWidth(tb.BorderW)
+	if hasFill {
+		pdf.SetFillColor(fr, fg, fb_)
+	}
+	style := "D"
+	if hasFill {
+		style = "DF"
+	}
+	if isRound {
+		radius := tb.Radius * pxToPt
+		if radius <= 0 {
+			radius = 8
+		}
+		_ = pdf.Rectangle(x, y, x+wpt, y+boxH, style, radius, 8)
+	} else {
+		_ = pdf.Rectangle(x, y, x+wpt, y+boxH, style, 0, 0)
+	}
+	pdf.SetLineType("")
+	// 内部文本
+	inY := y + 6
+	for _, blk := range tb.Blocks {
+		switch v := blk.(type) {
+		case *core.Paragraph:
+			runs := collectRuns(v.Inline)
+			_, inY = drawRuns(fb, pdf, runs, x+4, inY, x+wpt-4)
+		case core.Paragraph:
+			runs := collectRuns(v.Inline)
+			_, inY = drawRuns(fb, pdf, runs, x+4, inY, x+wpt-4)
+		case *core.Heading:
+			// 简化：把标题当普通段落文本
+			runs := collectRuns(v.Inline)
+			_, inY = drawRuns(fb, pdf, runs, x+4, inY, x+wpt-4)
+		}
+	}
+	return x, y + boxH + 8
+}
+
+
 type runStyle struct {
 	text   string
 	family string
 	bold   bool
 	italic bool
 	under  bool
+	strike bool
 	size   float64
 	color  string
 }
@@ -252,6 +350,10 @@ func collectRuns(inline []core.Inline) []runStyle {
 					runs = append(runs, runStyle{text: tt.Content, family: tt.Font, bold: tt.Bold, italic: tt.Italic, under: true, size: tt.FontSize, color: tt.Color})
 				}
 			}
+		case *core.Track:
+			runs = append(runs, runStyle{text: v.Content, family: v.Font, bold: v.Bold, italic: v.Italic, under: v.Track == "insert", strike: v.Track == "delete", size: v.FontSize, color: v.Color})
+		case core.Track:
+			runs = append(runs, runStyle{text: v.Content, family: v.Font, bold: v.Bold, italic: v.Italic, under: v.Track == "insert", strike: v.Track == "delete", size: v.FontSize, color: v.Color})
 		}
 	}
 	return runs

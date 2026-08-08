@@ -1085,7 +1085,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           <RibbonGroup label={t('sheet.window')}>
             <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} title={t('sheet.freezeTitle')} />
             <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={t('sheet.splitTitle')} />
-            <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => window.open(window.location.href, '_blank')} title={t('sheet.newWindowTitle')} />
+            <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('sheet.newWindowTitle')} />
             <RibbonButton icon="▦" label={t("sheet.arrange")} onClick={() => alert(t('sheet.arrange'))} title={t('sheet.arrangeTitle')} />
           </RibbonGroup>
           {/* MS Office 风格显示 */}

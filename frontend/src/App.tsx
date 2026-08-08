@@ -14,6 +14,27 @@ import { Dropdown } from './components/Dropdown'
 import { decideOpen } from './lib/openroute'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
+
+// 一个已打开的文件窗口（标签页）。持有该窗口的完整数据快照，切换时恢复，避免多文件互相覆盖。
+interface OpenWindow {
+  id: number
+  type: Tab                      // 不含 'about'
+  path: string
+  title: string                 // 文件名（不含路径）
+  doc?: Document
+  md?: string
+  html?: string
+  sheets?: { name: string; cells: Record<string, any> }[]
+  slides?: SlideData[]
+  sheetSnapshot?: { name: string; rows: number; cols: number; cells: Record<string, any> }[] | null
+  slideSnapshot?: SlideData[] | null
+  pdf?: { url: string; name: string; nonce: number } | null
+  sheetEpoch: number
+  slideEpoch: number
+  zoom: number
+  spellErrors: SpellError[]
+}
+
 type Theme = 'light' | 'dark' | 'auto'
 
 // 规范化外部传入的文件路径：去掉首尾引号/空白，以及 file:// / file:\\ 协议前缀，
@@ -140,19 +161,8 @@ ${t('sample.md.more')}
 </html>`, [t])
 
   const [backend, setBackend] = useState<Backend | null>(null)
-  const [tab, setTab] = useState<Tab>('document')
   const [doc, setDoc] = useState<Document>(emptyDoc)
   const [spellErrors, setSpellErrors] = useState<SpellError[]>([])
-  // 每个选项卡各自记录"当前打开的文件路径 + 名字"（左下角状态栏按当前 tab 显示）
-  const [filePaths, setFilePaths] = useState<Record<Tab, string>>({
-    document: '', spreadsheet: '', slide: '', markdown: '', html: '', pdf: '', about: '',
-  })
-  // 便捷读写：按当前 tab 读写
-  const setFilePathForTab = useCallback((tab: Tab, path: string) => {
-    setFilePaths(prev => ({ ...prev, [tab]: path }))
-  }, [])
-  // 当前激活 tab 对应的文件路径
-  const filePath = filePaths[tab]
   // 打开 xlsx/xls 时传入表格编辑器的初始 sheet 数据；epoch 用于强制重挂载以加载新文件
   const [sheetInitial, setSheetInitial] = useState<{ name: string; cells: Record<string, any> }[] | null>(null)
   // SpreadsheetEditor 回传的完整工作簿快照（含边框/合并/填充），用于保存 xlsx
@@ -166,6 +176,58 @@ ${t('sample.md.more')}
   const [slideInitial, setSlideInitial] = useState<{ title: string; content: string; notes?: string }[] | null>(null)
   const [slideEpoch, setSlideEpoch] = useState(0)
 
+  // === 多窗口（多标签）模型 ===
+  // 默认不显示任何类型选项卡，只有"关于"；打开文件后才出现对应类型的窗口标签。
+  // 打开同类型多个文件时，每个窗口一个标签，形如"文档：文件名"。
+  const [windows, setWindows] = useState<OpenWindow[]>([])
+  const [activeWindowId, setActiveWindowId] = useState<number | null>(null)
+  const [dragTabId, setDragTabId] = useState<number | null>(null)
+  const winIdRef = useRef(1)
+  const activeWindow = windows.find(w => w.id === activeWindowId) || null
+
+  // 当前激活窗口对应的"逻辑 tab"（用于渲染对应编辑器）；无激活窗口时为 about
+  const tab = activeWindow ? activeWindow.type : 'about'
+  // 当前激活窗口的文件路径
+  const filePath = activeWindow ? activeWindow.path : ''
+
+  // 文件名截断：超过 maxLen 个字用 … 省略
+  const truncateName = (s: string, maxLen = 6) =>
+    !s ? '' : s.length > maxLen ? s.slice(0, maxLen) + '…' : s
+  // 类型前缀
+  const typePrefix = (type: Tab) =>
+    ({ document: t('tab.document'), spreadsheet: t('tab.spreadsheet'), slide: t('tab.slide'), markdown: t('tab.markdown'), html: t('tab.html'), pdf: t('tab.pdf') } as Record<string, string>)[type] || '文档'
+
+  // 把当前顶层编辑状态捕获为窗口快照（用于切换/打开时保存当前窗口的改动）
+  const captureActive = (): Partial<OpenWindow> => ({
+    doc,
+    md: mdContent,
+    html: htmlContent,
+    sheets: sheetInitial ?? undefined,
+    slides: slideInitial ?? undefined,
+    sheetSnapshot: sheetSnapshot ?? undefined,
+    slideSnapshot: slideSnapshot ?? undefined,
+    pdf: pdfOpenSignal ?? undefined,
+    sheetEpoch,
+    slideEpoch,
+    zoom: docZoom,
+    spellErrors,
+  })
+  // 把窗口快照写回顶层编辑状态（切换到该窗口时恢复）
+  const applyWindow = (w: OpenWindow) => {
+    setDoc(w.doc ?? emptyDoc)
+    setMdContent(w.md ?? sampleMd)
+    setHtmlContent(w.html ?? '')
+    setSheetInitial(w.sheets ? w.sheets.map(s => ({ name: s.name, cells: s.cells })) : null)
+    setSlideInitial(w.slides ? w.slides.map(s => ({ title: s.title, content: s.content, notes: s.notes })) : null)
+    setSheetSnapshot(w.sheetSnapshot ?? null)
+    setSlideSnapshot(w.slideSnapshot ?? null)
+    setPdfOpenSignal(w.pdf ?? null)
+    setSheetEpoch(w.sheetEpoch)
+    setSlideEpoch(w.slideEpoch)
+    setDocZoom(w.zoom)
+    setSpellErrors(w.spellErrors ?? [])
+  }
+
   // 统一处理打开结果：表格类文件切换到表格视图，其余切换到文档视图
   const openResult = async (result: any) => {
     const path: string = result.path || ''
@@ -173,14 +235,13 @@ ${t('sample.md.more')}
     const sheets = decision.sheets
     const slides = decision.slides
     const isSheet = decision.tab === 'spreadsheet'
-    // 记录当前打开文件对应到目标选项卡（左下角状态栏按 tab 显示）
+    // 当前打开文件要进入的目标视图类型
     const targetTab: Tab = isSheet ? 'spreadsheet'
       : decision.tab === 'slide' ? 'slide'
       : decision.tab === 'markdown' ? 'markdown'
       : decision.tab === 'html' ? 'html'
       : decision.tab === 'pdf' ? 'pdf'
       : 'document'
-    setFilePathForTab(targetTab, path)
     try {
       const name = path.split(/[\\/]/).pop() || path
       const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
@@ -188,6 +249,16 @@ ${t('sample.md.more')}
       filtered.unshift({ name, path })
       localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
     } catch {}
+    // 先保存当前激活窗口的编辑内容（保证切换/打开不会丢失改动）
+    let savedSnapshot: Partial<OpenWindow> | null = null
+    setWindows(prev => {
+      if (activeWindowId == null) return prev
+      savedSnapshot = captureActive()
+      return prev.map(w => (w.id === activeWindowId ? { ...w, ...savedSnapshot! } : w))
+    })
+
+    // 用局部变量承接本次要载入的状态，便于同时写进窗口快照
+    const win: Partial<OpenWindow> = { type: targetTab, path, title: path.split(/[\\/]/).pop() || path }
     if (isSheet && sheets && sheets.length) {
       let finalSheets = sheets
       // xlsx 直接走原生读取，完整保留边框/合并/填充等格式（绕开有损的 UDM 中转）
@@ -204,50 +275,56 @@ ${t('sample.md.more')}
       }
       setSheetInitial(finalSheets)
       setSheetEpoch(e => e + 1)
-      setTab('spreadsheet')
+      setSheetSnapshot(null)
+      win.sheets = finalSheets
+      win.sheetEpoch = sheetEpoch + 1
     } else if (decision.tab === 'slide') {
       // 演示文稿：把 pptx 解析出的幻灯片数据传入幻灯片编辑器
-      setSlideInitial(slides && slides.length ? slides : [])
+      const initSlides = slides && slides.length ? slides : []
+      setSlideInitial(initSlides)
       setSlideEpoch(e => e + 1)
-      setTab('slide')
+      setSlideSnapshot(null)
+      win.slides = initSlides
+      win.slideEpoch = slideEpoch + 1
     } else if (decision.tab === 'markdown') {
-      // Markdown 文件：读取原文到 MD 编辑器（而非解析成 UDM 文档）
       setSheetInitial(null)
+      let md = sampleMd
       try {
         const b64 = await loadRawText(result, backend, path)
-        setMdContent(base64ToUtf8(b64))
+        md = base64ToUtf8(b64)
       } catch (e: any) {
         console.error('read markdown failed', e)
       }
-      setTab('markdown')
+      setMdContent(md)
+      win.md = md
     } else if (decision.tab === 'html') {
       setSheetInitial(null)
+      let html = ''
       try {
         const b64 = await loadRawText(result, backend, path)
-        setHtmlContent(base64ToUtf8(b64))
+        html = base64ToUtf8(b64)
       } catch (e: any) {
         console.error('read html failed', e)
       }
-      setTab('html')
+      setHtmlContent(html)
+      win.html = html
     } else if (decision.tab === 'pdf') {
       setSheetInitial(null)
       try {
-        // 读取 PDF 原始字节：优先 backend.readFile；否则直接走 Wails 绑定兜底，
-        // 避免 backend 因闭包未及时更新（setBackend 后同函数体内 backend 仍为旧值）而读不到文件。
+        // 读取 PDF 原始字节：优先 backend.readFile；否则直接走 Wails 绑定兜底
         let b64: string | undefined
         if (backend?.readFile) {
           b64 = await backend.readFile(path)
         } else {
           const appRead = (window as any).go?.main?.App?.ReadFile
-          if (typeof appRead === 'function') {
-            b64 = await appRead(path)
-          }
+          if (typeof appRead === 'function') b64 = await appRead(path)
         }
         if (b64) {
           const blob = base64ToBlob(b64, 'application/pdf')
           const url = URL.createObjectURL(blob)
-          // 通过 prop 传给 PdfViewer，避免全局事件在组件挂载前触发而丢失
-          setPdfOpenSignal({ url, name: path, nonce: Date.now() })
+          const sig = { url, name: path, nonce: Date.now() }
+          setPdfOpenSignal(sig)
+          win.pdf = sig
         } else {
           showToast(t('doc.openPdfFailed', { name: path }) || 'PDF 读取失败')
         }
@@ -255,14 +332,61 @@ ${t('sample.md.more')}
         console.error('read pdf failed', e)
         showToast(t('doc.openPdfFailed', { name: path }) || 'PDF 读取失败')
       }
-      setTab('pdf')
     } else {
       setSheetInitial(null)
       setDoc(result.document)
-      setTab('document')
       try { triggerSpellCheck(JSON.stringify(result.document?.blocks || [])) } catch {}
+      win.doc = result.document
     }
+    // 写入默认窗口字段
+    win.zoom = docZoom
+    win.spellErrors = []
+
+    // 同 path 的窗口已存在则更新，否则新建；切换窗口时通过 applyWindow 恢复
+    // 注意：先在外面算出 targetId（setWindows 的回调是异步的，不能在回调里赋值后再同步读取）
+    const existingIdx = windows.findIndex(w => w.path === path && w.type === targetTab)
+    const targetId = existingIdx >= 0 ? windows[existingIdx].id : winIdRef.current++
+    const fullWin: OpenWindow = {
+      id: targetId, type: targetTab, path, title: win.title || path.split(/[\\/]/).pop() || path,
+      ...win,
+      sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
+      zoom: win.zoom ?? 1, spellErrors: win.spellErrors ?? [],
+    } as OpenWindow
+    setWindows(prev => {
+      const idx = prev.findIndex(w => w.path === path && w.type === targetTab)
+      return idx >= 0 ? prev.map(w => (w.id === targetId ? fullWin : w)) : [...prev, fullWin]
+    })
+    setActiveWindowId(targetId)
+    applyWindow({
+      id: targetId, type: targetTab, path, title: win.title || path.split(/[\\/]/).pop() || path,
+      ...win,
+      sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
+      zoom: win.zoom ?? 1, spellErrors: win.spellErrors ?? [],
+    } as OpenWindow)
     showToast(t('app.opened', { name: path }))
+  }
+
+  // 直接用一个已准备好的数据对象（如已读取的 PDF blob）激活/新建一个窗口标签。
+  // 与 openResult 共用"保存当前窗口快照 + 新建/复用窗口 + 切换激活"的逻辑。
+  const activateWindowData = (win: Partial<OpenWindow> & { type: Tab; path: string; title: string }) => {
+    setWindows(prev => activeWindowId == null ? prev : prev.map(w => (w.id === activeWindowId ? { ...w, ...captureActive() } : w)))
+    const existingIdx = windows.findIndex(w => w.path === win.path && w.type === win.type)
+    const targetId = existingIdx >= 0 ? windows[existingIdx].id : winIdRef.current++
+    const full = {
+      id: targetId, ...win,
+      sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
+      zoom: win.zoom ?? docZoom, spellErrors: win.spellErrors ?? [],
+    } as OpenWindow
+    setWindows(prev => {
+      const idx = prev.findIndex(w => w.path === win.path && w.type === win.type)
+      return idx >= 0 ? prev.map(w => (w.id === targetId ? full : w)) : [...prev, full]
+    })
+    setActiveWindowId(targetId)
+    applyWindow({
+      id: targetId, ...win,
+      sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
+      zoom: win.zoom ?? docZoom, spellErrors: win.spellErrors ?? [],
+    } as OpenWindow)
   }
   const [toast, setToast] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -270,7 +394,10 @@ ${t('sample.md.more')}
   const [filesOpen, setFilesOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [spellPanelOpen, setSpellPanelOpen] = useState(false)
-  const [theme, setTheme] = useState<Theme>('auto')
+  const [dragOver, setDragOver] = useState(false)
+  const [theme, setTheme] = useState<Theme>(
+    () => (localStorage.getItem('samoffice_theme') as Theme) || 'auto'
+  )
   const [wordCount, setWordCount] = useState(0)
   const [charCount, setCharCount] = useState(0)
   const [docZoom, setDocZoom] = useState(100)
@@ -493,19 +620,18 @@ ${t('sample.md.more')}
       }
       if (!path) return // 用户取消
 
-      // PDF 直接读取字节并切换到 PDF Tab
+      // PDF 直接读取字节并打开（走 openResult 统一处理窗口标签）
       if (path.toLowerCase().endsWith('.pdf')) {
         setLoading(true)
         showToast(t('app.opening', { name: path }))
         try {
-          const b64 = await backend.readFile(path)
-          const blob = base64ToBlob(b64, 'application/pdf')
-          const url = URL.createObjectURL(blob)
-          setFilePathForTab('pdf', path)
-          setTab('pdf')
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('pdf-open', { detail: { url, name: path } }))
-          }, 300)
+          if (!backend) { const b = createBackend(); setBackend(b) }
+          const result = await (window as any).go?.main?.App?.OpenFile(normalizePath(path))
+          if (result && !result.error) {
+            await openResult(result)
+          } else {
+            showToast(t('app.openFailed', { msg: (result as any)?.error || 'unknown' }))
+          }
         } catch (e: any) {
           showToast(t('app.openFailed', { msg: e.message }))
         } finally {
@@ -535,14 +661,14 @@ ${t('sample.md.more')}
       const file = input.files?.[0]
       if (!file) return
 
-      // PDF 文件直接切换到 PDF Tab，用 blob URL 加载
+      // PDF 文件：用 blob URL 加载，激活为 PDF 窗口标签
       if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
-        setFilePathForTab('pdf', file.name)
-        setTab('pdf')
         showToast(t('app.opening', { name: file.name }))
         // 通过 prop 传给 PdfViewer，避免全局事件在组件挂载前触发而丢失
         const url = URL.createObjectURL(file)
-        setPdfOpenSignal({ url, name: file.name, nonce: Date.now() })
+        const sig = { url, name: file.name, nonce: Date.now() }
+        setPdfOpenSignal(sig)
+        activateWindowData({ type: 'pdf', path: file.name, title: file.name, pdf: sig })
         return
       }
 
@@ -556,40 +682,9 @@ ${t('sample.md.more')}
         const r = await fetch(`${base}/api/doc/open`, { method: 'POST', body: form })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const result = await r.json()
-        // 与 openResult 保持一致的路由：表格类文件切到表格视图
-        const decision = decideOpen(file.name, result.document)
-        if (decision.tab === 'spreadsheet') {
-          setSheetInitial(decision.sheets)
-          setSheetEpoch(e => e + 1)
-          setFilePathForTab('spreadsheet', file.name)
-          setTab('spreadsheet')
-        } else if (decision.tab === 'markdown') {
-          // 远程模式：从已选文件读取原文到 MD 编辑器
-          setSheetInitial(null)
-          setFilePathForTab('markdown', file.name)
-          const text = await file.text()
-          setMdContent(text)
-          setTab('markdown')
-        } else if (decision.tab === 'html') {
-          setSheetInitial(null)
-          setFilePathForTab('html', file.name)
-          const text = await file.text()
-          setHtmlContent(text)
-          setTab('html')
-        } else {
-          setSheetInitial(null)
-          setDoc(result.document)
-          setFilePathForTab('document', file.name)
-          setTab('document')
-          triggerSpellCheck(JSON.stringify(result.document?.blocks || []))
-        }
-        // Save to recent files
-        try {
-          const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
-          const filtered = recent.filter(r => r.name !== file.name)
-          filtered.unshift({ name: file.name, path: file.name })
-          localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
-        } catch {}
+        // 统一走 openResult 处理各类型（表格/MD/HTML/文档），并创建窗口标签。
+        // openResult 内部会按 decideOpen 路由；MD/HTML 分支会读取原文。
+        await openResult({ ...result, path: file.name })
         showToast(t('app.opened', { name: file.name }))
       } catch (e: any) {
         showToast(t('app.openFailed', { msg: e.message }))
@@ -599,6 +694,99 @@ ${t('sample.md.more')}
     }
     input.click()
   }
+
+  // 本地模式：通过 Wails 的 OnFileDrop 获取拖放文件的真实磁盘路径（浏览器 File.path 不可得）
+  const openLocalPaths = async (paths: string[]) => {
+    if (!paths || paths.length === 0) return
+    if (!backend) return
+
+    for (const rawPath of paths) {
+      const path = normalizePath(rawPath)
+      const lower = path.toLowerCase()
+      const name = path.split(/[\\/]/).pop() || path
+      setLoading(true)
+      showToast(t('app.opening', { name: path }))
+      try {
+        if (lower.endsWith('.pdf')) {
+          const result = await (window as any).go?.main?.App?.OpenFile(path)
+          if (result && !result.error) await openResult(result)
+          else showToast(t('app.openFailed', { msg: (result as any)?.error || 'unknown' }))
+        } else {
+          const result = await backend.openFile(path)
+          openResult(result)
+        }
+      } catch (e: any) {
+        showToast(t('app.openFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+    }
+  }
+
+  // 远程模式：用拖入的 File 对象走 /api/doc/open 上传
+  const openDroppedFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    if (!backend) return
+
+    for (const file of Array.from(files)) {
+      const name = file.name || ''
+      const lower = name.toLowerCase()
+      if (lower.endsWith('.pdf') || file.type === 'application/pdf') {
+        showToast(t('app.opening', { name }))
+        const url = URL.createObjectURL(file)
+        const sig = { url, name, nonce: Date.now() }
+        setPdfOpenSignal(sig)
+        activateWindowData({ type: 'pdf', path: name, title: name, pdf: sig })
+        continue
+      }
+      setLoading(true)
+      showToast(t('app.opening', { name }))
+      try {
+        const base = await getApiBase()
+        const form = new FormData()
+        form.append('file', file)
+        const r = await fetch(`${base}/api/doc/open`, { method: 'POST', body: form })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const result = await r.json()
+        await openResult({ ...result, path: name })
+        showToast(t('app.opened', { name }))
+      } catch (e: any) {
+        showToast(t('app.openFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+    }
+  }
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    // 不 stopPropagation：本地模式由 Wails 在 window 上注册的 onDrop 接管，
+    // 若此处拦截会阻断 window 级回调导致 OnFileDrop 永不触发。
+    setDragOver(false)
+    // 本地模式由 Wails OnFileDrop 提供真实路径；远程模式走上传
+    if (backend?.mode !== 'local') openDroppedFiles(e.dataTransfer?.files ?? null)
+  }
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDragOver(true)
+  }
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+  }
+
+  // 注册 Wails 文件拖放（仅本地模式）：window.runtime.OnFileDrop 激活原生拖放，回调拿到真实磁盘路径
+  useEffect(() => {
+    if (!backend || backend.mode !== 'local') return
+    const rt = (window as any).runtime
+    if (!rt || typeof rt.OnFileDrop !== 'function') return
+    const off = rt.OnFileDrop((_x: number, _y: number, paths: string[]) => {
+      setDragOver(false)
+      openLocalPaths(paths || [])
+    }, false)
+    return () => { try { rt.OnFileDropOff() } catch { /* noop */ }; if (typeof off === 'function') off() }
+  }, [backend])
 
   // 远程模式：沿用原下载逻辑（浏览器下载，带文件名）
   const handleDownload = async (format: 'docx' | 'doc' | 'wps' | 'pdf') => {
@@ -678,6 +866,10 @@ ${t('sample.md.more')}
     if (!backend) return
     setMenuOpen(false)
 
+    // 保存成功后同步当前窗口标签的路径与文件名
+    const syncActivePath = (target: string) =>
+      setWindows(prev => prev.map(w => (w.id === activeWindowId ? { ...w, path: target, title: target.split(/[\\/]/).pop() || target } : w)))
+
     const isLocal = backend.mode === 'local'
     if (!isLocal) {
       return handleDownload((format || 'docx') as 'docx' | 'doc' | 'wps' | 'pdf')
@@ -703,7 +895,7 @@ ${t('sample.md.more')}
       setLoading(true)
       try {
         await backend.writePPTX(target, JSON.stringify({ pageW: 12192000, pageH: 6858000, slides: snaps }))
-        setFilePathForTab('slide', target)
+        syncActivePath(target)
         const name = target.split(/[\\/]/).pop() || target
         showToast(t('app.saved', { name }))
       } catch (e: any) {
@@ -728,7 +920,7 @@ ${t('sample.md.more')}
       }
       try {
         await backend.writeTextFile(target, text ?? '')
-        setFilePathForTab(tab, target)
+        syncActivePath(target)
         const name = target.split(/[\\/]/).pop() || target
         showToast(t('app.saved', { name }))
       } catch (e: any) {
@@ -759,7 +951,7 @@ ${t('sample.md.more')}
     if (/\.xlsx?$/i.test(filePath) && tab === 'spreadsheet') {
       try {
         await backend.writeXLSX(target, JSON.stringify({ sheets: sheetSnapshot || [] }))
-        setFilePathForTab('spreadsheet', target)
+        syncActivePath(target)
         const name = target.split(/[\\/]/).pop() || target
         showToast(t('app.saved', { name }))
       } catch (e: any) {
@@ -774,7 +966,7 @@ ${t('sample.md.more')}
     showToast(t('app.saving'))
     try {
       await backend.writeDocument(target, fmt, doc)
-      setFilePathForTab('document', target)
+      syncActivePath(target)
       const name = target.split(/[\\/]/).pop() || target
       showToast(t('app.saved', { name }))
     } catch (e: any) {
@@ -830,7 +1022,11 @@ ${t('sample.md.more')}
   }
 
   const toggleTheme = () => {
-    setTheme(t => t === 'light' ? 'dark' : t === 'dark' ? 'auto' : 'light')
+    setTheme(t => {
+      const next = t === 'light' ? 'dark' : t === 'dark' ? 'auto' : 'light'
+      localStorage.setItem('samoffice_theme', next)
+      return next
+    })
   }
 
   const themeIcon = theme === 'light' ? '☀️' : theme === 'dark' ? '🌙' : '🖥'
@@ -847,23 +1043,38 @@ ${t('sample.md.more')}
 
   const fileItems: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
     { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
+    {
+      icon: '🪟',
+      label: t('app.newWindow'),
+      onClick: () => {
+        const go = (window as any).go?.main?.App
+        if (go?.NewWindow) go.NewWindow()
+        else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew()
+      },
+    },
   ]
   if (saveable) {
     // “保存”：直接覆盖当前选项卡文件（Ctrl+S）；无真实路径时自动转“另存为”
     fileItems.push({ icon: '💾', label: t('app.save'), onClick: () => handleSave('', { forceDialog: false }), shortcut: 'Ctrl+S' })
   }
-  if (tab === 'document') {
-    // 文档格式专属的“另存为”选项
-    fileItems.push({ icon: '📄', label: t('app.saveDocx'), onClick: () => handleSave('docx', { forceDialog: true }) })
-    fileItems.push({ icon: '📃', label: t('app.saveDoc'), onClick: () => handleSave('doc', { forceDialog: true }) })
-    fileItems.push({ icon: '📋', label: t('app.saveWps'), onClick: () => handleSave('wps', { forceDialog: true }) })
+  // 根据当前选项卡类型，动态生成对应的“存为 {ext}”选项
+  const saveAsExtByTab: Record<string, string> = {
+    document: 'docx',
+    spreadsheet: 'xlsx',
+    slide: 'pptx',
+    markdown: 'md',
+    html: 'html',
+  }
+  const saveAsExt = saveAsExtByTab[tab]
+  if (saveAsExt) {
+    fileItems.push({ icon: '📄', label: t('app.saveAsExt', { ext: saveAsExt }), onClick: () => handleSave(saveAsExt as 'docx' | 'doc' | 'wps' | 'pdf' | '', { forceDialog: true }) })
   }
   // Recent files
   const recentFiles: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
   if (recentFiles.length > 0) {
     fileItems.push({ icon: '🕐', label: t('app.recentFiles') || 'Recent Files', onClick: () => {}, shortcut: '' })
     recentFiles.slice(0, 5).forEach((f, i) => {
-      fileItems.push({ icon: '  ' + (i+1) + '.', label: f.name, onClick: () => { /* reopen file */ } })
+      fileItems.push({ icon: '  ' + (i+1) + '.', label: f.name, onClick: () => { void openViaApp(f.path) } })
     })
   }
   if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
@@ -871,7 +1082,23 @@ ${t('sample.md.more')}
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-x-hidden" style={{ background: 'var(--color-bg)' }}>
+    <div
+      className="flex flex-col h-screen overflow-x-hidden relative"
+      style={{ background: 'var(--color-bg)' }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragOver && (
+        <div
+          className="absolute inset-0 z-[80] flex items-center justify-center pointer-events-none"
+          style={{ background: 'rgba(79,70,229,0.12)', border: '3px dashed rgba(79,70,229,0.6)' }}
+        >
+          <div className="px-5 py-3 rounded-lg text-sm font-semibold" style={{ background: 'rgba(79,70,229,0.9)', color: '#fff' }}>
+            {t('app.dropToOpen')}
+          </div>
+        </div>
+      )}
       {/* 合并后的顶部栏: LOGO + 菜单按钮 + Tab + 主题/语言 */}
       {/* 注意: header 不能用 overflow-x-hidden, 因为 CSS 规范规定 overflow-x:hidden 会把
           overflow-y 强制为 auto, 从而裁剪 Files 下拉菜单 (top:100% 垂直超出 header)。
@@ -965,33 +1192,96 @@ ${t('sample.md.more')}
 
         <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
 
-        {/* Tab 切换 (可滚动容器，避免移动端越界) */}
+        {/* Tab 切换 (可滚动容器，避免移动端越界)。
+            默认只显示“关于”；打开文件后才出现对应类型的窗口标签，多窗口时每个标签形如“文档：文件名”。 */}
         <div className="header-tabs-scroll flex items-center gap-0.5" style={{ '--wails-draggable': 'no-drag' as any } as any}>
-          {([
-            { id: 'document', icon: '📄', label: t('tab.document') },
-            { id: 'spreadsheet', icon: '📊', label: t('tab.spreadsheet') },
-            { id: 'slide', icon: '🎞', label: t('tab.slide') },
-            { id: 'markdown', icon: '📝', label: t('tab.markdown') },
-            { id: 'html', icon: '🌐', label: t('tab.html') },
-            { id: 'pdf', icon: '📕', label: t('tab.pdf') },
-            { id: 'about', icon: 'ℹ️', label: t('tab.about') },
-          ]).map((tt) => (
-            <button
-              key={tt.id}
-              onClick={() => setTab(tt.id as Tab)}
-              data-testid={`tab-${tt.id}`}
-              className="px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex items-center gap-1 rounded-md flex-shrink-0"
-              style={{
-                // 统一 Tab 选中态：半透明白底 + 底部高亮条，与 ribbon tab 视觉语言一致
-                background: tab === tt.id ? 'rgba(255,255,255,0.22)' : 'transparent',
-                color: tab === tt.id ? '#ffffff' : 'rgba(255,255,255,0.75)',
-                boxShadow: tab === tt.id ? 'inset 0 -2px 0 0 rgba(255,255,255,0.9)' : 'none',
-              }}
-            >
-              <span>{tt.icon}</span>
-              <span className="hidden md:inline">{tt.label}</span>
-            </button>
-          ))}
+          {windows.map((w) => {
+            const active = w.id === activeWindowId
+            const isDragging = dragTabId === w.id
+            return (
+              <div
+                key={w.id}
+                draggable
+                onDragStart={(e) => {
+                  setDragTabId(w.id)
+                  e.dataTransfer.effectAllowed = 'move'
+                }}
+                onDragOver={(e) => {
+                  if (dragTabId != null && dragTabId !== w.id) e.preventDefault()
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (dragTabId == null || dragTabId === w.id) { setDragTabId(null); return }
+                  const from = dragTabId
+                  setWindows(prev => {
+                    const fromIdx = prev.findIndex(x => x.id === from)
+                    const toIdx = prev.findIndex(x => x.id === w.id)
+                    if (fromIdx < 0 || toIdx < 0) return prev
+                    const next = [...prev]
+                    const [moved] = next.splice(fromIdx, 1)
+                    const insertAt = next.findIndex(x => x.id === w.id)
+                    next.splice(insertAt, 0, moved)
+                    return next
+                  })
+                  setDragTabId(null)
+                }}
+                onDragEnd={() => setDragTabId(null)}
+                className="group flex items-center px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all rounded-md flex-shrink-0"
+                style={{
+                  background: active ? 'rgba(255,255,255,0.22)' : 'transparent',
+                  color: active ? '#ffffff' : 'rgba(255,255,255,0.75)',
+                  boxShadow: active ? 'inset 0 -2px 0 0 rgba(255,255,255,0.9)' : 'none',
+                  cursor: 'grab',
+                  opacity: isDragging ? 0.4 : 1,
+                  outline: isDragging ? '1px dashed rgba(255,255,255,0.6)' : 'none',
+                }}
+                onClick={() => {
+                  // 切换前先保存当前窗口快照，再恢复到目标窗口
+                  setWindows(prev => activeWindowId == null ? prev : prev.map(x => (x.id === activeWindowId ? { ...x, ...captureActive() } : x)))
+                  setActiveWindowId(w.id)
+                  applyWindow(w)
+                }}
+                data-testid={`tab-${w.type}`}
+              >
+                <span className="mr-1">{typePrefix(w.type)}：{truncateName(w.title)}</span>
+                <span
+                  className="opacity-50 hover:opacity-100 hover:text-red-300 transition-colors"
+                  title={t('app.closeTab') || '关闭'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setWindows(prev => {
+                      const next = prev.filter(x => x.id !== w.id)
+                      // 关闭的是当前激活窗口则切换到剩余第一个（若还有）
+                      if (w.id === activeWindowId) {
+                        const first = next[0]
+                        if (first) { setActiveWindowId(first.id); applyWindow(first) }
+                        else { setActiveWindowId(null); applyWindow({ id: 0, type: 'about', path: '', title: '' } as OpenWindow) }
+                      }
+                      return next
+                    })
+                  }}
+                >✕</span>
+              </div>
+            )
+          })}
+          {/* 关于：始终可点，用于回到关于页（关闭所有窗口后默认停留） */}
+          <button
+            onClick={() => {
+              setWindows(prev => activeWindowId == null ? prev : prev.map(x => (x.id === activeWindowId ? { ...x, ...captureActive() } : x)))
+              setActiveWindowId(null)
+              applyWindow({ id: 0, type: 'about', path: '', title: '' } as OpenWindow)
+            }}
+            data-testid="tab-about"
+            className="px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex items-center gap-1 rounded-md flex-shrink-0"
+            style={{
+              background: activeWindowId == null ? 'rgba(255,255,255,0.22)' : 'transparent',
+              color: activeWindowId == null ? '#ffffff' : 'rgba(255,255,255,0.75)',
+              boxShadow: activeWindowId == null ? 'inset 0 -2px 0 0 rgba(255,255,255,0.9)' : 'none',
+            }}
+          >
+            <span>ℹ️</span>
+            <span className="hidden md:inline">{t('tab.about')}</span>
+          </button>
         </div>
 
         {/* 主题切换 */}
@@ -1101,6 +1391,7 @@ ${t('sample.md.more')}
         <div className="flex-1 overflow-hidden min-w-0">
           {tab === 'document' && (
             <DocumentEditor
+              key={activeWindowId ?? 'about'}
               document={doc}
               spellErrors={spellErrors}
               onChange={(d) => setDoc(d)}
@@ -1111,10 +1402,11 @@ ${t('sample.md.more')}
               onToast={showToast}
             />
           )}
-          {tab === 'spreadsheet' && <SpreadsheetEditor key={sheetEpoch} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} onSheetsChange={setSheetSnapshot} />}
-          {tab === 'slide' && <SlideEditor key={slideEpoch} initialSlides={slideInitial || undefined} onSlidesChange={setSlideSnapshot} />}
+          {tab === 'spreadsheet' && <SpreadsheetEditor key={`${activeWindowId}-${sheetEpoch}`} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} onSheetsChange={setSheetSnapshot} />}
+          {tab === 'slide' && <SlideEditor key={`${activeWindowId}-${slideEpoch}`} initialSlides={slideInitial || undefined} onSlidesChange={setSlideSnapshot} />}
           {tab === 'markdown' && (
             <MarkdownHtmlEditor
+              key={activeWindowId ?? 'md'}
               initialContent={mdContent}
               mode="markdown"
               onChange={setMdContent}
@@ -1122,12 +1414,13 @@ ${t('sample.md.more')}
           )}
           {tab === 'html' && (
             <MarkdownHtmlEditor
+              key={activeWindowId ?? 'html'}
               initialContent={htmlContent}
               mode="html"
               onChange={setHtmlContent}
             />
           )}
-          {tab === 'pdf' && <PdfViewer pdfOpenSignal={pdfOpenSignal} />}
+          {tab === 'pdf' && <PdfViewer key={activeWindowId ?? 'pdf'} pdfOpenSignal={pdfOpenSignal} />}
           {tab === 'about' && <AboutPage />}
         </div>
 

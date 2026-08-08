@@ -26,6 +26,10 @@ export function LogError(arg1) {
   return window['go']['main']['App']['LogError'](arg1);
 }
 
+export function NewWindow() {
+  return window['go']['main']['App']['NewWindow']();
+}
+
 export function OpenFile(arg1) {
   return window['go']['main']['App']['OpenFile'](arg1);
 }

@@ -15,6 +15,8 @@ export function LearnWord(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function LogError(arg1:string):Promise<void>;
 
+export function NewWindow():Promise<void>;
+
 export function OpenFile(arg1:string):Promise<Record<string, any>>;
 
 export function OpenFileDialog():Promise<string>;

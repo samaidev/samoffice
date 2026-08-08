@@ -13,6 +13,8 @@ const dict: Record<string, { en: string; zh: string }> = {
   'app.subtitle': { en: 'A cross-platform office suite built with Go + Web', zh: '一款用 Go + Web 构建的跨平台办公套件' },
   'app.openFile': { en: 'Open File', zh: '打开文件' },
   'app.files': { en: 'Files', zh: '文件' },
+  'app.newWindow': { en: 'New Window', zh: '新建窗口' },
+  'app.recentFiles': { en: 'Recent Files', zh: '最近的文件' },
 
   // === 打印对话框 (对标 MS Office) ===
   'print.title': { en: 'Print', zh: '打印' },
@@ -85,12 +87,11 @@ const dict: Record<string, { en: string; zh: string }> = {
   'print.cancel': { en: 'Cancel', zh: '取消' },
   'print.print': { en: 'Print', zh: '打印' },
   'app.save': { en: 'Save', zh: '保存' },
-  'app.saveDocx': { en: 'Save as docx', zh: '存为 docx' },
-  'app.saveDoc': { en: 'Save as doc', zh: '存为 doc' },
-  'app.saveWps': { en: 'Save as wps', zh: '存为 wps' },
+  'app.saveAsExt': { en: 'Save as {ext}', zh: '存为 {ext}' },
   'app.exportPdf': { en: 'Export PDF', zh: '导出 PDF' },
   'app.insertImage': { en: 'Insert Image', zh: '插入图片' },
   'app.menu': { en: 'Menu', zh: '菜单' },
+  'app.closeTab': { en: 'Close Tab', zh: '关闭' },
   'app.local': { en: 'Local', zh: '本地' },
   'app.remote': { en: 'Remote', zh: '远程' },
   'app.theme': { en: 'Theme', zh: '主题' },
@@ -107,6 +108,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'app.opening': { en: 'Opening {name}...', zh: '正在打开 {name}...' },
   'app.opened': { en: 'Opened {name}', zh: '已打开 {name}' },
   'app.openFailed': { en: 'Open failed: {msg}', zh: '打开失败: {msg}' },
+  'app.dropToOpen': { en: 'Drop files to open', zh: '拖放文件以打开' },
   'app.exporting': { en: 'Exporting {format}...', zh: '导出 {format} 中...' },
   'app.exported': { en: 'Exported {format}', zh: '已导出 {format}' },
   'app.exportFailed': { en: 'Export failed: {msg}', zh: '导出失败: {msg}' },
@@ -284,6 +286,9 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.border': { en: 'Border', zh: '边框' },
   'doc.borderAll': { en: 'All Borders', zh: '全边框' },
   'doc.borderLeft': { en: 'Left Border', zh: '左边框' },
+  'doc.borderRight': { en: 'Right Border', zh: '右边框' },
+  'doc.borderTop': { en: 'Top Border', zh: '上边框' },
+  'doc.borderBottom': { en: 'Bottom Border', zh: '下边框' },
   'doc.shading': { en: 'Shading', zh: '底纹' },
   'doc.layout': { en: 'Layout', zh: '版式' },
   'doc.dropCap': { en: 'Drop Cap', zh: '首字下沉' },
@@ -322,6 +327,18 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.printPreview': { en: 'Print Preview', zh: '打印预览' },
   'doc.print': { en: 'Print', zh: '打印' },
   'doc.close': { en: 'Close', zh: '关闭' },
+
+  // === 公式 / 符号插入 ===
+  'doc.symbols': { en: 'Symbols', zh: '符号' },
+  'math.commonFormulas': { en: 'Common Formulas', zh: '常用公式' },
+  'math.symbols': { en: 'Symbols', zh: '符号' },
+  'math.symbolCatGreek': { en: 'Greek', zh: '希腊' },
+  'math.symbolCatOperator': { en: 'Operator', zh: '运算' },
+  'math.symbolCatRelation': { en: 'Relation', zh: '关系' },
+  'math.symbolCatArrow': { en: 'Arrow', zh: '箭头' },
+  'math.symbolCatCircle': { en: 'Enclosed', zh: '圈号' },
+  'math.symbolCatRoman': { en: 'Roman', zh: '罗马' },
+  'math.latexHint': { en: 'LaTeX code (Ctrl/⌘+Enter to insert, Esc to close)', zh: 'LaTeX 代码（Ctrl/⌘+Enter 插入，Esc 关闭）' },
 
   // === Word 页面设置 (MS Office 对标) ===
   'doc.pageSetup': { en: 'Page Setup', zh: '页面设置' },
@@ -369,6 +386,9 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.protectSetPwd': { en: 'Set protection password (leave blank = no password):', zh: '设置保护密码（留空表示不加密）：' },
   'doc.protectEnterPwd': { en: 'Enter password to unlock:', zh: '输入密码以解除保护：' },
   'doc.protectWrongPwd': { en: 'Wrong password, protection remains', zh: '密码错误，保护仍生效' },
+  'doc.protectUnlockTitle': { en: 'Document Protected', zh: '文档受保护' },
+  'doc.protectUnlockHint': { en: 'This document is password-protected. Enter the password to remove protection and edit.', zh: '该文档已设置密码保护，请输入密码以解除保护进行编辑。' },
+  'doc.protectUnlock': { en: 'Remove Protection', zh: '解除保护' },
 
   // === Word 审阅 (MS Office 对标) ===
   'doc.translate': { en: 'Translate', zh: '翻译' },
@@ -385,6 +405,10 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.paragraphs': { en: 'Paragraphs', zh: '段数' },
   'doc.compare': { en: 'Compare', zh: '比较' },
   'doc.comparePlaceholder': { en: 'Document comparison feature', zh: '文档比较功能' },
+  'doc.compareWith': { en: 'Compare with', zh: '对比文件' },
+  'doc.diffAdd': { en: 'Inserted', zh: '新增' },
+  'doc.diffDel': { en: 'Deleted', zh: '删除' },
+  'doc.compareUnsupported': { en: 'unsupported or empty file', zh: '不支持或空文件' },
   'doc.protect': { en: 'Protect', zh: '保护' },
 
   // === Word 视图 (MS Office 对标) ===
