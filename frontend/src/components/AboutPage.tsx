@@ -136,46 +136,6 @@ export function AboutPage() {
           </div>
         </section>
 
-        {/* 技术栈 */}
-        <section
-          className="rounded-2xl p-6 mb-6"
-          style={{
-            background: 'var(--color-surface)',
-            border: '1px solid var(--color-border)',
-            boxShadow: 'var(--shadow-sm)',
-          }}
-        >
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
-            <span>🛠</span> {t('about.techStack')}
-          </h2>
-          <div className="space-y-3">
-            <div>
-              <div className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>{t('about.backend')}</div>
-              <div className="flex flex-wrap gap-1.5">
-                {['Go 1.24', 'Gin', 'excelize', 'gopdf', 'SQLite', 'SymSpell', 'Hunspell', 'jieba'].map(tech => (
-                  <span key={tech} className="badge">{tech}</span>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>{t('about.frontend')}</div>
-              <div className="flex flex-wrap gap-1.5">
-                {['React 18', 'TypeScript', 'Vite', 'Tailwind CSS', 'ProseMirror', 'marked.js', 'highlight.js'].map(tech => (
-                  <span key={tech} className="badge">{tech}</span>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>{t('about.desktop')}</div>
-              <div className="flex flex-wrap gap-1.5">
-                {['Wails v2', 'WebView2/WKWebView'].map(tech => (
-                  <span key={tech} className="badge">{tech}</span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* 公益承诺 */}
         <section
           className="rounded-2xl p-6 text-center"
@@ -192,7 +152,7 @@ export function AboutPage() {
             {t('about.commitmentDesc')}
           </p>
           <div className="flex flex-wrap justify-center gap-2 text-xs">
-            <span className="badge badge-success">MIT License</span>
+            <span className="badge badge-success">Free for everyone</span>
             <span className="badge badge-warning">Self-hosted</span>
             <span className="badge">Cross-platform</span>
           </div>
