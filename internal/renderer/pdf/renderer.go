@@ -4,9 +4,14 @@ package pdf
 
 import (
 	"bytes"
+	"encoding/base64"
 	"embed"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/signintech/gopdf"
@@ -417,18 +422,29 @@ func drawRuns(fb *fontBook, pdf *gopdf.GoPdf, runs []runStyle, x0, y, rightBound
 		rs := []rune(run.text)
 		buf := ""
 		bufW := 0.0
-		// 伪粗体：在基线右移一个像素再描一次，使字形变粗
-		drawLine := func(x float64) {
-			pdf.SetXY(x, curY)
+		// 绘制一个文本片段：支持伪粗体（向右偏移重描）、下划线、删除线
+		paint := func(startX float64) {
+			if run.bold {
+				pdf.SetXY(startX+0.6, curY)
+				pdf.Cell(nil, buf)
+			}
+			pdf.SetXY(startX, curY)
 			pdf.Cell(nil, buf)
+			if run.under || run.strike {
+				pdf.SetStrokeColor(0, 0, 0)
+				if run.under {
+					pdf.Line(startX, curY+run.size*0.95, startX+bufW, curY+run.size*0.95)
+				}
+				if run.strike {
+					pdf.Line(startX, curY+run.size*0.5, startX+bufW, curY+run.size*0.5)
+				}
+				pdf.SetStrokeColor(0, 0, 0)
+			}
 		}
 		for _, ch := range rs {
 			if ch == '\n' {
 				if buf != "" {
-					if run.bold {
-						drawLine(curX + 0.6)
-					}
-					drawLine(curX)
+					paint(curX)
 				}
 				curX = x0
 				curY += run.size * 1.4
@@ -438,10 +454,7 @@ func drawRuns(fb *fontBook, pdf *gopdf.GoPdf, runs []runStyle, x0, y, rightBound
 			}
 			w := charWidth(ch, run.size)
 			if curX+bufW+w > rightBoundary && buf != "" {
-				if run.bold {
-					drawLine(curX + 0.6)
-				}
-				drawLine(curX)
+				paint(curX)
 				curX = x0
 				curY += run.size * 1.4
 				buf = ""
@@ -451,10 +464,7 @@ func drawRuns(fb *fontBook, pdf *gopdf.GoPdf, runs []runStyle, x0, y, rightBound
 			bufW += w
 		}
 		if buf != "" {
-			if run.bold {
-				drawLine(curX + 0.6)
-			}
-			drawLine(curX)
+			paint(curX)
 			curX += bufW
 		}
 	}
@@ -563,22 +573,87 @@ func renderCodeBlock(pdf *gopdf.GoPdf, c *core.CodeBlock, x, y float64) (float64
 }
 
 func renderImage(pdf *gopdf.GoPdf, im *core.Image, x, y float64) (float64, float64) {
-        pdf.SetY(y)
-        pdf.SetX(x)
-        pdf.SetFillColor(220, 220, 220)
-        w := im.Width
-        if w == 0 {
-                w = 200
-        }
-        h := im.Height
-        if h == 0 {
-                h = 100
-        }
-        _ = pdf.Rectangle(x, y, x+w, y+h, "F", 0, 0)
-        pdf.SetY(y + h/2)
-        pdf.SetX(x + 10)
-        pdf.Cell(nil, fmt.Sprintf("[Image: %s]", im.Src))
-        return x, y + h + 10
+	pdf.SetY(y)
+	pdf.SetX(x)
+	w := im.Width
+	if w == 0 {
+		w = 200
+	}
+	h := im.Height
+	if h == 0 {
+		h = 100
+	}
+
+	// 尝试嵌入真实图片；失败（无数据/解码错误）才回退灰框占位
+	if data, err := loadImageBytes(im.Src); err == nil && len(data) > 0 {
+		img, _, derr := image.Decode(bytes.NewReader(data))
+		if derr == nil {
+			rect := &gopdf.Rect{W: w, H: h}
+			embedded := false
+			// 方式一：临时文件 + Image(path)，gopdf 对此支持最稳
+			if tmp, terr := os.CreateTemp("", "pdfimg-*.png"); terr == nil {
+				if _, werr := tmp.Write(data); werr == nil {
+					tmp.Close()
+					if ierr := pdf.Image(tmp.Name(), x, y, rect); ierr == nil {
+						embedded = true
+					}
+				} else {
+					tmp.Close()
+				}
+				_ = os.Remove(tmp.Name())
+			}
+			// 方式二：直接用 image.Image
+			if !embedded {
+				if ierr := pdf.ImageFrom(img, x, y, rect); ierr == nil {
+					embedded = true
+				}
+			}
+			if embedded {
+				return x, y + h + 10
+			}
+		}
+	}
+
+	// 回退：灰框占位
+	pdf.SetFillColor(220, 220, 220)
+	_ = pdf.Rectangle(x, y, x+w, y+h, "F", 0, 0)
+	pdf.SetY(y + h/2)
+	pdf.SetX(x + 10)
+	pdf.Cell(nil, fmt.Sprintf("[Image: %s]", im.Src))
+	return x, y + h + 10
+}
+
+// loadImageBytes 从 UDM Image.Src 解析出图片字节。
+// 支持 data:image/...;base64,<data> 与本地文件路径两种形式。
+func loadImageBytes(src string) ([]byte, error) {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return nil, fmt.Errorf("empty image src")
+	}
+	if strings.HasPrefix(src, "data:") {
+		comma := strings.Index(src, ",")
+		if comma < 0 {
+			return nil, fmt.Errorf("bad data url")
+		}
+		mime := src[5:comma]
+		if !strings.HasPrefix(mime, "image/") {
+			return nil, fmt.Errorf("not an image mime: %s", mime)
+		}
+		enc := strings.TrimSpace(src[comma+1:])
+		if strings.ContainsAny(enc, " \t\n\r") {
+			enc = strings.Join(strings.Fields(enc), "")
+		}
+		return base64.StdEncoding.DecodeString(enc)
+	}
+	if strings.HasPrefix(src, "file://") {
+		src = src[len("file://"):]
+	}
+	if !filepath.IsAbs(src) {
+		if abs, err := filepath.Abs(src); err == nil {
+			src = abs
+		}
+	}
+	return os.ReadFile(src)
 }
 
 func renderTable(fb *fontBook, pdf *gopdf.GoPdf, t *core.Table, x, y float64) (float64, float64) {
