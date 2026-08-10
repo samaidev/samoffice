@@ -2779,6 +2779,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           width: pageWidthPx,
           minHeight: pageRefMinH,
           overflow: 'visible',
+          zoom: zoom,
         }}
       >
         {/* 纸页背景层：每张纸依据分页引擎算出的实际内容位置绘制，与内容严格对齐 */}
