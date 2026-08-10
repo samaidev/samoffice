@@ -2777,11 +2777,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           borderRadius: '8px',
           background: 'transparent',
           width: pageWidthPx,
-          minHeight: pageRefMinH,
+          minHeight: pageRefMinH * (zoom / 100),
           overflow: 'visible',
-          zoom: zoom,
         }}
       >
+        {/* 缩放包裹层：仅对纸页与编辑器内容做视觉缩放，不改变布局尺寸，
+            避免 CSS zoom 属性导致 ProseMirror 内容区域异常或 measure 循环。 */}
+        <div
+          style={{
+            width: pageWidthPx,
+            transform: `scale(${zoom / 100})`,
+            transformOrigin: 'top center',
+          }}
+        >
         {/* 纸页背景层：每张纸依据分页引擎算出的实际内容位置绘制，与内容严格对齐 */}
         <div ref={sheetsLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
           {pageRects.map((p, i) => (
@@ -2988,6 +2996,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             </div>
           )}
           {/* 页脚（每页真实页码由纸页层按页码渲染，见上方 sheetsLayerRef 层） */}
+        </div>
         </div>
         </div>
 
