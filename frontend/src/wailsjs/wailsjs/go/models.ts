@@ -36,6 +36,20 @@ export namespace core {
 	        this.path = source["path"];
 	    }
 	}
+	export class DocumentProtect {
+	    enabled: boolean;
+	    hash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentProtect(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.hash = source["hash"];
+	    }
+	}
 	export class PageNumberConfig {
 	    enabled: boolean;
 	    format: string;
@@ -112,6 +126,7 @@ export namespace core {
 	    comments?: Comment[];
 	    styles?: StyleDef[];
 	    pageNumber?: PageNumberConfig;
+	    protect?: DocumentProtect;
 	    warnings?: Warning[];
 	    raw?: Record<string, any>;
 	
@@ -126,6 +141,7 @@ export namespace core {
 	        this.comments = this.convertValues(source["comments"], Comment);
 	        this.styles = this.convertValues(source["styles"], StyleDef);
 	        this.pageNumber = this.convertValues(source["pageNumber"], PageNumberConfig);
+	        this.protect = this.convertValues(source["protect"], DocumentProtect);
 	        this.warnings = this.convertValues(source["warnings"], Warning);
 	        this.raw = source["raw"];
 	    }
@@ -148,6 +164,7 @@ export namespace core {
 		    return a;
 		}
 	}
+	
 	
 	
 	

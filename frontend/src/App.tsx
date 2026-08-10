@@ -11,6 +11,8 @@ import { AboutPage } from './components/AboutPage'
 import { useI18n } from './i18n'
 import { usePopupAutoFlip } from './hooks/usePopupAutoFlip'
 import { Dropdown } from './components/Dropdown'
+import { ConfirmDialog } from './components/ConfirmDialog'
+import type { ConfirmChoice } from './components/ConfirmDialog'
 import { decideOpen } from './lib/openroute'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
@@ -33,6 +35,9 @@ interface OpenWindow {
   slideEpoch: number
   zoom: number
   spellErrors: SpellError[]
+  // 上次保存（或刚打开）时的内容指纹。与当前内容指纹比对得出"脏"状态，
+  // 改回原样即不再算脏，避免误报。pdf 为只读视图，恒不脏。
+  savedFingerprint: string
 }
 
 type Theme = 'light' | 'dark' | 'auto'
@@ -197,6 +202,84 @@ ${t('sample.md.more')}
   const typePrefix = (type: Tab) =>
     ({ document: t('tab.document'), spreadsheet: t('tab.spreadsheet'), slide: t('tab.slide'), markdown: t('tab.markdown'), html: t('tab.html'), pdf: t('tab.pdf') } as Record<string, string>)[type] || '文档'
 
+  // 文档指纹：从文件解析出的 UDM 与 proseMirrorToUDM 回流的 UDM 在结构上并不全等
+  // （后者是 PM 归一化结果，字段更规整、可选属性被补齐或省略）。若直接 JSON 比对，
+  // 打开→编辑→撤销回原样后仍会被判为脏。故统一提炼为"语义内容"再比对：
+  // 逐块取 [块类型, 纯文本, 关键格式]，忽略纯表现层与 undefined/空值差异。
+  const docFingerprint = (d: any): string => {
+    if (!d) return 'null'
+    const inlineText = (inline: any): string => {
+      if (!Array.isArray(inline)) return ''
+      return inline.map((r: any) => {
+        if (r == null) return ''
+        if (typeof r === 'string') return r
+        // 文本内容在两种来源中可能落在 content / text 字段
+        if (typeof r.content === 'string') return r.content
+        if (typeof r.text === 'string') return r.text
+        if (Array.isArray(r.inline)) return inlineText(r.inline)
+        return ''
+      }).join('')
+    }
+    const blockSig = (b: any): any => {
+      if (!b) return null
+      if (Array.isArray(b.rows)) {
+        // 表格：逐单元格取文本
+        return ['table', b.rows.map((row: any) =>
+          (row?.cells ?? row ?? []).map((c: any) => inlineText(c?.inline ?? c?.content ?? [])))]
+      }
+      if (b.type === 'image' || b.src) return ['image', b.src ?? '']
+      if (b.formula || b.type === 'math') return ['math', b.formula ?? b.latex ?? '']
+      return [b.type ?? 'p', b.level ?? 0, b.style ?? '', inlineText(b.inline)]
+    }
+    const blocks = Array.isArray(d.blocks) ? d.blocks.map(blockSig) : []
+    // 文档级配置也要纳入：改了密码保护 / 页码设置同样算未保存改动
+    return JSON.stringify({
+      title: d.meta?.title ?? '',
+      blocks,
+      protect: d.protect ?? null,
+      pageNumber: d.pageNumber ?? null,
+      styles: d.styles ?? null,
+    })
+  }
+
+  // 计算一个窗口的内容指纹：只纳入"会被写盘的内容"，排除 zoom / 拼写结果 / epoch
+  // 等纯视图状态，避免缩放、拼写检查之类的操作被误判为文档改动。
+  const fingerprintOf = (w: Partial<OpenWindow>): string => {
+    switch (w.type) {
+      case 'document':
+        return docFingerprint(w.doc)
+      case 'markdown':
+        return w.md ?? ''
+      case 'html':
+        return w.html ?? ''
+      case 'spreadsheet': {
+        // 编辑器挂载即回传 snapshot，其结构（含 rows/cols）比初始 sheets 更宽，
+        // 直接比对会导致"一打开就脏"。故统一归一化到 {name, cells}，且剔除空单元格。
+        const src = w.sheetSnapshot ?? w.sheets ?? null
+        if (!src) return 'null'
+        return JSON.stringify(src.map((s: any) => {
+          const cells: Record<string, any> = {}
+          for (const [k, v] of Object.entries(s.cells ?? {})) {
+            // 空值单元格在两种来源中表现不一致（缺失 vs 空对象），统一忽略
+            if (v == null) continue
+            if (typeof v === 'object' && Object.keys(v as object).length === 0) continue
+            cells[k] = v
+          }
+          return { name: s.name, cells }
+        }))
+      }
+      case 'slide': {
+        const src = w.slideSnapshot ?? w.slides ?? null
+        if (!src) return 'null'
+        return JSON.stringify(src.map((s: any) => ({
+          title: s.title ?? '', content: s.content ?? '', notes: s.notes ?? '',
+        })))
+      }
+      default:
+        return '' // pdf / about：只读，恒不脏
+    }
+  }
+
   // 把当前顶层编辑状态捕获为窗口快照（用于切换/打开时保存当前窗口的改动）
   const captureActive = (): Partial<OpenWindow> => ({
     doc,
@@ -226,6 +309,14 @@ ${t('sample.md.more')}
     setSlideEpoch(w.slideEpoch)
     setDocZoom(w.zoom)
     setSpellErrors(w.spellErrors ?? [])
+  }
+
+  // 某个窗口当前是否有未保存改动。激活窗口需先用顶层实时状态覆盖，
+  // 因为编辑中的最新内容还没回写进 windows 数组。
+  const isWindowDirty = (w: OpenWindow): boolean => {
+    if (w.type === 'pdf' || w.type === 'about') return false
+    const live = w.id === activeWindowId ? { ...w, ...captureActive(), type: w.type } : w
+    return fingerprintOf(live) !== w.savedFingerprint
   }
 
   // 统一处理打开结果：表格类文件切换到表格视图，其余切换到文档视图
@@ -351,6 +442,8 @@ ${t('sample.md.more')}
       ...win,
       sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
       zoom: win.zoom ?? 1, spellErrors: win.spellErrors ?? [],
+      // 刚打开即为"已保存"基线
+      savedFingerprint: fingerprintOf({ ...win, type: targetTab }),
     } as OpenWindow
     setWindows(prev => {
       const idx = prev.findIndex(w => w.path === path && w.type === targetTab)
@@ -376,6 +469,7 @@ ${t('sample.md.more')}
       id: targetId, ...win,
       sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
       zoom: win.zoom ?? docZoom, spellErrors: win.spellErrors ?? [],
+      savedFingerprint: fingerprintOf(win),
     } as OpenWindow
     setWindows(prev => {
       const idx = prev.findIndex(w => w.path === win.path && w.type === win.type)
@@ -789,7 +883,7 @@ ${t('sample.md.more')}
   }, [backend])
 
   // 远程模式：沿用原下载逻辑（浏览器下载，带文件名）
-  const handleDownload = async (format: 'docx' | 'doc' | 'wps' | 'pdf') => {
+  const handleDownload = async (format: 'docx' | 'pdf') => {
     if (!backend) return
     setMenuOpen(false)
     setLoading(true)
@@ -797,19 +891,19 @@ ${t('sample.md.more')}
     try {
       const endpointMap: Record<string, string> = {
         docx: '/api/doc/save',
-        doc: '/api/doc/save-doc',
-        wps: '/api/doc/save-wps',
         pdf: '/api/doc/export-pdf',
       }
       const mimeMap: Record<string, string> = {
         docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        doc: 'application/msword',
-        wps: 'application/vnd.ms-works',
         pdf: 'application/pdf',
       }
       const endpoint = endpointMap[format] || '/api/doc/save'
       const mime = mimeMap[format] || 'application/octet-stream'
+      // 注意：这里是在原 doc 基础上"清洗 blocks"，而不是重建一个新对象。
+      // 之前写成 { meta, blocks } 字面量，会把 protect / styles 等文档级字段整个丢掉，
+      // 导致设了密码保护后导出的文件没有保护。
       const safeDoc: Document = {
+        ...(doc as any),
         meta: doc.meta || { title: t('app.untitled') },
         blocks: (doc.blocks || []).map((b: any) => {
           // 结构型块（公式/图片/脚注/表格等）保持原样，不再误当成纯文本处理
@@ -860,19 +954,29 @@ ${t('sample.md.more')}
   // forceDialog=true 时总是弹系统“保存/另存为”对话框（可输入文件名），用于菜单的“另存为/导出”。
   // 本地模式写盘；远程模式回退为浏览器下载。
   const handleSave = async (
-    format: 'docx' | 'doc' | 'wps' | 'pdf' | '',
+    format: 'docx' | 'pdf' | '',
     opts: { forceDialog?: boolean } = {}
   ) => {
     if (!backend) return
     setMenuOpen(false)
 
-    // 保存成功后同步当前窗口标签的路径与文件名
+    // 保存成功后同步当前窗口标签的路径与文件名，并把当前内容记为新的"已保存"基线
+    // （导出 PDF 不算保存原文档，故那条分支不调用本函数）
     const syncActivePath = (target: string) =>
-      setWindows(prev => prev.map(w => (w.id === activeWindowId ? { ...w, path: target, title: target.split(/[\\/]/).pop() || target } : w)))
+      setWindows(prev => prev.map(w => {
+        if (w.id !== activeWindowId) return w
+        const merged = { ...w, ...captureActive(), type: w.type }
+        return {
+          ...merged,
+          path: target,
+          title: target.split(/[\\/]/).pop() || target,
+          savedFingerprint: fingerprintOf(merged),
+        } as OpenWindow
+      }))
 
     const isLocal = backend.mode === 'local'
     if (!isLocal) {
-      return handleDownload((format || 'docx') as 'docx' | 'doc' | 'wps' | 'pdf')
+      return handleDownload((format || 'docx') as 'docx' | 'pdf')
     }
 
     // 本地模式：写盘
@@ -932,17 +1036,16 @@ ${t('sample.md.more')}
     }
 
     const fmt = (format ||
-      (filePath.toLowerCase().endsWith('.docx') ? 'docx' :
-       filePath.toLowerCase().endsWith('.doc') ? 'doc' :
-       filePath.toLowerCase().endsWith('.wps') ? 'wps' :
-       filePath.toLowerCase().endsWith('.pdf') ? 'pdf' : 'docx')) as 'docx' | 'doc' | 'wps' | 'pdf'
+      (filePath.toLowerCase().endsWith('.pdf') ? 'pdf' : 'docx')) as 'docx' | 'pdf'
 
     // 仅当用户通过本地“打开”得到真实磁盘路径时（含盘符），才允许“快速保存”覆盖
     const hasRealPath = /^[A-Za-z]:[\\/]/.test(filePath)
     let target = filePath
     if (opts.forceDialog || !hasRealPath) {
       const baseName = filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || ''
-      const defaultName = doc.meta?.title || baseName || t('app.untitled')
+      // 另存为时优先使用当前文件名的基名，方便用户在原文件名后追加后缀保存；
+      // 仅在无文件路径（新建文档）时回退到文档标题或“未命名”。
+      const defaultName = baseName || doc.meta?.title || t('app.untitled')
       target = await backend.saveFileDialog(defaultName, fmt)
       if (!target) return // 用户取消
     }
@@ -966,7 +1069,8 @@ ${t('sample.md.more')}
     showToast(t('app.saving'))
     try {
       await backend.writeDocument(target, fmt, doc)
-      syncActivePath(target)
+      // 导出 PDF 不改变文档本体的"已保存"状态，也不应改写标签路径
+      if (fmt !== 'pdf') syncActivePath(target)
       const name = target.split(/[\\/]/).pop() || target
       showToast(t('app.saved', { name }))
     } catch (e: any) {
@@ -975,6 +1079,118 @@ ${t('sample.md.more')}
       setLoading(false)
     }
   }
+
+  // === 未保存更改的关闭确认 ===
+  // pending 描述"用户想做什么"，等确认框给出选择后再继续执行。
+  // queue 为待处理的脏窗口 id 列表（退出应用时可能有多个，逐个询问）。
+  const [pendingClose, setPendingClose] = useState<
+    { kind: 'tab'; winId: number } | { kind: 'app'; queue: number[] } | null
+  >(null)
+
+  // 真正移除一个标签（不做任何询问）
+  const removeWindow = (winId: number) => {
+    setWindows(prev => {
+      const next = prev.filter(x => x.id !== winId)
+      if (winId === activeWindowId) {
+        const first = next[0]
+        if (first) { setActiveWindowId(first.id); applyWindow(first) }
+        else { setActiveWindowId(null); applyWindow({ id: 0, type: 'about', path: '', title: '' } as OpenWindow) }
+      }
+      return next
+    })
+  }
+
+  // 退出应用（绕过确认）
+  const quitApp = () => {
+    try { (window as any).go.main.App.WindowClose() } catch {}
+  }
+
+  // 关闭单个标签：脏则先问
+  const requestCloseTab = (winId: number) => {
+    const w = windows.find(x => x.id === winId)
+    if (!w || !isWindowDirty(w)) { removeWindow(winId); return }
+    setPendingClose({ kind: 'tab', winId })
+  }
+
+  // 关闭整个应用：收集所有脏窗口，逐个询问；都干净则直接退出
+  const requestCloseApp = () => {
+    const dirtyIds = windows.filter(isWindowDirty).map(w => w.id)
+    if (dirtyIds.length === 0) { quitApp(); return }
+    setPendingClose({ kind: 'app', queue: dirtyIds })
+  }
+
+  // 保存指定窗口：必要时先切换到它（handleSave 作用于当前激活窗口）
+  const saveWindowById = async (winId: number) => {
+    if (winId !== activeWindowId) {
+      const target = windows.find(w => w.id === winId)
+      if (!target) return
+      setWindows(prev => activeWindowId == null ? prev : prev.map(x => (x.id === activeWindowId ? { ...x, ...captureActive() } : x)))
+      setActiveWindowId(winId)
+      applyWindow(target)
+      // 等一帧，让 applyWindow 的状态生效后再保存
+      await new Promise(r => setTimeout(r, 0))
+    }
+    await handleSave('', { forceDialog: false })
+  }
+
+  // 确认框的三种选择
+  const onConfirmChoice = async (choice: ConfirmChoice) => {
+    const pending = pendingClose
+    if (!pending) return
+    if (choice === 'cancel') { setPendingClose(null); return }
+
+    if (pending.kind === 'tab') {
+      if (choice === 'save') {
+        await saveWindowById(pending.winId)
+        // 保存可能被用户在系统对话框中取消，此时不关闭，避免丢数据
+        const still = windowsRef.current.find(w => w.id === pending.winId)
+        if (still && isWindowDirtyRef.current(still)) { setPendingClose(null); return }
+      }
+      setPendingClose(null)
+      removeWindow(pending.winId)
+      return
+    }
+
+    // kind === 'app'：逐个处理队列
+    const [head, ...rest] = pending.queue
+    if (choice === 'save') {
+      await saveWindowById(head)
+      const still = windowsRef.current.find(w => w.id === head)
+      if (still && isWindowDirtyRef.current(still)) { setPendingClose(null); return } // 用户取消了保存 → 中止退出
+    }
+    if (rest.length > 0) {
+      setPendingClose({ kind: 'app', queue: rest })
+    } else {
+      setPendingClose(null)
+      quitApp()
+    }
+  }
+
+  // 供异步回调读取最新值，避免闭包捕获旧 state
+  const windowsRef = useRef(windows)
+  useEffect(() => { windowsRef.current = windows }, [windows])
+  const isWindowDirtyRef = useRef(isWindowDirty)
+  useEffect(() => { isWindowDirtyRef.current = isWindowDirty })
+
+  // 监听 Go 侧 OnBeforeClose 发来的关闭请求（标题栏 ✕ / Alt+F4 / 任务栏关闭）
+  useEffect(() => {
+    const rt = (window as any).runtime
+    if (!rt?.EventsOn) return
+    rt.EventsOn('app-close-requested', () => { requestCloseApp() })
+    return () => { try { rt.EventsOff?.('app-close-requested') } catch {} }
+  }, [windows, activeWindowId, doc, mdContent, htmlContent, sheetSnapshot, slideSnapshot])
+
+  // 浏览器/远程模式下的兜底：有脏窗口时触发原生离开确认
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (windowsRef.current.some(w => isWindowDirtyRef.current(w))) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [])
 
   // 全局快捷键：Ctrl/Cmd+S 保存，Ctrl/Cmd+O 打开（放在函数声明之后，避免 TDZ）
   useEffect(() => {
@@ -1067,7 +1283,13 @@ ${t('sample.md.more')}
   }
   const saveAsExt = saveAsExtByTab[tab]
   if (saveAsExt) {
-    fileItems.push({ icon: '📄', label: t('app.saveAsExt', { ext: saveAsExt }), onClick: () => handleSave(saveAsExt as 'docx' | 'doc' | 'wps' | 'pdf' | '', { forceDialog: true }) })
+    // 非 document 选项卡（xlsx/pptx/md/html）在 handleSave 内部按 tab 分支处理，
+    // 不会走到 fmt 推断，这里统一传 'docx' 作为占位；document 选项卡即真实的 docx。
+    fileItems.push({ icon: '📄', label: t('app.saveAsExt', { ext: saveAsExt }), onClick: () => handleSave('docx', { forceDialog: true }) })
+  }
+  // 导出 PDF 归入“保存/导出”一组，排在最近文件列表之前
+  if (saveable) {
+    fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf', { forceDialog: true }), shortcut: 'Ctrl+P' })
   }
   // Recent files
   const recentFiles: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
@@ -1076,9 +1298,6 @@ ${t('sample.md.more')}
     recentFiles.slice(0, 5).forEach((f, i) => {
       fileItems.push({ icon: '  ' + (i+1) + '.', label: f.name, onClick: () => { void openViaApp(f.path) } })
     })
-  }
-  if (tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html') {
-    fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf', { forceDialog: true }), shortcut: 'Ctrl+P' })
   }
 
   return (
@@ -1244,21 +1463,19 @@ ${t('sample.md.more')}
                 data-testid={`tab-${w.type}`}
               >
                 <span className="mr-1">{typePrefix(w.type)}：{truncateName(w.title)}</span>
+                {isWindowDirty(w) && (
+                  <span
+                    className="mr-1 text-[15px] leading-none"
+                    title={t('confirm.unsavedTitle')}
+                    data-testid={`tab-dirty-${w.id}`}
+                  >•</span>
+                )}
                 <span
                   className="opacity-50 hover:opacity-100 hover:text-red-300 transition-colors"
                   title={t('app.closeTab') || '关闭'}
                   onClick={(e) => {
                     e.stopPropagation()
-                    setWindows(prev => {
-                      const next = prev.filter(x => x.id !== w.id)
-                      // 关闭的是当前激活窗口则切换到剩余第一个（若还有）
-                      if (w.id === activeWindowId) {
-                        const first = next[0]
-                        if (first) { setActiveWindowId(first.id); applyWindow(first) }
-                        else { setActiveWindowId(null); applyWindow({ id: 0, type: 'about', path: '', title: '' } as OpenWindow) }
-                      }
-                      return next
-                    })
+                    requestCloseTab(w.id)
                   }}
                 >✕</span>
               </div>
@@ -1347,7 +1564,7 @@ ${t('sample.md.more')}
             <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" fill="none" stroke="white" strokeWidth="1.5" /></svg>
           </button>
           <button
-            onClick={() => { try { (window as any).go.main.App.WindowClose() } catch {} }}
+            onClick={requestCloseApp}
             className="w-8 h-8 rounded-md hover:bg-red-500 transition-all flex items-center justify-center"
             title={t('app.close') || 'Close'}
           >
@@ -1584,6 +1801,27 @@ ${t('sample.md.more')}
           {toast}
         </div>
       )}
+
+      {/* 未保存更改确认 */}
+      <ConfirmDialog
+        open={pendingClose !== null}
+        title={t('confirm.unsavedTitle')}
+        message={(() => {
+          if (!pendingClose) return ''
+          const id = pendingClose.kind === 'tab' ? pendingClose.winId : pendingClose.queue[0]
+          const w = windows.find(x => x.id === id)
+          const name = w?.title || w?.path || ''
+          const remaining = pendingClose.kind === 'app' ? pendingClose.queue.length : 1
+          return remaining > 1
+            ? `${t('confirm.unsavedMany', { count: String(remaining) })}\n${t('confirm.unsavedOne', { name })}`
+            : t('confirm.unsavedOne', { name })
+        })()}
+        hint={t('confirm.unsavedHint')}
+        saveLabel={t('confirm.save')}
+        discardLabel={t('confirm.dontSave')}
+        cancelLabel={t('confirm.cancel')}
+        onChoice={onConfirmChoice}
+      />
     </div>
   )
 }

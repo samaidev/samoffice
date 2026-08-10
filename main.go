@@ -48,6 +48,8 @@ type App struct {
 	httpPort  int
 	logger    *zap.Logger
 	startupArgs []string
+	// confirmedClose 为 true 表示前端已完成未保存更改的询问，OnBeforeClose 应放行。
+	confirmedClose bool
 }
 
 // pendingOpenPath 返回"待打开文件"落盘路径（第二个实例把路径写到这里，首个实例轮询读取）
@@ -169,8 +171,10 @@ func (a *App) WindowMaximize() {
 }
 
 // WindowClose closes the app
+// WindowClose 由前端在完成未保存更改确认后调用，直接退出（不再回弹询问）。
 func (a *App) WindowClose() {
         if a.ctx == nil { return }
+        a.confirmedClose = true
         runtime.Quit(a.ctx)
 }
 
@@ -489,6 +493,15 @@ func main() {
                         // 清空可能残留的"待打开文件"，并启动轮询第二个实例写入的路径
                         _ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
                         go app.pollPendingOpens()
+                },
+                // 拦截标题栏 ✕ / Alt+F4 / 任务栏关闭：先交给前端询问未保存更改。
+                // 返回 true = 阻止关闭；前端确认后会调 WindowClose() 置位 confirmedClose 再退出。
+                OnBeforeClose: func(ctx context.Context) bool {
+                        if app.confirmedClose {
+                                return false
+                        }
+                        runtime.EventsEmit(ctx, "app-close-requested")
+                        return true
                 },
                 Bind: []interface{}{app},
         })

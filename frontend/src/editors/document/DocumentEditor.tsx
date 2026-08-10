@@ -986,7 +986,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       },
       dispatchTransaction(tr) {
         const ns = view.state.apply(tr); view.updateState(ns)
-        if (onChangeRef.current) {
+        // 只有真正改动了文档内容才向外 emit。
+        // 拼写检查装饰、选区变化等事务 docChanged=false，若也走 emit，
+        // 会用 proseMirrorToUDM 的裸输出（只含 meta/blocks）覆盖 App 的 doc，
+        // 把 protect / pageNumber 等文档级配置冲掉——这正是"设了密码保存后重开却没保护"的根因。
+        if (onChangeRef.current && tr.docChanged) {
           const udm = proseMirrorToUDM(ns.doc, { pageNumber: pageNumberRef.current ?? undefined })
           const overrides = stylesRef.current
           if (Object.keys(overrides).length) {
@@ -995,6 +999,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           // 透传文档保护信息，避免编辑时丢失密码锁定配置
           const curProtect = (documentRef.current as any)?.protect
           if (curProtect) (udm as any).protect = curProtect
+          // proseMirrorToUDM 会把 meta 重置为 { title: 'Untitled' }（PM 文档里不含 meta），
+          // 直接回流会把原文档标题冲掉——保存后文件标题变成 Untitled。透传原 meta。
+          const curMeta = (documentRef.current as any)?.meta
+          if (curMeta) (udm as any).meta = curMeta
           lastEmittedRef.current = udm
           onChangeRef.current(udm)
         }
@@ -1395,6 +1403,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const cfg = pn === undefined ? pageNumberRef.current : pn
     if (pn !== undefined) pageNumberRef.current = pn
     const out = proseMirrorToUDM(v.state.doc, { pageNumber: cfg ?? undefined })
+    // proseMirrorToUDM 只还原正文，样式与保护配置不在 PM 文档里，
+    // 必须与 dispatchTransaction 一样显式透传，否则会被这次 emit 抹掉
+    // （典型后果：设过密码保护后改一次页码/页面设置，保存出去的文件就没有保护了）。
+    const overrides = stylesRef.current
+    if (Object.keys(overrides).length) {
+      ;(out as any).styles = Object.keys(overrides).map((name) => ({ name, type: 'paragraph', props: overrides[name] }))
+    }
+    const curProtect = (documentRef.current as any)?.protect
+    if (curProtect) (out as any).protect = curProtect
+    const curMeta = (documentRef.current as any)?.meta
+    if (curMeta) (out as any).meta = curMeta
     lastEmittedRef.current = out // 标记为自身 emit，避免同步 effect 误触发重建
     onChangeRef.current(out)
   }
@@ -1995,7 +2014,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       const pwd = prompt(t('doc.protectSetPwd'))
       if (!pwd) return
       const hash = hashPwd(pwd)
-      const updated: any = { ...document, protect: { enabled: true, hash } }
+      // 用 ref 取最新文档，避免闭包捕获到旧 props 而把刚编辑的正文回退
+      const base: any = documentRef.current ?? document
+      const updated: any = { ...base, protect: { enabled: true, hash } }
+      // 立刻同步 ref：React 重渲染是异步的，期间若有事务 emit，
+      // 读到旧 ref 就会把刚设置的保护冲掉。
+      documentRef.current = updated
+      lastEmittedRef.current = updated
       onChange?.(updated)
       unlockHashRef.current = hash
       setProtectedMode(true)
@@ -2005,7 +2030,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       const pwd = prompt(t('doc.protectEnterPwd'))
       if (pwd == null) return
       if (hashPwd(pwd) === (document.protect?.hash ?? '')) {
-        const updated: any = { ...document, protect: { enabled: false, hash: document.protect?.hash ?? '' } }
+        const base: any = documentRef.current ?? document
+        const updated: any = { ...base, protect: { enabled: false, hash: document.protect?.hash ?? '' } }
+        documentRef.current = updated
+        lastEmittedRef.current = updated
         onChange?.(updated)
         unlockHashRef.current = ''
         setProtectedMode(false)

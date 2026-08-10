@@ -995,13 +995,13 @@ table td, table th {
   background-size: 20px 20px;
 }
 
-/* === 护眼模式 (eye care) === */
+/* === 护眼模式 (eye care) ===
+   护眼绿只由「纸页层(每页)」提供（纸页背景在护眼模式下为护眼绿），
+   ProseMirror 编辑区本身保持透明，页间留白保持工作区中性色，
+   避免连续绿底在分页处跨页溢出。 */
 .eye-care-mode .ProseMirror {
-  background-color: #c7edcc !important;
+  background-color: transparent !important;
   filter: sepia(0.1) brightness(0.97);
-}
-.eye-care-mode {
-  background-color: #c7edcc;
 }
 
 /* === Text box / Shape resize + selection === */

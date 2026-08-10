@@ -35,8 +35,6 @@ func (h *Handler) Register(r *gin.Engine) {
         r.GET("/api/health", h.health)
         r.POST("/api/doc/open", h.openDocument)
         r.POST("/api/doc/save", h.saveDocument)
-        r.POST("/api/doc/save-doc", h.saveDocumentDoc) // .doc format
-        r.POST("/api/doc/save-wps", h.saveDocumentWps) // .wps format
         r.POST("/api/doc/export-pdf", h.exportPDF)
         r.GET("/api/dict/check", h.spellCheck)
         r.POST("/api/dict/learn", h.learnWord)
@@ -127,46 +125,6 @@ func (h *Handler) saveDocument(c *gin.Context) {
 	}
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
-}
-
-// saveDocumentDoc saves as .doc (legacy Word format).
-// .doc is a binary OLE format. We generate a minimal RTF wrapper that Word
-// and WPS can both open when saved with .doc extension.
-func (h *Handler) saveDocumentDoc(c *gin.Context) {
-	var doc core.Document
-	if err := c.ShouldBindJSON(&doc); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	// Generate RTF (Rich Text Format) — opens in Word/WPS as .doc
-	data, _, _ := RenderToBytes(&doc, "doc")
-	filename := doc.Meta.Title
-	if filename == "" {
-		filename = "untitled"
-	}
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.doc"`, filename))
-	c.Data(http.StatusOK, "application/msword", data)
-}
-
-// saveDocumentWps saves as .wps format (WPS Office native).
-// WPS can open .docx, so we reuse the docx renderer with .wps extension.
-func (h *Handler) saveDocumentWps(c *gin.Context) {
-	var doc core.Document
-	if err := c.ShouldBindJSON(&doc); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	data, _, err := RenderToBytes(&doc, "wps")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	filename := doc.Meta.Title
-	if filename == "" {
-		filename = "untitled"
-	}
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.wps"`, filename))
-	c.Data(http.StatusOK, "application/vnd.ms-works", data)
 }
 
 // generateRTF converts UDM to a minimal RTF string that Word/WPS can open

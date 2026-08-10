@@ -39,17 +39,22 @@ tsconfig.tsbuildinfo
 # Playwright test screenshots (generated, not source)
 scripts/e2e/pw-shots*/
 scripts/e2e/menu-audit-results.json
-''  
-'# Python cache'  
-'__pycache__/'  
-'*.pyc'  
-''  
-'# Test artifacts'  
-'scripts/e2e/test_result.png'  
-'scripts/e2e/probe_home.png'  
-'scripts/e2e/*.html'  
-''  
-'# Runtime data'  
-'samoffice-data/'  
-'frontend/samoffice-data/'  
-'packaging/windows/stage/' 
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Test artifacts
+scripts/e2e/test_result.png
+scripts/e2e/probe_home.png
+scripts/e2e/*.html
+
+# Runtime data
+samoffice-data/
+frontend/samoffice-data/
+packaging/windows/stage/
+
+# Dev / verification temporaries
+*.err
+_verify_tmp/
+

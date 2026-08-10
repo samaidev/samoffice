@@ -217,12 +217,13 @@ func (b *RawBlock) UnmarshalJSON(data []byte) error {
 // Document 的 UnmarshalJSON：通过结构特征路由到正确的 Block 类型
 func (d *Document) UnmarshalJSON(data []byte) error {
         type alias struct {
-                Meta     Meta            `json:"meta"`
+                Meta     Meta             `json:"meta"`
                 Blocks   []json.RawMessage `json:"blocks"`
-                Comments []Comment       `json:"comments,omitempty"`
-                Styles   []StyleDef      `json:"styles,omitempty"`
-                Warnings []Warning       `json:"warnings,omitempty"`
-                Raw      map[string]any  `json:"raw,omitempty"`
+                Comments []Comment        `json:"comments,omitempty"`
+                Styles   []StyleDef       `json:"styles,omitempty"`
+                Warnings []Warning        `json:"warnings,omitempty"`
+                Protect  *DocumentProtect `json:"protect,omitempty"`
+                Raw      map[string]any   `json:"raw,omitempty"`
         }
         var a alias
         if err := json.Unmarshal(data, &a); err != nil {
@@ -232,6 +233,7 @@ func (d *Document) UnmarshalJSON(data []byte) error {
         d.Comments = a.Comments
         d.Styles = a.Styles
         d.Warnings = a.Warnings
+        d.Protect = a.Protect
         d.Raw = a.Raw
 
         d.Blocks = make([]Block, 0, len(a.Blocks))
