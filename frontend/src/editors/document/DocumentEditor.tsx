@@ -641,6 +641,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   // 独立公式编辑器弹窗（全屏模态）
   const [showMathModal, setShowMathModal] = useState(false)
   const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null }>({ latex: '', inline: false, pos: null })
+  // 独立的“插入符号”小面板（与公式弹窗分开，不复用）
+  const [showSymbolPanel, setShowSymbolPanel] = useState(false)
+  const [symbolCategory, setSymbolCategory] = useState<'greek' | 'latin' | 'circled' | 'roman' | 'math' | 'arrows'>('greek')
   // 二级颜色/底纹/背景弹出菜单 — 统一改为 click 触发，避免 hover 残留导致重叠
   const [showColorPopup, setShowColorPopup] = useState(false)
   const [showHighlightPopup, setShowHighlightPopup] = useState(false)
@@ -662,8 +665,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     setShowShapePanel(false); setShowArtPanel(false)
     setShowColorPopup(false); setShowHighlightPopup(false)
     setShowShadingPopup(false); setShowBgColorPopup(false)
+    setShowMathModal(false); setShowSymbolPanel(false)
   }
-  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup
+  // 公式弹窗与符号面板的互斥切换（与 ribbon 其他弹出面板独立）
+  const openPanel2 = (which: 'formula' | 'symbol') => {
+    setShowMathModal(which === 'formula' ? !showMathModal : false)
+    setShowSymbolPanel(which === 'symbol' ? !showSymbolPanel : false)
+    setShowShapePanel(false); setShowArtPanel(false)
+    setShowColorPopup(false); setShowHighlightPopup(false)
+    setShowShadingPopup(false); setShowBgColorPopup(false)
+  }
+  const anyPanelOpen = showShapePanel || showArtPanel || showColorPopup || showHighlightPopup || showShadingPopup || showBgColorPopup || showMathModal || showSymbolPanel
   // 护眼/背景色: white / #c7edcc (护眼绿) / #f5f5dc (豆沙) / #faf3e0 (米黄)
   const [bgColor, setBgColor] = useState<string>(() => {
     try { return localStorage.getItem('samoffice_bg_color') || '#ffffff' } catch { return '#ffffff' }
@@ -717,7 +729,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const setShowMarksPersist = (v: boolean) => { persistBool('samoffice_show_marks', v); setShowMarks(v) }
   // 文档级设置 (页眉/页脚/页边距/分栏/行号)
   const [docHeader, setDocHeader] = useState('')
-  const [docMargins, setDocMargins] = useState({ top: 96, bottom: 96, left: 96, right: 96 })
+  // 默认页边距采用 Word「普通」预设：上下 2.54cm、左右 3.18cm（96dpi 下分别为 96px / 120px）
+  const [docMargins, setDocMargins] = useState({ top: 96, bottom: 96, left: 120, right: 120 })
   const [pageSize, setPageSize] = useState<'A4'|'A3'|'A5'|'B5'|'Letter'|'Legal'>('A4')
   const [orientation, setOrientation] = useState<'portrait'|'landscape'>('portrait')
   const [docColumns, setDocColumns] = useState(1)
@@ -770,8 +783,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const measureTop = () => {
       const a = pr.getBoundingClientRect()
       const b = er.getBoundingClientRect()
-      const t = b.top - a.top
+      // getBoundingClientRect 返回缩放后像素，而 pageRects 的 top 是布局像素（offset 体系，
+      // 不受 CSS scale 影响）。纸页层与内容层同处 scale 包裹层内，bodyTop 必须归一为布局像素，
+      // 否则 zoom≠100% 时纸页背景与正文错位（文字落入页间空白）。
+      const t = (b.top - a.top) / (zoom / 100)
       setBodyTop((prev) => (Math.abs(prev - t) > 0.5 ? t : prev))
+      ;(window as any).__bodyTop = { bodyTop: Math.round(t), zoom, pageContentPerPage: Math.round(pageContentPerPage), editorPaddingTop: docMargins.top, editorRectHeight: Math.round(er.offsetHeight), editorPaddingBottom: docMargins.bottom }
     }
     const id = requestAnimationFrame(measureTop)
     return () => cancelAnimationFrame(id)
@@ -854,18 +871,58 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       nodeViews: {
         image: (node: any, view: any, getPos: any) => {
           const dom = window.document.createElement('div')
-          dom.style.display = 'inline-block'
+          // 应用环绕（float）与嵌入型（wrap=false）样式，使文字环绕生效。
+          // 抽成函数，创建与 update 时都会调用，确保切换环绕方式时样式实时刷新。
+          const applyFloat = (n: any) => {
+            const fl = n.attrs.float || ''
+            const wrap = n.attrs.wrap !== false
+            if (fl === 'left' || fl === 'right') {
+              dom.style.display = 'block'
+              dom.style.float = fl
+              dom.style.margin = fl === 'left' ? '4px 12px 4px 0' : '4px 0 4px 12px'
+            } else if (fl === 'center') {
+              dom.style.display = 'block'
+              dom.style.margin = '4px auto'
+              dom.style.textAlign = 'center'
+              dom.style.float = 'none'
+            } else {
+              // 嵌入型 / 无环绕：独占一行块或行内，取决于 wrap
+              dom.style.display = 'block'
+              dom.style.float = 'none'
+              dom.style.margin = '4px auto'
+              dom.style.textAlign = 'center'
+            }
+            if (!wrap) {
+              // 嵌入型：不环绕，独占一行
+              dom.style.display = 'block'
+              dom.style.float = 'none'
+              dom.style.margin = '4px auto'
+              dom.style.textAlign = 'center'
+            }
+          }
+          applyFloat(node)
           dom.style.position = 'relative'
-          dom.style.margin = '4px'
           dom.style.maxWidth = '100%'
           const img = window.document.createElement('img')
           img.src = node.attrs.src
           img.alt = node.attrs.alt || ''
+          // 禁止 <img> 原生拖拽：否则浏览器会把图片作为内存 blob File 塞进
+          // dataTransfer，配合 Wails EnableFileDrop 触发 window 级 OnFileDrop →
+          // ResolveFilePaths，报 "File object is not a file on the disk"。
+          // 节点拖拽改由 ProseMirror 自身（自定义 dataTransfer 类型，不含 Files）处理。
+          img.draggable = false
+          img.addEventListener('dragstart', (e: DragEvent) => e.preventDefault())
           img.style.maxWidth = '100%'
           img.style.display = 'block'
           img.style.cursor = 'pointer'
           let w = node.attrs.width || 300
+          let h = node.attrs.height || 0
           img.style.width = w + 'px'
+          // 若节点带有确定高度（插入时已按自然比例算出），从首帧就固定高度，
+          // 无需等图片 load，分页引擎首帧即可测得稳定高度，避免加载后重分页抖动。
+          if (h && h > 0) {
+            img.style.height = h + 'px'
+          }
           dom.appendChild(img)
           // Resize handle
           const handle = window.document.createElement('div')
@@ -917,6 +974,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             if (pos != null) {
               const tr = view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, width: w })
               view.dispatch(tr)
+              scheduleCheck()
             }
           })
           // Click to select
@@ -925,17 +983,50 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             if (pos != null) {
               view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
               view.focus()
+              scheduleCheck()
             }
           })
-          // Listen for selection changes
-          view.someProp('handleDOMEvents', () => {}) // ensure view is valid
-          const origDispatch = view.dispatch.bind(view)
-          const wrappedDispatch = (tr: any) => {
-            origDispatch(tr)
-            setTimeout(checkSelected, 0)
+          // 仅在图片“首帧高度为 0（节点未带确定高度）”时，load 后才需要重分页。
+          // 插入时已写入 width/height 的节点，load 不会改变渲染高度，无需重分页，
+          // 避免 load → forcePaginate → 布局变化 → 再次 load 触发的死循环/闪烁。
+          let repaginateTimer: any = null
+          const repaginate = () => {
+            if (h && h > 0) return // 已有确定高度，跳过
+            if (repaginateTimer) clearTimeout(repaginateTimer)
+            repaginateTimer = setTimeout(() => {
+              try {
+                const p = getPos()
+                if (p != null) {
+                  view.dispatch(view.state.tr.setMeta('forcePaginate', true).setMeta('addToHistory', false))
+                }
+              } catch { /* ignore */ }
+            }, 120)
           }
-          view.dispatch = wrappedDispatch
-          return { dom }
+          img.addEventListener('load', repaginate)
+          img.addEventListener('error', repaginate)
+          // 选择高亮：仅做只读检查，绝不重写 view.dispatch（原实现覆盖 view.dispatch
+          // 会造成多图时层层包裹、并污染分页插件的 dispatch，属于反模式）。
+          const scheduleCheck = () => setTimeout(checkSelected, 0)
+          return {
+            dom,
+            // nodeView 更新（如切换环绕、改宽度、选中态变化）时同步样式与高亮。
+            // 必须重设 float/wrap 样式，否则 attrs 变化后 DOM 不刷新，环绕失效。
+            update: (n2: any, _view: any) => {
+              applyFloat(n2)
+              const w2 = n2.attrs.width || 300
+              const h2 = n2.attrs.height || 0
+              if (w2 !== w) {
+                w = w2
+                img.style.width = w + 'px'
+              }
+              if (h2 !== h) {
+                h = h2
+                img.style.height = h > 0 ? h + 'px' : ''
+              }
+              scheduleCheck()
+              return true
+            },
+          }
         },
         math: (node, _view, getPos) => {
           const dom = window.document.createElement(node.attrs.inline ? 'span' : 'div')
@@ -1285,7 +1376,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const { state } = v
     let found = -1
     state.doc.descendants((node: any, pos: number) => {
-      if (node.type.name === 'heading' && node.attrs.id === tid) { found = pos; return false }
+      if (node.attrs.id === tid && (node.type.name === 'heading' || node.type.name === 'paragraph')) { found = pos; return false }
     })
     if (found >= 0) {
       const tr = state.tr.setSelection(TextSelection.create(state.doc, found + 1))
@@ -1300,10 +1391,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const v = viewRef.current
     if (!v) return
     const { state, dispatch } = v
-    // 1) 为缺少 id 的标题分配稳定 id
+    // 判断一个块节点是否为“标题”：heading 节点，或带 outlineLevel 的段落，
+    // 或样式名匹配 Heading 模式（如 “Heading 1”“My Heading 2”）。
+    // 关键修复：WYSIWYG 里用「标题样式」写的文字是 paragraph + style，
+    // 不是 heading 节点——旧实现只认 heading，导致“没有标题”无法生成目录。
+    const isHeadingNode = (node: any): number => {
+      if (node.type.name === 'heading') return Math.max(1, node.attrs.level || 1)
+      if (node.type.name === 'paragraph') {
+        const lvl = node.attrs.outlineLevel || outlineLevelFromName(node.attrs.style || '') || 0
+        if (lvl > 0) return lvl
+      }
+      return 0
+    }
+    // 1) 为缺少 id 的标题（含段落型标题）分配稳定 id
     const tr0 = state.tr
     state.doc.descendants((node: any, pos: number) => {
-      if (node.type.name === 'heading' && !node.attrs.id) {
+      const lvl = isHeadingNode(node)
+      if (lvl && !node.attrs.id) {
         tr0.setNodeMarkup(pos, null, { ...node.attrs, id: 'h-' + Math.random().toString(36).slice(2, 9) })
       }
     })
@@ -1311,7 +1415,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     // 2) 收集标题（提纲级别），生成多级编号
     const headings: { level: number; text: string; id: string }[] = []
     v.state.doc.descendants((node: any) => {
-      if (node.type.name === 'heading') headings.push({ level: node.attrs.level, text: node.textContent || `标题 ${node.attrs.level}`, id: node.attrs.id })
+      const lvl = isHeadingNode(node)
+      if (lvl) headings.push({ level: lvl, text: node.textContent || `标题 ${lvl}`, id: node.attrs.id })
     })
     if (headings.length === 0) { alert(t('doc.noHeadingsForToc')); return }
     const counters: number[] = []
@@ -1348,7 +1453,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       const link = schema.nodes.tocLink.create({ target: h.id, label: indent + label })
       nodes.push(schema.nodes.paragraph.create({ style: 'TOC Entry' }, link))
     })
-    let pos = 0
+    // 关键修复：旧实现硬插 pos=0，若文档以非段落块（如分页符）开头会抛错导致整个生成失败。
+    // 改为插到第一个顶层块之前的安全位置。
+    let insertAt = 0
+    const first = tr.doc.firstChild
+    if (first) insertAt = 0 // 文档起始即为第一个顶层块之前
+    let pos = insertAt
     nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
     dispatch(tr)
     v.focus()
@@ -2073,7 +2183,46 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
-  const insertImage = () => { const input = window.window.window.document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = () => { const f = input.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src: r.result as string }))); v.focus() }; r.readAsDataURL(f) }; input.click() }
+  const insertImage = () => {
+    const input = window.window.window.document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.onchange = () => {
+      const f = input.files?.[0]
+      if (!f) return
+      const r = new FileReader()
+      r.onload = () => {
+        const v = viewRef.current
+        if (!v) return
+        const src = r.result as string
+        // 先解码以拿到图片自然尺寸，给节点写入确定的 width/height，
+        // 这样分页引擎从首帧就能测到稳定高度，避免 load 后重分页抖动/循环。
+        const probe = new Image()
+        probe.onload = () => {
+          const W = probe.naturalWidth || 300
+          const H = probe.naturalHeight || 200
+          // 默认宽度限制在页面内容区合理范围内（与默认 300 一致，最大不超过内容宽）
+          const maxW = Math.min(300, Math.max(80, Math.round(pageContentPerPage - docMargins.left - docMargins.right) - 24))
+          const width = Math.min(W, maxW)
+          const height = Math.round((width * H) / W)
+          if (v.state.doc) {
+            v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src, width, height, float: '', wrap: true })))
+            v.focus()
+          }
+        }
+        probe.onerror = () => {
+          // 解码失败也至少给出默认尺寸，避免高度为 0
+          if (v.state.doc) {
+            v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src, width: 300, height: 200, float: '', wrap: true })))
+            v.focus()
+          }
+        }
+        probe.src = src
+      }
+      r.readAsDataURL(f)
+    }
+    input.click()
+  }
   const insertLink = () => { const url = prompt('URL:'); if (url) { const v = viewRef.current; if (!v) return; const sel = v.state.selection; if (!sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.link.create({ href: url }))) } }
 
   useEffect(() => { if (viewRef.current) { const v = viewRef.current; v.dispatch(setSpellErrors(v.state.tr, spellErrors)); v.updateState(v.state); setTick(t => t + 1) } }, [spellErrors])
@@ -2408,7 +2557,45 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.text')}>
             <RibbonButton icon="📦" label={t('doc.textBox')} onClick={() => exec('textBox')} />
             <RibbonButton icon="Σ" label={t('doc.formula')} onClick={insertFormula} data-testid="insert-formula" />
-            <RibbonButton icon="Ω" label={t('doc.symbols')} onClick={() => { setMathEdit({ latex: '', inline: false, pos: null }); setShowMathModal(true) }} />
+            <div className="relative inline-block">
+            <RibbonButton icon="Ω" label={t('doc.symbols')} onClick={() => openPanel2('symbol')} data-testid="insert-symbol" />
+            {showSymbolPanel && (
+              <div className="absolute left-0 top-full" style={{ zIndex: 50, padding: '12px', minWidth: 360, marginTop: 4, background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+                <div className="flex gap-1 mb-2 flex-wrap">
+                  {[
+                    { k: 'greek', l: t('sym.greek') || '希腊' },
+                    { k: 'latin', l: t('sym.latin') || '拉丁' },
+                    { k: 'circled', l: t('sym.circled') || '圈号' },
+                    { k: 'roman', l: t('sym.roman') || '罗马' },
+                    { k: 'math', l: t('sym.math') || '数学' },
+                    { k: 'arrows', l: t('sym.arrows') || '箭头' },
+                  ].map(c => (
+                    <button key={c.k} onClick={() => setSymbolCategory(c.k as any)} className="text-xs px-2 py-1 rounded" style={{ background: symbolCategory === c.k ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: symbolCategory === c.k ? 'white' : 'var(--color-text)' }}>{c.l}</button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-8 gap-1" style={{ maxHeight: 200, overflowY: 'auto' }}>
+                  {symbolCategory === 'greek' && 'αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ'.split('').map((s, i) => (
+                    <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                  ))}
+                  {symbolCategory === 'latin' && 'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ'.split('').map((s, i) => (
+                    <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                  ))}
+                  {symbolCategory === 'circled' && '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⓪ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙ'.split('').map((s, i) => (
+                    <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                  ))}
+                  {symbolCategory === 'roman' && 'ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹⅺⅻ'.split('').map((s, i) => (
+                    <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                  ))}
+                  {symbolCategory === 'math' && '±×÷·∗∘∝∞∠∡∇∂√∫∮∑∏⊕⊗⊥∥≡≅≈≠≤≥≪≫∈∉∩∪⊂⊃⊆⊇∅∀∃¬∧∨⇒⇔'.split('').map((s, i) => (
+                    <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                  ))}
+                  {symbolCategory === 'arrows' && '←↑→↓↔↕↖↗↘↙⇄⇅⇒⇐⇔⇑⇓⇕⟶⟵⟷'.split('').map((s, i) => (
+                    <button key={i} onClick={() => insertSymbol(s)} className="p-1.5 rounded hover:bg-slate-100 text-sm" style={{ minWidth: 32 }}>{s}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            </div>
           </RibbonGroup>
           <RibbonGroup label={t('doc.link')}>
             <RibbonButton icon="⚓" label={t('doc.bookmark')} onClick={() => exec('bookmark')} />
@@ -2794,7 +2981,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <div ref={sheetsLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
           {pageRects.map((p, i) => (
             <Fragment key={i}>
-              <div style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, background: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
+              <div className={showGridlines ? 'page-grid' : ''} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
                 {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾 */}
                 {(footnotesByPage[i] || []).length > 0 && (
                   <div style={{
@@ -2959,7 +3146,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               style={{
                 width: '100%',
                 margin: '0 auto',
-                padding: `${docMargins.top}px ${docMargins.right}px 0px ${docMargins.left}px`,
+                padding: `${docMargins.top}px ${docMargins.right}px ${docMargins.bottom}px ${docMargins.left}px`,
                 columnCount: docColumns > 1 ? docColumns : undefined,
                 columnGap: docColumns > 1 ? '32px' : undefined,
                 columnRule: docColumns > 1 ? '1px solid var(--color-border)' : undefined,

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ccc; }
+  #pageRef {
+    position: relative;
+    margin-top: 24px; margin-bottom: 24px;
+    width: 794px;
+  }
+  #scaleWrap { width: 794px; transform: scale(1); transform-origin: top center; }
+  #sheets { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+  .sheet { position: absolute; left: 0; width: 794px; background: #fff; box-shadow: 0 0 12px rgba(0,0,0,.15); }
+  #editor {
+    position: relative; width: 100%; margin: 0 auto;
+    padding: 96px 120px 96px 120px;
+    background: rgba(255,255,255,.4); min-height: 100%;
+  }
+  .para { margin: 0 0 6px 0; line-height: 1.5; font-size: 16px; }
+</style>
+</head>
+<body>
+<div id="pageRef">
+  <div id="scaleWrap">
+    <div id="sheets"></div>
+    <div id="editor"></div>
+  </div>
+</div>
+<script>
+  const pageWidthPx = 794, pageHeightPx = 1123
+  const marginTop = 96, marginBottom = 96, gap = 34
+  const pageStep = pageHeightPx + gap
+  const per = pageHeightPx - marginTop - marginBottom
+
+  // 注入约 N 行，让总高接近 per（满页）
+  const editor = document.getElementById('editor')
+  const lineH = 24 // 16px*1.5
+  const linesPerPage = Math.floor(per / lineH) // ~38 行
+  let html = ''
+  const N = linesPerPage + 3 // 略超一页，触发跨页验证
+  for (let i = 0; i < N; i++) html += `<p class="para">第${i+1}行：这是一段足够长的测试文本用于验证分页坐标对齐是否准确不超下直角边界。</p>`
+  editor.innerHTML = html
+
+try {
+  const pr = document.getElementById('pageRef')
+  const er = editor
+  const prTop = pr.getBoundingClientRect().top
+  const erTop = er.getBoundingClientRect().top
+  const bodyTop = erTop - prTop
+
+  const pageTopOf = (n) => n * pageStep
+  const pageOf = (y) => Math.max(0, Math.floor(y / pageStep))
+  const pageBottomOf = (n) => pageTopOf(n) + per
+
+  // === 实现真实 pagination 算法：逐段逐行测 top，超当前页内容区底则插入 margin 推到下一页 ===
+  const paras = Array.from(editor.querySelectorAll('.para'))
+  const breakMargins = [] // {pos, marginTop}
+  let pushDown = 0 // 当前累计下移量（用于测真实渲染）
+  const lineData = [] // 每行 {top(相对editor content box, 含pushdown), height}
+  for (const p of paras) {
+    const tn = p.firstChild
+    const txt = tn.textContent
+    // 逐字符测每行 top
+    const tops = []
+    for (let i = 1; i <= txt.length; i++) {
+      const range = document.createRange()
+      range.setStart(tn, i - 1)
+      range.setEnd(tn, i)
+      const r = range.getBoundingClientRect()
+      const et = p.getBoundingClientRect().top
+      const top = r.top - et
+      if (tops.length === 0 || top > tops[tops.length - 1].top + 1) tops.push({ offset: i - 1, top, h: r.height })
+    }
+    // 逐行判断（content-box 体系，含 pushDown）
+    let curPage = 0
+    let prevLineBottom = 0
+    for (const ln of tops) {
+      const lineTop = pushDown + ln.top
+      const lineBottom = lineTop + (ln.h || 24)
+      while (lineBottom > pageBottomOf(curPage) - 0.5) curPage += 1
+      if (curPage > 0 || lineTop < prevLineBottom) {
+        const mt = Math.max(0, pageTopOf(curPage) - lineTop)
+        breakMargins.push({ offset: ln.offset, marginTop: mt })
+        prevLineBottom = pageTopOf(curPage) + ln.h
+      } else prevLineBottom = lineBottom
+    }
+    // 该段累计最大下移
+    let maxMt = 0
+    for (const ln of tops) {
+      let pg = 0
+      const lineBottom = pushDown + ln.top + ln.h
+      while (lineBottom > pageBottomOf(pg) - 0.5) pg += 1
+      const mt = Math.max(0, pageTopOf(pg) - (pushDown + ln.top))
+      if (mt > maxMt) maxMt = mt
+    }
+    pushDown += maxMt
+  }
+
+  // 应用断点 margin 重排（用真实的 DOM：把段落内容拆到带 margin 的 span）
+  // 简化：直接把所有断点 margin 累加效果模拟到最后一行位置
+  // 测"应用断点后"的真实最后一行底：用 pushDown + 最后一段最后一行 top
+  const lastParaEl = paras[paras.length - 1]
+  const lastTn = lastParaEl.firstChild
+  const lastTops = []
+  for (let i = 1; i <= lastTn.textContent.length; i++) {
+    const range = document.createRange()
+    range.setStart(lastTn, i - 1)
+    range.setEnd(lastTn, i)
+    const r = range.getBoundingClientRect()
+    const et = lastParaEl.getBoundingClientRect().top
+    const top = r.top - et
+    if (lastTops.length === 0 || top > lastTops[lastTops.length - 1].top + 1) lastTops.push({ offset: i - 1, top, h: r.height })
+  }
+  const lastLine = lastTops[lastTops.length - 1]
+  const lastLineBottomContentBox = pushDown + lastLine.top + (lastLine.h || 24)
+
+  // 渲染纸页（按真实 pagination：pageCount 由内容最大坐标映射）
+  const pageCount = Math.max(1, Math.floor((lastLineBottomContentBox) / pageStep) + 1)
+  const sheets = document.getElementById('sheets')
+  for (let i = 0; i < pageCount; i++) {
+    const d = document.createElement('div')
+    d.className = 'sheet'
+    d.style.top = (bodyTop + pageTopOf(i)) + 'px'
+    d.style.height = pageHeightPx + 'px'
+    sheets.appendChild(d)
+  }
+
+  // 测最后一页纸页底（视口）与最后一行底（视口）
+  const lastSheet = sheets.lastChild
+  const lastSheetBottomViewport = lastSheet.getBoundingClientRect().bottom
+  const lastLineBottomViewport = erTop + lastLineBottomContentBox
+  const diff = lastSheetBottomViewport - lastLineBottomViewport
+
+  const result = {
+    zoom: 100,
+    prTop: Math.round(prTop),
+    erTop: Math.round(erTop),
+    bodyTop: Math.round(bodyTop),
+    sheet0Top: Math.round(sheets.firstChild.getBoundingClientRect().top),
+    lastSheetBottom: Math.round(lastSheetBottomViewport),
+    lastLineBottom: Math.round(lastLineBottomViewport),
+    diffVsLastSheetBottom: Math.round(diff),
+    expectedMarginBottom: marginBottom,
+    overflow: diff < -1 ? 'YES 超界' : 'NO 未超',
+    within: Math.abs(diff - marginBottom) <= 3 ? 'ALIGNED' : 'MISALIGNED',
+    pageCount,
+    lastLineBottomContentBox: Math.round(lastLineBottomContentBox)
+  }
+  window.__PROBE2 = result
+  document.title = 'R2:' + JSON.stringify(result)
+  console.log('PROBE2', JSON.stringify(result, null, 2))
+} catch (e) {
+  window.__PROBE2 = { error: String(e), stack: e.stack }
+  console.log('PROBE2_ERROR', String(e), e.stack)
+}
+</script>
+</body>
+</html>

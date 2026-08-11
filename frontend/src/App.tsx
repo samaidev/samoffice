@@ -854,11 +854,18 @@ ${t('sample.md.more')}
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    // 不 stopPropagation：本地模式由 Wails 在 window 上注册的 onDrop 接管，
-    // 若此处拦截会阻断 window 级回调导致 OnFileDrop 永不触发。
+    // 编辑器内部拖拽（如移动已嵌入的 base64 图片）没有真实磁盘文件，
+    // 必须拦截、停止冒泡，否则会触发 Wails window 级 OnFileDrop 调用
+    // ResolveFilePaths，报 “File object is not a file on the disk”。
+    const hasFiles = !!(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0)
+    if (!hasFiles) {
+      e.stopPropagation()
+      setDragOver(false)
+      return
+    }
     setDragOver(false)
     // 本地模式由 Wails OnFileDrop 提供真实路径；远程模式走上传
-    if (backend?.mode !== 'local') openDroppedFiles(e.dataTransfer?.files ?? null)
+    if (backend?.mode !== 'local') openDroppedFiles(e.dataTransfer.files)
   }
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -875,10 +882,13 @@ ${t('sample.md.more')}
     if (!backend || backend.mode !== 'local') return
     const rt = (window as any).runtime
     if (!rt || typeof rt.OnFileDrop !== 'function') return
+    // useDropTarget=true：仅当 drop 落在带 --wails-drop-target 样式的元素上才触发，
+    // 避免编辑器内拖动已嵌入的图片（内存 blob File，非磁盘文件）误触发
+    // window 级 OnFileDrop → ResolveFilePaths 报 "File object is not a file on the disk"。
     const off = rt.OnFileDrop((_x: number, _y: number, paths: string[]) => {
       setDragOver(false)
       openLocalPaths(paths || [])
-    }, false)
+    }, true)
     return () => { try { rt.OnFileDropOff() } catch { /* noop */ }; if (typeof off === 'function') off() }
   }, [backend])
 
@@ -1303,7 +1313,7 @@ ${t('sample.md.more')}
   return (
     <div
       className="flex flex-col h-screen overflow-x-hidden relative"
-      style={{ background: 'var(--color-bg)' }}
+      style={{ background: 'var(--color-bg)', ['--wails-drop-target' as any]: 'drop' }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  body { margin: 0; background: #eee; font-family: sans-serif; }
+  #pageRef {
+    position: relative;
+    margin-top: 24px; margin-bottom: 24px;
+    width: 794px; /* A4 width px */
+    background: transparent;
+  }
+  #scaleWrap { width: 794px; transform: scale(1); transform-origin: top center; }
+  #sheets { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+  .sheet {
+    position: absolute; left: 0; width: 794px; height: 1122px;
+    background: #fff; box-shadow: 0 0 20px rgba(0,0,0,.1);
+  }
+  #editor {
+    position: relative;
+    width: 100%;
+    margin: 0 auto;
+    padding: 96px 120px 96px 120px; /* docMargins top/right/bottom/left */
+    box-sizing: border-box;
+    background: transparent;
+    min-height: 100%;
+  }
+  .para { margin: 0 0 8px 0; line-height: 1.5; font-size: 16px; }
+  /* 模拟分页断点 widget（不占行） */
+  .pg-linebreak { position: absolute; width: 0; height: 0; overflow: hidden; margin-top: 40px; }
+</style>
+</head>
+<body>
+<div id="pageRef">
+  <div id="scaleWrap">
+    <div id="sheets"></div>
+    <div id="editor"><!-- 内容由脚本注入 --></div>
+  </div>
+</div>
+<script>
+  const pageHeightPx = 1122
+  const marginTop = 96, marginBottom = 96
+  const gap = 34
+  const pageStep = pageHeightPx + gap
+  const per = pageHeightPx - marginTop - marginBottom
+
+  // 注入约 60 行文本（应略超一页内容区，触发跨页）
+  const editor = document.getElementById('editor')
+  let html = ''
+  for (let i = 0; i < 70; i++) html += `<p class="para">第 ${i+1} 行：这是一段用来测试分页坐标对齐的示例文本，足够长以占据整行宽度从而验证换行。</p>`
+  editor.innerHTML = html
+
+  // 测第一个段落的 offsetTop 链（content-box 体系，不含 editor padding）
+  const firstPara = editor.querySelector('.para')
+  function blockTopY(el) {
+    let y = 0, n = el
+    while (n && n !== editor) { y += n.offsetTop; n = n.offsetParent }
+    return y
+  }
+  const cumTop = blockTopY(firstPara)
+
+  // 模拟 pagination 当前逻辑：pageOf(y)=floor(y/pageStep)
+  const pageOf = (y) => Math.max(0, Math.floor(y / pageStep))
+  const pageTopOf = (n) => n * pageStep
+
+  // 纸页层定位：bodyTop + p.top，其中 bodyTop = editor 相对 pageRef 的 border-box 偏移
+  const pr = document.getElementById('pageRef').getBoundingClientRect()
+  const er = editor.getBoundingClientRect()
+  const bodyTop = er.top - pr.top // 布局像素（zoom=100）
+
+  // 渲染纸页（按当前 pagination 逻辑：top = pageTopOf(i)）
+  const sheets = document.getElementById('sheets')
+  const pageCount = 2
+  for (let i = 0; i < pageCount; i++) {
+    const d = document.createElement('div')
+    d.className = 'sheet'
+    d.style.top = (bodyTop + pageTopOf(i)) + 'px'
+    sheets.appendChild(d)
+  }
+
+  // 测量第一个段落最后一行底（相对 content-box）
+  // 用 Range 测最后一段最后一行的包围盒
+  function measureLastLineBottom() {
+    const paras = editor.querySelectorAll('.para')
+    const last = paras[paras.length - 1]
+    const range = document.createRange()
+    const textNode = last.firstChild
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, textNode.length)
+    const rects = range.getClientRects()
+    // 取最后一个 rect（最后一行）
+    const lastRect = rects[rects.length - 1]
+    const elTop = last.getBoundingClientRect().top
+    const top = lastRect.top - elTop // 相对块顶
+    const h = lastRect.height
+    return { top, h, bottom: top + h }
+  }
+  const lastLine = measureLastLineBottom()
+
+  // 几何核对（单页，首块）
+  const p0Top = pageTopOf(0)
+  const pageBottomAbs = bodyTop + p0Top + pageHeightPx // 纸页底（相对 pageRef）
+  const contentBottomAbs = bodyTop + cumTop + lastLine.bottom // 首段落最后一行底（相对 pageRef）
+
+  const result = {
+    bodyTop: Math.round(bodyTop),
+    cumTop: Math.round(cumTop),
+    per,
+    pageHeightPx,
+    pageBottomAbs: Math.round(pageBottomAbs),
+    contentBottomAbs: Math.round(contentBottomAbs),
+    diff: Math.round(pageBottomAbs - contentBottomAbs),
+    expectedDiff: marginBottom,
+    overflow: contentBottomAbs > pageBottomAbs + 1,
+    lastLine
+  }
+  document.title = 'RESULT:' + JSON.stringify(result)
+  window.__PROBE = result
+  console.log('PROBE', JSON.stringify(result, null, 2))
+</script>
+</body>
+</html>

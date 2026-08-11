@@ -46,6 +46,8 @@ export const schema = new Schema({
         rtl: { default: false },
         // 命名样式（如 "Heading 1" / "Normal"），用于样式库“当前样式”高亮
         style: { default: '' },
+        // 目录跳转用的稳定 id（段落型标题也用，与 heading 一致）
+        id: { default: '' },
       },
       toDOM: (node) => {
         const a = node.attrs

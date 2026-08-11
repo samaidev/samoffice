@@ -67,3 +67,47 @@ func TestParseCodeBlock(t *testing.T) {
                 t.Errorf("code = %q, want %q", cb.Code, "print(1)\n")
         }
 }
+
+func TestParseGFMTable(t *testing.T) {
+        p := New()
+        md := "| 名称 | 数量 | 说明 |\n| --- | ---: | :---: |\n| 苹果 | 3 | 红色水果 |\n| 香蕉 | 5 | 黄色水果 |\n"
+        doc, _, err := p.Parse(strings.NewReader(md))
+        if err != nil {
+                t.Fatalf("parse: %v", err)
+        }
+        // 仅一张表格（无标题）
+        if len(doc.Blocks) != 1 {
+                t.Fatalf("expected 1 block (table), got %d: %#v", len(doc.Blocks), doc.Blocks)
+        }
+        tbl, ok := doc.Blocks[0].(*core.Table)
+        if !ok {
+                t.Fatalf("expected *core.Table, got %T", doc.Blocks[1])
+        }
+        if len(tbl.Rows) != 3 {
+                t.Fatalf("expected 3 rows (header+2), got %d", len(tbl.Rows))
+        }
+        if !tbl.Rows[0][0].IsHeader {
+                t.Error("expected first row to be header")
+        }
+        if tbl.Rows[1][0].Inline[0].(core.Text).Content != "苹果" {
+                t.Errorf("first data cell = %v", tbl.Rows[1][0].Inline[0])
+        }
+        if len(tbl.Rows[1]) != 3 {
+                t.Errorf("expected 3 columns, got %d", len(tbl.Rows[1]))
+        }
+}
+
+func TestParseTableNotTriggeredByPipeText(t *testing.T) {
+        p := New()
+        // 普通段落包含竖线但不构成表格语法，不应被误判
+        md := "a | b | c\n\n普通段落\n"
+        doc, _, err := p.Parse(strings.NewReader(md))
+        if err != nil {
+                t.Fatalf("parse: %v", err)
+        }
+        for _, b := range doc.Blocks {
+                if _, ok := b.(*core.Table); ok {
+                        t.Errorf("plain paragraph with pipes should not become table: %#v", b)
+                }
+        }
+}

@@ -330,6 +330,7 @@ func (a *App) OpenFileDialog() (string, error) {
 	}
 	filters := []runtime.FileFilter{
 		{DisplayName: "Office 文档 (*.docx;*.doc;*.md;*.markdown;*.xlsx;*.xls;*.pptx;*.ppt)", Pattern: "*.docx;*.doc;*.md;*.markdown;*.xlsx;*.xls;*.pptx;*.ppt"},
+		{DisplayName: "PDF 文件 (*.pdf)", Pattern: "*.pdf"},
 		{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
 	}
 	result, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{

@@ -158,6 +158,8 @@ const dict: Record<string, { en: string; zh: string }> = {
   'pdf.shortcutNav': { en: 'Navigation', zh: '导航' },
   'pdf.shortcutZoom': { en: 'Zoom', zh: '缩放' },
   'pdf.pageOf': { en: 'Page {current} of {total}', zh: '第 {current} / {total} 页' },
+  'pdf.toggleThumbs': { en: 'Page Thumbnails', zh: '页面缩略图' },
+  'pdf.thumbPage': { en: 'Go to page {n}', zh: '跳转到第 {n} 页' },
 
   // === DocumentEditor ===
   'doc.ribbon.home': { en: 'Home', zh: '开始' },
@@ -338,6 +340,12 @@ const dict: Record<string, { en: string; zh: string }> = {
 
   // === 公式 / 符号插入 ===
   'doc.symbols': { en: 'Symbols', zh: '符号' },
+  'sym.greek': { en: 'Greek', zh: '希腊字母' },
+  'sym.latin': { en: 'Latin', zh: '拉丁字母' },
+  'sym.circled': { en: 'Enclosed', zh: '带圈数字' },
+  'sym.roman': { en: 'Roman', zh: '罗马数字' },
+  'sym.math': { en: 'Math', zh: '数学符号' },
+  'sym.arrows': { en: 'Arrows', zh: '箭头符号' },
   'math.commonFormulas': { en: 'Common Formulas', zh: '常用公式' },
   'math.symbols': { en: 'Symbols', zh: '符号' },
   'math.symbolCatGreek': { en: 'Greek', zh: '希腊' },

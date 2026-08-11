@@ -206,6 +206,51 @@ func buildTable(f *excelize.File, sheetName string) (core.Table, []core.Warning)
 		tableCells = append(tableCells, cells)
 	}
 
+	// 合并单元格：读取 xlsx 的 mergeCells，设置首格 RowSpan/ColSpan，
+	// 被覆盖的单元格标记为 VMerge=1（渲染时跳过占位）。
+	if merged, merr := f.GetMergeCells(sheetName); merr == nil {
+		for _, mc := range merged {
+			startAxis, endAxis := mc.GetStartAxis(), mc.GetEndAxis()
+			// excelize.CellNameToCoordinates 返回 (列, 行, err)
+			sc, sr, serr := excelize.CellNameToCoordinates(startAxis)
+			ec, er, eerr := excelize.CellNameToCoordinates(endAxis)
+			if serr != nil || eerr != nil {
+				continue
+			}
+			// 转换为 0 基行列
+			r1, c1 := sr-1, sc-1
+			er, ec = er-1, ec-1
+			if er < r1 {
+				r1, er = er, r1
+			}
+			if ec < c1 {
+				c1, ec = ec, c1
+			}
+			rowSpan := er - r1 + 1
+			colSpan := ec - c1 + 1
+			if rowSpan < 1 {
+				rowSpan = 1
+			}
+			if colSpan < 1 {
+				colSpan = 1
+			}
+			if r1 >= 0 && r1 < len(tableCells) && c1 >= 0 && c1 < maxCols {
+				tableCells[r1][c1].RowSpan = rowSpan
+				tableCells[r1][c1].ColSpan = colSpan
+				// 标记被合并覆盖的单元格占位（不绘制内容）
+				for rr := r1; rr <= er; rr++ {
+					for cc := c1; cc <= ec; cc++ {
+						if (rr == r1 && cc == c1) || rr >= len(tableCells) || cc >= maxCols {
+							continue
+						}
+						tableCells[rr][cc].VMerge = 1
+						tableCells[rr][cc].Inline = nil
+					}
+				}
+			}
+		}
+	}
+
 	return core.Table{
 		Rows:  tableCells,
 		Style: sheetName,

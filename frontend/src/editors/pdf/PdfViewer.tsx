@@ -29,6 +29,10 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const renderTaskRef = useRef<any>(null)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
+  const [showThumbs, setShowThumbs] = useState(true)
+  const [thumbnails, setThumbnails] = useState<{ page: number; dataUrl: string }[]>([])
+  const [thumbsLoading, setThumbsLoading] = useState(false)
+  const thumbsPanelRef = useRef<HTMLDivElement>(null)
 
   // 加载 PDF.js 库 (如果尚未加载)
   const ensurePdfLib = useCallback(async () => {
@@ -63,10 +67,11 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
     }
     setLoading(true)
     setError('')
+    let doc: any = null
     try {
       const pdfjsLib = await ensurePdfLib()
       const loadingTask = pdfjsLib.getDocument(url)
-      const doc = await loadingTask.promise
+      doc = await loadingTask.promise
       setPdfDoc(doc)
       setNumPages(doc.numPages)
       setPageNum(1)
@@ -80,7 +85,61 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
     } finally {
       setLoading(false)
     }
+    // 异步生成缩略图（不阻塞主文档渲染）
+    if (doc) generateThumbnails(doc)
   }, [ensurePdfLib])
+
+  // 生成所有页面缩略图（小图）用于左侧导航栏
+  const generateThumbnails = useCallback(async (doc: any) => {
+    if (!doc) return
+    setThumbsLoading(true)
+    // 稍作延后，让主渲染区先把当前页画完，避免与同一 page 并发 render 冲突
+    // （PDF.js 不允许对同一 page 对象同时发起多次 render，否则当前页主画布会渲染失败变空白）
+    await new Promise<void>(r => setTimeout(r, 350))
+    try {
+      const total = doc.numPages
+      const thumbs: { page: number; dataUrl: string }[] = []
+      const THUMB_W = 110 // CSS 像素宽
+      for (let i = 1; i <= total; i++) {
+        const pg = await doc.getPage(i)
+        const base = pg.getViewport({ scale: 1 })
+        // 目标缩放使宽度约等于 THUMB_W
+        const scale = THUMB_W / base.width
+        const viewport = pg.getViewport({ scale })
+        const canvas = document.createElement('canvas')
+        const dpr = window.devicePixelRatio || 1
+        canvas.width = Math.ceil(viewport.width * dpr)
+        canvas.height = Math.ceil(viewport.height * dpr)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) continue
+        // 同一页可能被主渲染占用，渲染失败则退避重试，避免拖垮主画布
+        let ok = false
+        for (let attempt = 0; attempt < 5 && !ok; attempt++) {
+          try {
+            await pg.render({
+              canvasContext: ctx,
+              viewport: pg.getViewport({ scale: scale * dpr }),
+            }).promise
+            ok = true
+          } catch (err: any) {
+            if (err?.name === 'RenderingCancelledException') break
+            await new Promise<void>(r => setTimeout(r, 120))
+          }
+        }
+        if (!ok) continue
+        thumbs.push({ page: i, dataUrl: canvas.toDataURL('image/png') })
+        // 渐进式更新，避免大文档卡顿
+        if (i % 4 === 0 || i === total) {
+          setThumbnails([...thumbs])
+        }
+      }
+      setThumbnails(thumbs)
+    } catch (e) {
+      console.error('[PdfViewer] generateThumbnails failed:', e)
+    } finally {
+      setThumbsLoading(false)
+    }
+  }, [])
 
   // 渲染当前页
   useEffect(() => {
@@ -251,6 +310,15 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
     }
   }, [pdfOpenSignal, loadPdf])
 
+  // 自动滚动缩略图栏，使当前页可见
+  useEffect(() => {
+    if (!showThumbs || !thumbsPanelRef.current) return
+    const el = thumbsPanelRef.current.querySelector<HTMLElement>(`[data-testid="pdf-thumb-${pageNum}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [pageNum, showThumbs, thumbnails])
+
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)' }}>
       {/* 工具栏 */}
@@ -264,6 +332,18 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
         >
           📂 <span className="hidden sm:inline">{t('pdf.openFile')}</span>
         </button>
+
+        {pdfDoc && (
+          <>
+            <button
+              onClick={() => setShowThumbs(s => !s)}
+              data-testid="pdf-thumbs-toggle"
+              className="p-1.5 rounded-md transition-colors hover:bg-slate-100"
+              style={{ color: showThumbs ? 'var(--color-primary)' : 'var(--color-text)' }}
+              title={t('pdf.toggleThumbs')}
+            >🗂</button>
+          </>
+        )}
 
         {pdfDoc && (
           <>
@@ -351,8 +431,43 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
         )}
       </div>
 
-      {/* PDF 渲染区 */}
-      <div className="flex-1 overflow-auto flex justify-center p-4" style={{ background: 'var(--color-bg-alt)' }} data-testid="pdf-canvas-area">
+      {/* 主体：左侧缩略图导航栏 + 右侧渲染区 */}
+      <div className="flex flex-1 min-h-0">
+        {/* 左侧缩略图导航栏 */}
+        {showThumbs && pdfDoc && (
+          <div
+            ref={thumbsPanelRef}
+            className="flex-shrink-0 overflow-auto border-r p-2 space-y-2"
+            style={{ width: '140px', background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+            data-testid="pdf-thumbs-panel"
+          >
+            {thumbsLoading && thumbnails.length === 0 && (
+              <div className="text-xs text-center py-4" style={{ color: 'var(--color-text-muted)' }}>{t('pdf.loading')}</div>
+            )}
+            {thumbnails.map((th) => (
+              <button
+                key={th.page}
+                onClick={() => goToPage(th.page)}
+                data-testid={`pdf-thumb-${th.page}`}
+                className="block w-full rounded-md overflow-hidden transition-all"
+                style={{
+                  border: `2px solid ${th.page === pageNum ? 'var(--color-primary)' : 'transparent'}`,
+                  boxShadow: th.page === pageNum ? '0 0 0 2px var(--color-primary)' : '0 1px 2px rgba(0,0,0,0.15)',
+                  background: 'white',
+                }}
+                title={t('pdf.thumbPage', { n: th.page })}
+              >
+                <img src={th.dataUrl} alt={`Page ${th.page}`} className="w-full block" />
+                <div className="text-[10px] text-center py-0.5" style={{ color: 'var(--color-text-muted)', background: 'var(--color-bg-alt)' }}>
+                  {th.page}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* PDF 渲染区 */}
+        <div className="flex-1 overflow-auto flex justify-center p-4" style={{ background: 'var(--color-bg-alt)' }} data-testid="pdf-canvas-area">
         {loading && (
           <div className="flex flex-col items-center justify-center h-full">
             <div className="animate-spin text-4xl mb-4">⏳</div>
@@ -395,6 +510,7 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
             style={{ background: 'white', borderRadius: '4px' }}
           />
         )}
+        </div>
       </div>
 
       {/* 底部状态栏 */}

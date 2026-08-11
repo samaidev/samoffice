@@ -47,7 +47,7 @@ function blockToPM(b: Block, schema: Schema): Node {
     }
     case 'paragraph': {
       const p = b as any
-      return schema.node('paragraph', applyParaAttrsFromProps(p, { style: p.style || '', align: p.align || '' }), inlineToPM(p.inline, schema))
+      return schema.node('paragraph', applyParaAttrsFromProps(p, { style: p.style || '', align: p.align || '', id: p.id || '' }), inlineToPM(p.inline, schema))
     }
     case 'codeBlock': {
       const c = b as any
@@ -233,7 +233,7 @@ export function proseMirrorToUDM(doc: Node, opts?: { pageNumber?: PageNumberConf
 function pmToBlock(node: Node): Block | null {
   switch (node.type.name) {
     case 'paragraph':
-      return { inline: pmToInline(node), style: node.attrs.style || '', align: node.attrs.align || '', props: extractParaProps(node.attrs) }
+      return { inline: pmToInline(node), style: node.attrs.style || '', align: node.attrs.align || '', id: node.attrs.id || '', props: extractParaProps(node.attrs) }
     case 'heading':
       return { level: node.attrs.level, inline: pmToInline(node), style: node.attrs.style || '', id: node.attrs.id || '', align: node.attrs.align || '', props: extractParaProps(node.attrs) }
     case 'bullet_list':
