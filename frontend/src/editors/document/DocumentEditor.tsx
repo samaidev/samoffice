@@ -347,7 +347,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const FONTS = [
     { name: t('doc.font.default'), value: '' },
-    ...dedupedFonts.sort().slice(0, FONT_CAP).map(f => ({ name: f, value: f })),
+    ...dedupedFonts.sort().slice(0, FONT_CAP).map(f => ({ name: f, value: f, fontFamily: f })),
   ]
   const FONT_SIZES = [
     { name: t('doc.size.small'), value: '12px' }, { name: t('doc.size.body'), value: '15px' },
@@ -2317,10 +2317,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 value={activeFont}
                 onChange={v => setFont(v)}
                 options={(() => {
-                  const opts = FONTS.map(f => ({ label: f.name, value: f.value }))
+                  const opts = FONTS.map(f => ({ label: f.name, value: f.value, fontFamily: (f as any).fontFamily }))
                   // 文档里实际使用的字体（可能不在预置列表，如解析进来的中文/旧格式值）也要能选中显示
                   if (activeFont && !opts.some(o => o.value === activeFont)) {
-                    opts.push({ label: activeFont, value: activeFont })
+                    opts.push({ label: activeFont, value: activeFont, fontFamily: activeFont })
                   }
                   return opts
                 })()}

@@ -6,6 +6,8 @@ export interface DropdownOption {
   label: string
   value: string
   color?: string
+  // 字体选择器等场景：用该字体自身渲染标签，让用户预览字体效果
+  fontFamily?: string
 }
 
 interface DropdownProps {
@@ -124,7 +126,7 @@ export function Dropdown({ value, onChange, options, className, style, title, pl
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', ['--wails-draggable' as any]: 'no-drag', ...style }}
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>{selected ? selected.label : (placeholder ?? '')}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left', fontFamily: selected?.fontFamily || undefined }}>{selected ? selected.label : (placeholder ?? '')}</span>
         <span style={{ fontSize: '9px', opacity: 0.7, marginLeft: 4, flexShrink: 0 }}>▾</span>
       </button>
       )}
@@ -144,7 +146,7 @@ export function Dropdown({ value, onChange, options, className, style, title, pl
               style={{ color: 'var(--color-text)', whiteSpace: 'nowrap', background: o.value === value ? 'var(--color-bg-alt)' : 'transparent', textAlign: 'left' } as CSSProperties}
             >
               {o.color && <span style={{ width: 12, height: 12, borderRadius: 2, background: o.color, border: '1px solid var(--color-border)', flexShrink: 0 }} />}
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.label}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: o.fontFamily || undefined }}>{o.label}</span>
             </button>
           ))}
         </div>,
