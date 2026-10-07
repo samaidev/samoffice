@@ -184,6 +184,7 @@ export function createPaginationPlugin(
       const lineBreaks = new Set<number>()  // 行级断点（文档 pos）
       const breakMargin = new Map<number, number>() // 断点 -> 需注入的 margin-top
       const blockPage: number[] = new Array(K).fill(0)
+      const actualTops: number[] = new Array(K).fill(0)
 
       // 记录每个块“被断点推下后”的实际底部坐标，用于最终算出真实内容总高度 → 正确页数
       let contentMaxY = 0
@@ -232,43 +233,52 @@ export function createPaginationPlugin(
           // 关键：比较“整行底边”（top + height）与“当前页内容区底边”。
           // 仅当整行放不下当前页时才断，断点把该行推到“下一个能容纳它的页”内容区顶，
           // 新页顶端从内容区顶开始，既不超下直角、也不留白。天然支持跨任意多页。
-          let curPage = blockPageNo
-          let prevLineBottom = blockTop // 上一行的底边，用于判断“本行底是否超出当前页”
+          //
+          // 修复（2026-10-07）：旧实现里 curPage 从 blockPageNo 起步、条件用
+          // curPage > blockPageNo，导致“首行一旦跨页，后续所有行都被误判为跨页断行”，
+          // 整段被堆到一个页顶，块高又按整块计，第二页起内容溢出下直角。
+          // 现改为：每行从“上一行所在页”继续，仅当本行底边真正超出当前页底时才
+          // 断到下一页；块视觉顶 = 块自然顶 + 首个断点行的推下量；内容底 = 最后一行
+          // 渲染底（不是整块高度）。
+          let prevLinePage = blockPageNo // 上一行所在页
+          let cumShift = 0              // 块内已插入断点的累计推下量：widget margin 生效后，
+                                        // 断点行及其后所有行都被推下，后续行的
+                                        // “渲染坐标” = 自然坐标 + cumShift。
+                                        // （SUPervisor PATCH 2026-10-07：修复多断块残留溢出）
+          let firstBreakShift = 0       // 首个断点造成的块整体推下量（视觉顶偏移，诊断用）
+          let renderedBottom = blockTop // 最后一行渲染后的底边（含 cumShift）
           for (const ln of lineTops[k]) {
-            const lineTop = blockTop + ln.top
-            const lineBottom = lineTop + ln.height
-            // 若本行底边超出当前页内容区底边 → 需要断到下一页
-            while (lineBottom > pageBottomOf(curPage) - 0.5) {
-              curPage += 1
+            const lineTop = blockTop + ln.top + cumShift // 行“渲染顶”（含更早断点推下）
+            const lineBottom = lineTop + ln.height       // 行渲染底
+            // 本行落在哪一页：从上一行所在页继续，渲染行底超出当前页底则向后找
+            let pg = prevLinePage
+            while (lineBottom > pageBottomOf(pg) - 0.5) {
+              pg += 1
             }
-            if (curPage > blockPageNo || lineTop < prevLineBottom) {
-              // 在该行首插入断点，把它推到 curPage 页内容区顶
+            if (pg > prevLinePage) {
+              // 真正跨页：在该行首插入断点，推到 pg 页内容区顶。
+              // margin 只需补“页顶 - 当前渲染顶”的增量差；
+              // 若按自然坐标算，块内第二个及以后的断点会把内容
+              // 多推 cumShift，整段滑出页底下直角（多断块溢出根因）。
               const pos = froms[k] + 1 + ln.offset
-              const mt = Math.max(0, pageTopOf(curPage) - lineTop)
-              breakMargin.set(pos, mt)
-              lineBreaks.add(pos)
-              prevLineBottom = pageTopOf(curPage) + ln.height // 断后本行底落到新页
+              const mt = Math.max(0, pageTopOf(pg) - lineTop)
+              if (mt > 0) {
+                breakMargin.set(pos, mt)
+                lineBreaks.add(pos)
+              }
+              if (firstBreakShift === 0) firstBreakShift = mt
+              cumShift += mt
+              renderedBottom = pageTopOf(pg) + ln.height
             } else {
-              prevLineBottom = lineBottom
+              renderedBottom = lineBottom
             }
+            prevLinePage = pg
           }
-          // 块被各断点推下后的实际底部
-          const lastMt = 0
-          void lastMt
-          // 用块自然底 + 该块累计的最大 margin（取最大单个断点 mt 即可近似，因逐行互不重叠）
-          let maxMt = 0
-          for (const ln of lineTops[k]) {
-            const lineTop = blockTop + ln.top
-            let pg = blockPageNo
-            const lineBottom = lineTop + ln.height
-            while (lineBottom > pageBottomOf(pg) - 0.5) pg += 1
-            const mt = Math.max(0, pageTopOf(pg) - lineTop)
-            if (mt > maxMt) maxMt = mt
-          }
-          actualTop = blockTop + maxMt
-          blockPage[k] = curPage
-          contentMaxY = Math.max(contentMaxY, actualTop + blockH)
+          actualTop = blockTop + firstBreakShift
+          blockPage[k] = prevLinePage
+          contentMaxY = Math.max(contentMaxY, renderedBottom)
         }
+        actualTops[k] = actualTop
       }
 
       // 总页数：由“真实内容最大坐标”映射，而非仅看块页码 ——
@@ -379,6 +389,22 @@ export function createPaginationPlugin(
                 })()
               : null,
             bodyTop: (window as any).__bodyTop ? (window as any).__bodyTop.bodyTop : null,
+            // 逐块明细：类型/自然顶/自然底/所在页/实际顶/实际底（用于诊断第二页及之后的分页）
+            blocks: children.map((el, k) => ({
+              type: nodes[k].type.name,
+              top: Math.round(cumTop[k]),
+              h: Math.round(el.offsetHeight || 0),
+              page: blockPage[k],
+              actualTop: Math.round(actualTops[k]),
+              actualBottom: Math.round(actualTops[k] + el.offsetHeight),
+            })),
+            lineBreakPositions: [...lineBreaks].slice(0, 200),
+            blockBreakPositions: [...blockBreaks].slice(0, 200),
+            blockPageArr: blockPage,
+            pageBottomRects: Array.from({ length: pageCount }, (_, i) => ({
+              top: Math.round(pageTopOf(i)),
+              contentBottom: Math.round(pageBottomOf(i)),
+            })),
           }
           try {
             const go = (window as any).go?.main?.App
