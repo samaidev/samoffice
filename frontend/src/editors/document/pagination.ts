@@ -44,6 +44,7 @@ export function createPaginationPlugin(
   let scheduled = false
   let lastPageSig = ''
   let lastBlockPagesSig = ''
+  let lastPgLogSig = ''
 
   // 测量可拆块（段落/标题/代码块）内部“行首”位置：
   // 返回 [{offset, top}]，offset 为块内字符偏移（用于换算文档 pos），
@@ -183,17 +184,25 @@ export function createPaginationPlugin(
       const blockBreaks = new Set<number>() // 块级断点（from 位置）
       const lineBreaks = new Set<number>()  // 行级断点（文档 pos）
       const breakMargin = new Map<number, number>() // 断点 -> 需注入的 margin-top
+      const breakDetails = new Map<number, { mt: number; landY: number; pg: number }>() // 诊断：断点落点
       const blockPage: number[] = new Array(K).fill(0)
       const actualTops: number[] = new Array(K).fill(0)
 
       // 记录每个块“被断点推下后”的实际底部坐标，用于最终算出真实内容总高度 → 正确页数
       let contentMaxY = 0
 
+      // 纯正向一次性计算：runningShift = 前面所有块累计注入的断页推下量。
+      // 测量阶段（pg-measuring）已剔除全部断页 margin（块级 .pg-brk + 行级 .pg-linebreak），
+      // cumTop 是纯自然坐标；这里沿文档顺序把每个块放到“自然位置 + 前面累计推下”的
+      // 渲染坐标上做判定，任何一轮重算都得到完全相同的结果 —— 无自反馈、不震荡。
+      // （SUPervisor FIX 2026-10-07：根治块级断点 margin 自反馈导致的 2-cycle 震荡，
+      //  即“同一文档分页结果来回跳/静置时 CPU 持续重算/护眼切换后分页行距漂移”。）
+      let runningShift = 0
       for (let k = 0; k < K; k++) {
         const name = nodes[k].type.name
         const forceBreak =
           name === 'page_break' || (nodes[k].attrs && (nodes[k].attrs as any).pageBreakBefore)
-        const blockTop = cumTop[k]
+        const blockTop = cumTop[k] + runningShift
         const blockH = children[k].offsetHeight
         const blockPageNo = pageOf(blockTop)
         // 该块“被推下后”的实际顶部坐标（含已计算的断点 margin，用于底部累计）
@@ -222,7 +231,9 @@ export function createPaginationPlugin(
               breakMargin.set(froms[k], mt)
               blockBreaks.add(froms[k])
             }
+            breakDetails.set(froms[k], { mt, landY: blockTop + mt, pg: targetPage })
             actualTop = blockTop + mt
+            runningShift += mt
             blockPage[k] = targetPage
           } else {
             blockPage[k] = blockPageNo
@@ -266,6 +277,7 @@ export function createPaginationPlugin(
                 breakMargin.set(pos, mt)
                 lineBreaks.add(pos)
               }
+              breakDetails.set(pos, { mt, landY: lineTop + mt, pg })
               if (firstBreakShift === 0) firstBreakShift = mt
               cumShift += mt
               renderedBottom = pageTopOf(pg) + ln.height
@@ -274,6 +286,8 @@ export function createPaginationPlugin(
             }
             prevLinePage = pg
           }
+          // 本块内部注入的全部行级推下量并入全局累计，后续块从正确位置起算
+          runningShift += cumShift
           actualTop = blockTop + firstBreakShift
           blockPage[k] = prevLinePage
           contentMaxY = Math.max(contentMaxY, renderedBottom)
@@ -304,6 +318,7 @@ export function createPaginationPlugin(
         decos.push(
           Decoration.node(from, to, {
             style: 'margin-top: ' + (breakMargin.get(p) || 0) + 'px',
+            class: 'pg-brk',
           }),
         )
       }
@@ -400,15 +415,36 @@ export function createPaginationPlugin(
             })),
             lineBreakPositions: [...lineBreaks].slice(0, 200),
             blockBreakPositions: [...blockBreaks].slice(0, 200),
+            breakDetails: [...breakDetails.entries()].slice(0, 120).map(([p, v]) => ({ pos: p, mt: Math.round(v.mt), landY: Math.round(v.landY), pg: v.pg })),
+            domProbe: (() => {
+              try {
+                const host = dom.parentElement
+                const paper = document.querySelector('.pg-paper')
+                const hostPad = host ? parseFloat(getComputedStyle(host).paddingTop) || 0 : -1
+                return {
+                  hostPadTop: hostPad,
+                  domTop: Math.round(dom.getBoundingClientRect().top),
+                  hostTop: host ? Math.round(host.getBoundingClientRect().top) : -1,
+                  firstPaperTop: paper ? Math.round(paper.getBoundingClientRect().top) : -1,
+                  firstBlockTop: Math.round(children[0].getBoundingClientRect().top),
+                }
+              } catch { return null }
+            })(),
             blockPageArr: blockPage,
             pageBottomRects: Array.from({ length: pageCount }, (_, i) => ({
               top: Math.round(pageTopOf(i)),
               contentBottom: Math.round(pageBottomOf(i)),
             })),
           }
+          // 仅在装饰签名变化（分页结果真正变化）时写诊断日志，
+          // 避免外部周期性事务触发重算时以 ~2次/秒 持续膨胀 boot.log。
+          // （SUPervisor PATCH 2026-10-07）
           try {
-            const go = (window as any).go?.main?.App
-            if (go?.LogError) go.LogError('PAGINATION_DEBUG ' + JSON.stringify((window as any).__pg))
+            if (newSig !== lastPgLogSig) {
+              lastPgLogSig = newSig
+              const go = (window as any).go?.main?.App
+              if (go?.LogError) go.LogError('PAGINATION_DEBUG ' + JSON.stringify((window as any).__pg))
+            }
           } catch { /* ignore */ }
         } catch {
           /* ignore */

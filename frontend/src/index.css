@@ -1001,26 +1001,48 @@ table td, table th {
 /* === 行级跨页断点 (paragraph line break) ===
    段落过长跨页时，在行边界插入一个 0 尺寸、不占行的占位元素，
    其 margin-top 把后续行整体推到下一页，实现“段落拆成两半”。
-   关键：必须是 0 尺寸、position:absolute、不占行 —— 否则它会强行把后续
-   文字折到下一“逻辑行”，污染行高测量，导致断点 margin 算错、文字溢出下直角。
+   关键：必须是「块级 + 零高 + 零内容」，而不是 inline-block。
+   根因（2026-10-07 实测修复）：inline-block 版断点是所在行的「行内内容」，
+   它的 margin-top 作用在本行行盒上而不在本行之后，导致两个错误：
+     (1) 实际推移量 = margin − 行高（实测 200px 只推了 173px，恰好少一个行高 27px）；
+     (2) 断点所在行自身被顶上去，而是后续行下移 —— 语义与分页相反。
+   每个断点少推一个行高，误差随页数累积（12 页即偏约 324px），
+   表现为「越往后翻页越偏、文字压住页边距」，逐页微调 per/pageStep 永远调不准。
+   改成 display:block 后，margin-top 精确等于推移量、且只推移断点之后的行
+   （实测：200px margin → 断点后行精确下移 200px，断点前一行不动，段落行数不变）。
    参考 LibreOffice SwTextFrameBreak：断点本身不占版面，只通过 margin 推移后续内容。 */
 .pg-linebreak {
-  /* 必须在流内：绝对定位会让 margin-top 完全失效，后续行不会被推下去，
-     表现为“断点算出来了但文字照样越过下直角”。
-     用 inline-block + 0 宽高 + vertical-align:top，既参与流布局让 margin
-     生效，又不撑高所在行、不产生可见字形。 */
-  display: inline-block;
-  width: 0;
+  /* 块级零高：margin-top 精确推移断点之后的内容，自身不占任何高度。
+     line-height / font-size 归零防止产生额外行盒高度；
+     不能用 position:absolute（会脱离流、margin 失效）。 */
+  display: block;
+  width: auto;
   height: 0;
+  min-height: 0;
+  margin-left: 0;
+  margin-right: 0;
+  padding: 0;
+  border: 0;
   overflow: hidden;
-  vertical-align: top;
-  margin-top: 0;
+  line-height: 0;
+  font-size: 0;
   pointer-events: none;
 }
 
 /* 测量阶段：把所有已注入的断点 margin 归零，
    使 offsetTop / range rect 读到的是“纯自然连续坐标”，
-   否则上一轮的 margin 会污染本轮测量，造成行数测漏、坐标漂移。 */
+   否则上一轮的 margin 会污染本轮测量，造成行数测漏、坐标漂移。
+
+   块级断点（Decoration.node 注入的 .pg-brk margin-top）同样归零：
+   否则断点 margin 影响测量、测量又改变断点 margin，形成自反馈震荡
+   （分页结果来回跳、静置时持续重算、护眼切换后分页/行距漂移）。
+
+   注：行级断点已改为 display:block 零高，margin 归零时仍不产生额外行盒，
+   因此测量坐标与断点完全退化。
+   Supervisor FIX 2026-10-07 */
+.pg-measuring > .pg-brk {
+  margin-top: 0 !important;
+}
 .pg-measuring .pg-linebreak {
   margin-top: 0 !important;
 }

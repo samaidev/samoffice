@@ -2981,7 +2981,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <div ref={sheetsLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
           {pageRects.map((p, i) => (
             <Fragment key={i}>
-              <div className={showGridlines ? 'page-grid' : ''} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
+              <div className={(showGridlines ? 'page-grid ' : '') + 'pg-paper'} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
                 {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾 */}
                 {(footnotesByPage[i] || []).length > 0 && (
                   <div style={{
