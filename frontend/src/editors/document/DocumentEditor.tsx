@@ -752,8 +752,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [pageRects, setPageRects] = useState<{ top: number; height: number }[]>([])
   const pageContentPerPage = Math.max(50, pageHeightPx - docMargins.top - docMargins.bottom)
   const pageGap = Math.max(16, Math.round(pageHeightPx * 0.03))
-  const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx })
-  metricsRef.current = { pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx }
+  const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100 })
+  metricsRef.current = { pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100 }
   // 容器高度随纸页与留白自动增高，避免多页文档被裁切
   const pageRefMinH = pageRects.length
     ? Math.max(...pageRects.map((r) => bodyTop + r.top + r.height)) + 24

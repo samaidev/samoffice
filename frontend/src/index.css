@@ -1028,10 +1028,12 @@ table td, table th {
 /* === 护眼模式 (eye care) ===
    护眼绿只由「纸页层(每页)」提供（纸页背景在护眼模式下为护眼绿），
    ProseMirror 编辑区本身保持透明，页间留白保持工作区中性色，
-   避免连续绿底在分页处跨页溢出。 */
+   避免连续绿底在分页处跨页溢出。
+   注意：这里绝不能使用 filter（会创建新的 containing block，改变子元素
+   offsetParent 链，导致分页引擎基于 offsetTop 的测量在护眼/非护眼切换时
+   整体偏移 marginTop，表现为“切换护眼模式后行距/分页完全不一样”）。 */
 .eye-care-mode .ProseMirror {
   background-color: transparent !important;
-  filter: sepia(0.1) brightness(0.97);
 }
 
 /* === Text box / Shape resize + selection === */

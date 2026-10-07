@@ -12,6 +12,8 @@ export interface PageMetrics {
   marginBottom: number
   /** 整页高度（px），用于末页至少撑满一张纸 */
   pageHeightPx: number
+  /** 缩放比例（1 = 100%），用于把 getBoundingClientRect 的视觉像素归一化为布局像素 */
+  zoom: number
 }
 
 /** 单张纸页矩形，坐标为“编辑器内容相对坐标”（与子节点 offsetTop 同坐标系） */
@@ -133,14 +135,15 @@ export function createPaginationPlugin(
       // 因此第 n 页内容区顶 = n*pageStep（不再额外加 marginTop），断点判定直接与此比较。
       const pageTopOf = (n: number) => n * pageStep
       const blockTopY = (el: HTMLElement) => {
-        // 块顶相对编辑器内容的连续坐标（不含任何断页 margin）
-        let y = 0
-        let n: HTMLElement | null = el
-        while (n && n !== dom) {
-          y += n.offsetTop
-          n = n.offsetParent as HTMLElement | null
-        }
-        return y
+        // 块顶相对编辑器内容的连续坐标（不含任何断页 margin）。
+        // 用 getBoundingClientRect 差值而非 offsetParent 链累加 offsetTop：
+        // CSS filter / transform / contain 等属性会改变子元素的 offsetParent，
+        // 导致 offsetTop 累加链在不同 UI 状态（如护眼模式切换）下整体偏移，
+        // 表现为“切换护眼模式/标尺后分页和行距完全不同”。
+        // rect 返回的是视觉（缩放后）像素，除以 zoom 归一化为布局像素，
+        // 与 pageTopOf/pageStep 的布局坐标系一致。
+        const z = m.zoom > 0 ? m.zoom : 1
+        return (el.getBoundingClientRect().top - dom.getBoundingClientRect().top) / z
       }
       const blockIndexOf = (pos: number) => {
         for (let k = 0; k < K; k++) {
