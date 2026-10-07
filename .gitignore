@@ -58,3 +58,6 @@ packaging/windows/stage/
 *.err
 _verify_tmp/
 
+  
+# LLM dataset scripts (not part of samoffice)  
+/llm_dataset/  
