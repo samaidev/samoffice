@@ -196,11 +196,23 @@ export function createPaginationPlugin(
         let actualTop = blockTop
 
         if (forceBreak || !splittable(name)) {
-          // 整块跳页：块底超出当前页内容区，或强制分页 → 推到“块顶所在页的下一页”顶部
+          // 整块跳页：块底超过"当前页内容区底边（下直角）"或强制分页时，
+          // 把整块推到能容纳它的下一页顶部，保证内容不越过页面下直角标记。
+          // 关键修复：原实现用 pageOf(blockBottom) > blockPageNo（块底是否跨过整页
+          // 步长 pageStep）判定断页 —— 当块底落在 (下直角, 下一页步长) 区间时，
+          // 内容已越过下直角却未跨过整页步长，会被误判为"无需断页"，导致最后一段/
+          // 列表/表格等内容溢出页面下直角之外，不按直角标记分页。
+          // 现与可拆块一致，用"块底是否超过当前页内容区底边"判定（pageBottomOf）。
           const blockBottom = blockTop + blockH
-          const blockBottomPage = pageOf(blockBottom)
-          if (forceBreak || blockBottomPage > blockPageNo) {
-            const targetPage = blockPageNo + 1
+          if (forceBreak || blockBottom > pageBottomOf(blockPageNo) - 0.5) {
+            // 目标页：默认推到"块顶所在页的下一页"顶部。
+            // 若块高不超过一页内容区高度（能整块放下），直接推到块底自然落在的页
+            // （pageOf(blockBottom)），使整块恰好放入该页内容区内、不越下直角；
+            // 块高超过一页内容区（表格/长图等）时保持推一页，允许其自然溢出。
+            let targetPage = blockPageNo + 1
+            if (!forceBreak && blockH <= per) {
+              targetPage = Math.max(targetPage, pageOf(blockBottom))
+            }
             const mt = Math.max(0, pageTopOf(targetPage) - blockTop)
             if (mt > 0) {
               breakMargin.set(froms[k], mt)
