@@ -208,6 +208,16 @@ export function createPaginationPlugin(
         // 该块“被推下后”的实际顶部坐标（含已计算的断点 margin，用于底部累计）
         let actualTop = blockTop
 
+        // 零高不可拆块（如 footnote_section：NodeView 把脚注渲染到别处，本块流内高度为 0）：
+        // 完全跳过断页决策。这类块的流内 rect 会随 NodeView 锚点轻微波动，
+        // 若对其断页，断点会反复加上/移除，形成 2-cycle 震荡（分页结果来回跳、
+        // 静置持续重算、boot.log 以 ~2条/秒 膨胀）。零高块不可见，断页毫无意义。
+        if (!splittable(name) && !forceBreak && blockH <= 0) {
+          blockPage[k] = blockPageNo
+          actualTops[k] = blockTop
+          continue
+        }
+
         if (forceBreak || !splittable(name)) {
           // 整块跳页：块底超过"当前页内容区底边（下直角）"或强制分页时，
           // 把整块推到能容纳它的下一页顶部，保证内容不越过页面下直角标记。
@@ -228,7 +238,14 @@ export function createPaginationPlugin(
             }
             const mt = Math.max(0, pageTopOf(targetPage) - blockTop)
             if (mt > 0) {
-              breakMargin.set(froms[k], mt)
+              // 应用补偿：Decoration 的内联 margin-top 会【替换】块自身的自然上边距
+              // （与上一块 margin-bottom 折叠后的 g），而不是叠加。若只注入 mt，
+              // 实际落点比模型高 g（实测 page_break 每个少 16px、表格少 12px），
+              // 且每个块级断点累计一次 g，多页文档误差持续增长。
+              // g = 块自然顶 - 上一块自然底（纯自然坐标，pg-measuring 下测量，无反馈）。
+              const prevNatBottom = k > 0 ? cumTop[k - 1] + children[k - 1].offsetHeight : 0
+              const natGap = Math.max(0, cumTop[k] - prevNatBottom)
+              breakMargin.set(froms[k], mt + natGap)
               blockBreaks.add(froms[k])
             }
             breakDetails.set(froms[k], { mt, landY: blockTop + mt, pg: targetPage })
@@ -311,7 +328,14 @@ export function createPaginationPlugin(
       for (const p of blockBreaks) {
         const idx = froms.indexOf(p)
         if (idx < 0) continue
-        if (nodes[idx].type.name === 'page_break') continue
+        // 关键修复（2026-10-08）：page_break 节点同样要应用 margin-top！
+        // 旧代码在此 skip 掉 page_break，导致其判定出的推下量（如 mt=675）
+        // 只进了 runningShift 模型、从不落到 DOM —— 自第一个显式分页符起，
+        // 渲染整体比模型上浮 675px，且每个分页符再累计一次（三个分页符即 2090px）。
+        // 表现：分页符之后的所有内容整体“浮”到纸张上方，大量文本落在两页之间的
+        // 空隙里、压进页边距，且越往后越严重。
+        // page_break 节点是普通流内块（h=37 的标记条），margin-top 语义与其它块一致：
+        // 把标记条本身推到新页内容区顶，其后内容从新页顶部顺排。
         const from = froms[idx]
         const to = from + nodes[idx].nodeSize
         if (to > docSize) continue
@@ -361,6 +385,42 @@ export function createPaginationPlugin(
           } catch { /* ignore */ }
         }
       }
+
+      // 渲染真值转储：仅在分页签名变化时输出一次（延迟 250ms 等 ProseMirror
+      // 完成新 decoration 的渲染），供“模型 vs 渲染”精确对账。
+      // 空闲时外部周期性事务会触发重算但签名不变 —— 此时绝不输出，防止日志膨胀。
+      try {
+        const nowMs = Date.now()
+        if (newSig !== lastPgLogSig && nowMs - ((window as any).__lastRenderDumpTs || 0) > 1500) {
+          ;(window as any).__lastRenderDumpTs = nowMs
+          const dumpRender = () => {
+          const z = m.zoom > 0 ? m.zoom : 1
+          const dRect = dom.getBoundingClientRect()
+          const papers = Array.from(document.querySelectorAll('.pg-paper')).map((n: any) => {
+            const r = n.getBoundingClientRect()
+            return { top: Math.round(r.top), h: Math.round(r.height), inFlowTop: Math.round((r.top - dRect.top) / z) }
+          })
+          const container = papers.length ? (document.querySelector('.pg-paper') as HTMLElement)?.parentElement : null
+          const widgets = Array.from(dom.querySelectorAll('.pg-linebreak')).slice(0, 50).map((n: any) => {
+            const r = n.getBoundingClientRect()
+            const cs = getComputedStyle(n)
+            return { mt: parseFloat(cs.marginTop) || 0, disp: cs.display, h: Math.round(r.height), inFlowTop: Math.round((r.top - dRect.top) / z) }
+          })
+          const blocksR = children.slice(0, 80).map((el, k) => {
+            const r = el.getBoundingClientRect()
+            return { i: k, t: nodes[k].type.name, inFlowTop: Math.round((r.top - dRect.top) / z), h: Math.round(el.offsetHeight) }
+          })
+          const go2 = (window as any).go?.main?.App
+          if (go2?.LogError) go2.LogError('PAGINATION_RENDER ' + JSON.stringify({
+            domTop: Math.round(dom.getBoundingClientRect().top), zoom: z,
+            containerTop: container ? Math.round(container.getBoundingClientRect().top) : -1,
+            bodyTop: (window as any).__bodyTop || null,
+            papers, widgets, blocksR,
+          }))
+          }
+          setTimeout(dumpRender, 250)
+        }
+      } catch { /* ignore */ }
 
       // 纸张矩形：高度恒为 pageHeightPx，绝对不会因为内容/跨页而变化。
       if (onPages) {
