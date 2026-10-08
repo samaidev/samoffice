@@ -38,13 +38,16 @@ const paginationKey = new PluginKey<DecorationSet>('pagination')
 export function createPaginationPlugin(
   getMetrics: () => PageMetrics,
   onCount: (n: number) => void,
-  onPages?: (rects: PageRect[]) => void,
+  onPages?: (rects: PageRect[], contentMaxY: number) => void,
   onBlockPages?: (pages: number[]) => void,
 ) {
   let scheduled = false
   let lastPageSig = ''
   let lastBlockPagesSig = ''
   let lastPgLogSig = ''
+  let lastSkipSig = ''
+  let lastDocSig = ''
+  let lastContentMaxY = 0
 
   // 测量可拆块（段落/标题/代码块）内部“行首”位置：
   // 返回 [{offset, top}]，offset 为块内字符偏移（用于换算文档 pos），
@@ -109,8 +112,22 @@ export function createPaginationPlugin(
       const dom = view.dom as HTMLElement
       const children = Array.from(dom.children) as HTMLElement[]
       const topCount = view.state.doc.childCount
-      // 结构不一致时放弃分页，避免错位
-      if (children.length !== topCount) return
+      // 结构不一致时放弃分页，避免错位。
+      // 但必须留下诊断痕迹：NodeView（如 footnote_section）可能在某些状态下改变
+      // 顶级 DOM 结构，使本分支持续命中 —— 分页引擎整体“静默死亡”，装饰与纸张层
+      // 永久停留旧值（表现为内容/纸张错位且不再更新）。输出 PAGINATION_SKIP 便于定位。
+      if (children.length !== topCount) {
+        try {
+          const skipSig = children.length + '/' + topCount
+          if (skipSig !== lastSkipSig) {
+            lastSkipSig = skipSig
+            const kinds = children.map((c) => (c as HTMLElement).className || (c as HTMLElement).tagName).join(',')
+            const goS = (window as any).go?.main?.App
+            if (goS?.LogError) goS.LogError('PAGINATION_SKIP dom=' + children.length + ' doc=' + topCount + ' kinds=' + kinds.slice(0, 400))
+          }
+        } catch { /* ignore */ }
+        return
+      }
 
       // 收集顶级块的位置与节点
       const froms: number[] = []
@@ -157,6 +174,12 @@ export function createPaginationPlugin(
       // 其余块（表格 / 图片 / 列表 / 文本框 / 分页符等）整块跳页，不可拆。
       const splittable = (name: string) =>
         name === 'paragraph' || name === 'heading' || name === 'code_block'
+      // 子块级可拆：表格按 table_row、列表按 listItem 跨页断开（Word/LibreOffice 语义）。
+      // 旧实现把表格/列表当不可拆整块跳页：块底只要放不下当前页就整体推到下一页，
+      // 在前一页留下大片空白（用户观感“表格/文献分页不正常”）；高于一页的表格还会
+      // 整块溢出下直角。现在按子块拆：能放下的行/条目留在本页，放不下的推到下一页顶。
+      const rowSplittable = (name: string) =>
+        name === 'table' || name === 'ordered_list' || name === 'bullet_list'
 
       // 测量阶段：临时把已注入的行级断点 widget margin 归零，
       // 这样读到的 offsetTop 是“纯自然连续坐标”，与上一次应用的 decoration 无关。
@@ -165,6 +188,29 @@ export function createPaginationPlugin(
 
       // 每个顶级块顶部的“自然连续坐标”（相对编辑器内容，不含断页 margin）。
       const cumTop: number[] = children.map((el) => blockTopY(el))
+
+      // 子块几何：table → tbody>tr；list → li。相对块顶的像素（布局像素）。
+      // 在 pg-measuring（断点 margin/top 已剔除）下测量，得到纯自然坐标。
+      const subTops: { top: number; h: number }[][] = children.map(() => [])
+      // 子块文档位置：node.forEach 给出 (child, offset) —— 绝对 from = 块 from + 1 + offset
+      const subPos: { pos: number; size: number }[][] = children.map(() => [])
+      for (let k = 0; k < K; k++) {
+        if (!rowSplittable(nodes[k].type.name)) continue
+        const nd = nodes[k]
+        nd.forEach((child: any, coff: number) => {
+          subPos[k].push({ pos: froms[k] + 1 + coff, size: child.nodeSize })
+        })
+        const el = children[k]
+        const elTop = el.getBoundingClientRect().top
+        const z = m.zoom > 0 ? m.zoom : 1
+        const rows = nd.type.name === 'table'
+          ? Array.from(el.querySelectorAll('tbody > tr'))
+          : Array.from(el.querySelectorAll(':scope > li'))
+        for (const row of rows as HTMLElement[]) {
+          const r = row.getBoundingClientRect()
+          subTops[k].push({ top: (r.top - elTop) / z, h: row.offsetHeight })
+        }
+      }
 
       // 测量可拆块内部的“行首”位置（相对块顶的像素）
       const lineTops: { offset: number; top: number; height: number }[][] = children.map(() => [])
@@ -190,6 +236,9 @@ export function createPaginationPlugin(
 
       // 记录每个块“被断点推下后”的实际底部坐标，用于最终算出真实内容总高度 → 正确页数
       let contentMaxY = 0
+      // 子块级断点（表格行 / 列表条目）与表格位移补高
+      const rowBreaks: { pos: number; size: number; mt: number; isTable: boolean }[] = []
+      const tablePad = new Map<number, number>()
 
       // 纯正向一次性计算：runningShift = 前面所有块累计注入的断页推下量。
       // 测量阶段（pg-measuring）已剔除全部断页 margin（块级 .pg-brk + 行级 .pg-linebreak），
@@ -198,6 +247,25 @@ export function createPaginationPlugin(
       // （SUPervisor FIX 2026-10-07：根治块级断点 margin 自反馈导致的 2-cycle 震荡，
       //  即“同一文档分页结果来回跳/静置时 CPU 持续重算/护眼切换后分页行距漂移”。）
       let runningShift = 0
+      // 尾部“无文字内容”的连续块豁免断页（Supervisor FIX 2026-10-08）：
+      // .doc 导入常在文末产生一串空段落，它们各占一行行高、逐个被断页推挤，
+      // 每跨过一页就多出一张空白纸（用户主诉“文本后面大量空白页”）。
+      // 这些块不含任何可见文字，豁免它们的断页决策：
+      //   - 不产生断点、不进入 runningShift / contentMaxY；
+      //   - 紧跟在最后一个有内容块后自然流动，不再撑出空白纸。
+      // 遇到显式 page_break 即停止豁免（显式结构是作者意图，必须尊重）。
+      const tailTextless = new Set<number>()
+      for (let k = K - 1; k >= 0; k--) {
+        const nm = nodes[k].type.name
+        if (nm === 'page_break') break
+        if (rowSplittable(nm) || splittable(nm)) {
+          if ((nodes[k].textContent || '').trim().length > 0) break
+          tailTextless.add(k)
+          continue
+        }
+        if (nm === 'footnote_section' || nm === 'paragraph') { tailTextless.add(k); continue }
+        break
+      }
       for (let k = 0; k < K; k++) {
         const name = nodes[k].type.name
         const forceBreak =
@@ -207,6 +275,13 @@ export function createPaginationPlugin(
         const blockPageNo = pageOf(blockTop)
         // 该块“被推下后”的实际顶部坐标（含已计算的断点 margin，用于底部累计）
         let actualTop = blockTop
+
+        // 尾部无文字块：豁免断页（见上方 tailTextless 注释）
+        if (tailTextless.has(k)) {
+          blockPage[k] = blockPageNo
+          actualTops[k] = blockTop
+          continue
+        }
 
         // 零高不可拆块（如 footnote_section：NodeView 把脚注渲染到别处，本块流内高度为 0）：
         // 完全跳过断页决策。这类块的流内 rect 会随 NodeView 锚点轻微波动，
@@ -218,7 +293,76 @@ export function createPaginationPlugin(
           continue
         }
 
-        if (forceBreak || !splittable(name)) {
+        if (rowSplittable(name) && !forceBreak) {
+          // 表格 / 列表：按子块（table_row / listItem）跨页拆分。
+          // - 列表条目是普通块级 li，Decoration.node 注入 margin-top 即可推到下一页顶；
+          //   margin 改变流布局，后续条目自动跟随，无需逐条注入；
+          // - 表格行是 table-row，CSS 不接受 margin —— 用 position:relative; top:Npx
+          //   视觉位移。relative 只移动自身、不改变后续行布局，因此【断点行及其后
+          //   每一行】都必须带上"累计位移"，否则断点行下移后与后续行脱节错位；
+          //   最后给 table 注入 margin-bottom = 总位移，补足布局高度，
+          //   保证表格后的内容正确下移。
+          let subShift = 0
+          let firstSubShift = 0
+          let renderedSubBottom = blockTop
+          let lastSubPage = blockPageNo
+          const subs = subTops[k]
+          const spos = subPos[k]
+          const isTable = name === 'table'
+          // rowShift[si] = 第 si 个子块需要携带的累计位移
+          const rowShift: number[] = new Array(subs.length).fill(0)
+          for (let si = 0; si < subs.length; si++) {
+            const st = blockTop + subs[si].top + subShift  // 该子块渲染顶（含更早断点位移）
+            const sh = Math.min(subs[si].h, per)           // 单行/单条目高钳制，防测量异常连锁
+            const sb = st + sh
+            let pg = pageOf(st)
+            while (sb > pageBottomOf(pg) - 0.5) pg += 1
+            lastSubPage = pg
+            if (pg > pageOf(st)) {
+              // 真正跨页：该子块推到 pg 页内容区顶
+              const mt = Math.max(0, pageTopOf(pg) - st)
+              const info = spos[si]
+              if (info && mt > 0) {
+                breakDetails.set(info.pos, { mt, landY: st + mt, pg })
+              }
+              subShift += mt
+              if (firstSubShift === 0) firstSubShift = mt
+              renderedSubBottom = pageTopOf(pg) + sh
+            } else {
+              renderedSubBottom = sb
+            }
+            rowShift[si] = subShift
+          }
+          // 注入子块装饰
+          for (let si = 0; si < subs.length; si++) {
+            const info = spos[si]
+            if (!info) continue
+            if (isTable) {
+              // 表格行：累计位移 > 0 的每一行都要 relative top（跟随断点行）
+              if (rowShift[si] > 0) {
+                rowBreaks.push({ pos: info.pos, size: info.size, mt: rowShift[si], isTable: true })
+              }
+            } else {
+              // 列表条目：只给发生跨页的条目注入 margin-top 增量
+              const prev = si > 0 ? rowShift[si - 1] : 0
+              const inc = rowShift[si] - prev
+              if (inc > 0) {
+                rowBreaks.push({ pos: info.pos, size: info.size, mt: inc, isTable: false })
+              }
+            }
+          }
+          if (subs.length === 0) {
+            // 无子块（异常结构）：退化为整块处理，保证内容底计入
+            renderedSubBottom = blockTop + blockH
+          }
+          runningShift += subShift
+          actualTop = blockTop + firstSubShift
+          blockPage[k] = lastSubPage
+          contentMaxY = Math.max(contentMaxY, renderedSubBottom)
+          if (isTable && subShift > 0) {
+            tablePad.set(froms[k], subShift)
+          }
+        } else if (forceBreak || !splittable(name)) {
           // 整块跳页：块底超过"当前页内容区底边（下直角）"或强制分页时，
           // 把整块推到能容纳它的下一页顶部，保证内容不越过页面下直角标记。
           // 关键修复：原实现用 pageOf(blockBottom) > blockPageNo（块底是否跨过整页
@@ -312,11 +456,26 @@ export function createPaginationPlugin(
         actualTops[k] = actualTop
       }
 
+      // 防瞬态测量异常（Supervisor FIX 2026-10-08）：
+      // 字体加载/NodeView 抖动等瞬态会把某轮 contentMaxY 抬高一大截（虚增页数 →
+      // 渲染出整页空白的“幽灵纸”）。文档未变时若 contentMaxY 突变超过一页步长，
+      // 沿用上一轮的稳定值；文档变化（docSig 变）时总是接受新值。
+      const docSig = view.state.doc.content.size + ':' + K
+      if (docSig === lastDocSig && lastContentMaxY > 0 &&
+          Math.abs(contentMaxY - lastContentMaxY) > pageStep * 1.5) {
+        contentMaxY = lastContentMaxY
+      } else {
+        lastContentMaxY = contentMaxY
+        lastDocSig = docSig
+      }
+
       // 总页数：由“真实内容最大坐标”映射，而非仅看块页码 ——
       // 保证即使块页码映射有边界误差，第二页纸也必然出现（修复“第二页纸不显示”）。
+      // contentMaxY 与 pageTopOf 同为“内容盒坐标系”（页 n 内容区顶 = n*pageStep），
+      // 因此直接除以步长，不再减 marginTop（旧公式双重扣除，临界处少算一页）。
       const pageCountByContent = Math.max(
         1,
-        Math.floor((contentMaxY - m.marginTop) / pageStep) + 1,
+        Math.floor(contentMaxY / pageStep) + 1,
       )
       let maxPage = 0
       for (const p of blockPage) if (p > maxPage) maxPage = p
@@ -339,10 +498,49 @@ export function createPaginationPlugin(
         const from = froms[idx]
         const to = from + nodes[idx].nodeSize
         if (to > docSize) continue
+        // 块节点的原生 inline style（table 的 border-collapse/对齐、page_break 的提示线等）
+        // 必须保留：Decoration.node 的 attrs.style 是整体替换语义，先读后拼接。
+        const oldStyle = (children[idx].getAttribute('style') || '').replace(/;\s*$/, '')
         decos.push(
           Decoration.node(from, to, {
-            style: 'margin-top: ' + (breakMargin.get(p) || 0) + 'px',
+            style: (oldStyle ? oldStyle + ';' : '') + 'margin-top: ' + (breakMargin.get(p) || 0) + 'px',
             class: 'pg-brk',
+          }),
+        )
+      }
+      for (const rb of rowBreaks) {
+        // 子块级断点：表格行用 relative top（table-row 不接受 margin），
+        // 列表条目用 margin-top（li 是普通块级盒）。
+        if (rb.pos < 1 || rb.pos + rb.size > docSize) continue
+        if (rb.isTable) {
+          decos.push(
+            Decoration.node(rb.pos, rb.pos + rb.size, {
+              style: 'position: relative; top: ' + rb.mt + 'px',
+              class: 'pg-brk-row',
+            }),
+          )
+        } else {
+          decos.push(
+            Decoration.node(rb.pos, rb.pos + rb.size, {
+              style: 'margin-top: ' + rb.mt + 'px',
+              class: 'pg-brk',
+            }),
+          )
+        }
+      }
+      for (const [tpos, pad] of tablePad) {
+        // 表格行位移不改变布局高度：给 table 注入 margin-bottom 补足，
+        // 使表格后的内容从正确的（推下后的）位置继续排布。
+        // table 自带 inline style（border-collapse / 对齐 margin），
+        // Decoration.node 的 style 会整体替换 —— 必须拼接原 style，不能覆盖。
+        const idx = froms.indexOf(tpos)
+        if (idx < 0) continue
+        if (tpos < 1 || tpos + nodes[idx].nodeSize > docSize) continue
+        const oldStyle = (children[idx].getAttribute('style') || '').replace(/;\s*$/, '')
+        decos.push(
+          Decoration.node(tpos, tpos + nodes[idx].nodeSize, {
+            style: (oldStyle ? oldStyle + ';' : '') + 'margin-bottom: ' + pad + 'px',
+            class: 'pg-brk-table',
           }),
         )
       }
@@ -365,12 +563,12 @@ export function createPaginationPlugin(
       }
 
       const cur = paginationKey.getState(view.state) as DecorationSet | null
-      const curSig = cur
-        ? cur.find().map((d: any) => d.from + ':' + d.to + (d.spec?.widget ? 'w' : '')).join('|')
-        : ''
-      const newSig = decos
-        .map((d: any) => d.from + ':' + d.to + (d.spec?.widget ? 'w' : ''))
-        .join('|')
+      // 签名必须包含 style（margin/top 值）：子块断点的 pos 集合可能稳定而 mt 微调
+      // （前面块高度变化），只比 from/to 会漏发 dispatch → 模型与渲染脱节。
+      const decoSig = (d: any) =>
+        d.from + ':' + d.to + ':' + ((d.attrs && d.attrs.style) || '') + (d.spec?.widget ? 'w' : '')
+      const curSig = cur ? cur.find().map(decoSig).join('|') : ''
+      const newSig = decos.map(decoSig).join('|')
       if (newSig !== curSig) {
         try {
           view.dispatch(
@@ -431,10 +629,13 @@ export function createPaginationPlugin(
           // bodyTop 已是编辑器 host 顶，故此处直接等于内容区顶偏移，无需再加/减 marginTop）。
           rects.push({ top: pageTopOf(i), height: pageHeightPx })
         }
-        const sig = rects.map((r) => Math.round(r.top) + ':' + Math.round(r.height)).join('|')
+        // lastPageSig 同时包含 contentMaxY： maxY 微调而纸张数不变时也要回报 React，
+        // 否则纸张过滤层停留旧值（可见纸张集合与内容脱节）。
+        const sig = rects.map((r) => Math.round(r.top) + ':' + Math.round(r.height)).join('|') +
+          '#y' + Math.round(contentMaxY)
         if (sig !== lastPageSig) {
           lastPageSig = sig
-          onPages(rects)
+          onPages(rects, contentMaxY)
         }
         onCount(pageCount)
         // 诊断：把真实坐标 dump 到全局变量，供外部脚本只读读取（不触发 wails bridge）
@@ -449,6 +650,8 @@ export function createPaginationPlugin(
             marginBottom: m.marginBottom,
             lineBreaks: lineBreaks.size,
             blockBreaks: blockBreaks.size,
+            rowBreaks: rowBreaks.length,
+            tailTextless: tailTextless.size,
             bodyState: 'see bodyTop elsewhere',
             firstBlockCumTop: Math.round(cumTop[0]),
             firstBlockLineCount: (lineTops[0] || []).length,
@@ -472,6 +675,7 @@ export function createPaginationPlugin(
               page: blockPage[k],
               actualTop: Math.round(actualTops[k]),
               actualBottom: Math.round(actualTops[k] + el.offsetHeight),
+              pv: ((nodes[k].textContent || '').trim().slice(0, 10)),
             })),
             lineBreakPositions: [...lineBreaks].slice(0, 200),
             blockBreakPositions: [...blockBreaks].slice(0, 200),

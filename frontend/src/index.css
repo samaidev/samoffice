@@ -1040,11 +1040,19 @@ table td, table th {
    注：行级断点已改为 display:block 零高，margin 归零时仍不产生额外行盒，
    因此测量坐标与断点完全退化。
    Supervisor FIX 2026-10-07 */
-.pg-measuring > .pg-brk {
+.pg-measuring .pg-brk {
   margin-top: 0 !important;
 }
 .pg-measuring .pg-linebreak {
   margin-top: 0 !important;
+}
+/* 表格行级断点：relative top 位移 + 表格 margin-bottom 补高，测量时同样归零，
+   保证子块几何读到的是纯自然坐标（Supervisor FIX 2026-10-08） */
+.pg-measuring .pg-brk-row {
+  top: 0 !important;
+}
+.pg-measuring .pg-brk-table {
+  margin-bottom: 0 !important;
 }
 
 /* === 护眼模式 (eye care) ===

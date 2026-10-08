@@ -750,13 +750,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [bodyTop, setBodyTop] = useState(0)
   // 由分页引擎回报的每张纸页矩形（编辑器相对坐标），用于绘制背景纸页层，保证与内容严格对齐
   const [pageRects, setPageRects] = useState<{ top: number; height: number }[]>([])
+  // 分页引擎回报的真实内容底部（内容盒坐标系）：纸张层据此裁掉尾部无内容纸，
+  // 根除“文末大量空白页”（.doc 导入的尾部空段落 / 瞬态测量虚增不再产生幽灵纸）。
+  const [contentMaxY, setContentMaxY] = useState(0)
   const pageContentPerPage = Math.max(50, pageHeightPx - docMargins.top - docMargins.bottom)
   const pageGap = Math.max(16, Math.round(pageHeightPx * 0.03))
   const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100 })
   metricsRef.current = { pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100 }
+  // 可见纸页：contentMaxY（>0 时）之后的纸页没有任何内容 —— 不渲染，
+  // 避免文档尾部空段落/瞬态虚增撑出的整页空白（“文本后面大量空白页”）。
+  // 过滤只裁尾部（前缀保留），脚注按页索引 footnotesByPage[i] 不受影响。
+  const visibleRects = contentMaxY > 0
+    ? pageRects.filter((r) => r.top < contentMaxY + 1)
+    : pageRects
+
   // 容器高度随纸页与留白自动增高，避免多页文档被裁切
-  const pageRefMinH = pageRects.length
-    ? Math.max(...pageRects.map((r) => bodyTop + r.top + r.height)) + 24
+  const pageRefMinH = visibleRects.length
+    ? Math.max(...visibleRects.map((r) => bodyTop + r.top + r.height)) + 24
     : pageHeightPx
 
   // 测量编辑器内容实际高度，使“页面”容器随内容增高（多页文档不再被裁切）。
@@ -823,7 +833,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
-        createPaginationPlugin(() => metricsRef.current, setPageCount, setPageRects, setBlockPages),
+        createPaginationPlugin(() => metricsRef.current, setPageCount, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, setBlockPages),
         // 差异对比高亮（左侧：被删除段落标红），仅在并排对比时生效
         diffDecorationPlugin(diffDelRef),
         // 格式刷：暂存源格式后，下一次在目标选区上直接套用源 marks。
@@ -2979,7 +2989,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         >
         {/* 纸页背景层：每张纸依据分页引擎算出的实际内容位置绘制，与内容严格对齐 */}
         <div ref={sheetsLayerRef} style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
-          {pageRects.map((p, i) => (
+          {visibleRects.map((p, i) => (
             <Fragment key={i}>
               <div className={(showGridlines ? 'page-grid ' : '') + 'pg-paper'} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
                 {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾 */}
@@ -3051,7 +3061,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   fontStyle: pageNumber.italic ? 'italic' : 'normal',
                   pointerEvents: 'none',
                 }}>
-                  {fillPageNumber(pageNumber.format, i + 1, pageRects.length)}
+                  {fillPageNumber(pageNumber.format, i + 1, visibleRects.length)}
                 </div>
               )}
             </Fragment>
