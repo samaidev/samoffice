@@ -45,6 +45,7 @@ export function createPaginationPlugin(
   let lastPageSig = ''
   let lastBlockPagesSig = ''
   let lastPgLogSig = ''
+  let lastSigLogTs = 0
   let lastSkipSig = ''
   let lastDocSig = ''
   let lastContentMaxY = 0
@@ -557,7 +558,7 @@ export function createPaginationPlugin(
               s.style.marginTop = mt + 'px'
               return s
             },
-            { side: -1, marks: [] } as any,
+            { side: -1, marks: [], mt } as any,
           ),
         )
       }
@@ -565,10 +566,20 @@ export function createPaginationPlugin(
       const cur = paginationKey.getState(view.state) as DecorationSet | null
       // 签名必须包含 style（margin/top 值）：子块断点的 pos 集合可能稳定而 mt 微调
       // （前面块高度变化），只比 from/to 会漏发 dispatch → 模型与渲染脱节。
+      // 关键修复（2026-10-08 监督者）：比较必须【顺序无关】！
+      // cur.find() 返回按文档位置排序的装饰，而 decos 按“块级→子块→表pad→行级”分组构建；
+      // 当 tablePad（pg-brk-table，位置先于 rowBreak 却构建在后）等装饰出现时，
+      // 两个【集合完全相同】的装饰序列因顺序不同而永远不相等 →
+      // 每帧 dispatch 同一集合 → 每秒~17次事务自激循环 →
+      // ① CPU 满转 ② 每次事务把原生选区重写回旧位置（点击落点立即被吞，
+      //    用户表现为“鼠标点文本无法激活光标”）③ React 每秒重渲染多次。
+      // 修复：两侧装饰各自按 sig 排序后再比较；顺序无关即等价集合。
       const decoSig = (d: any) =>
-        d.from + ':' + d.to + ':' + ((d.attrs && d.attrs.style) || '') + (d.spec?.widget ? 'w' : '')
-      const curSig = cur ? cur.find().map(decoSig).join('|') : ''
-      const newSig = decos.map(decoSig).join('|')
+        d.from + ':' + d.to + ':' + ((d.attrs && d.attrs.style) || '') +
+        (d.spec?.widget ? 'w' + (d.spec?.mt !== undefined ? d.spec.mt : '') : '')
+      const normSig = (arr: any[]) => arr.map(decoSig).sort().join('|')
+      const curSig = cur ? normSig(cur.find()) : ''
+      const newSig = normSig(decos)
       if (newSig !== curSig) {
         try {
           view.dispatch(
