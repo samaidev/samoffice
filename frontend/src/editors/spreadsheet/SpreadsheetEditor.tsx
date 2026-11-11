@@ -1196,7 +1196,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
 
       {/* 表格主体 */}
       <div className="flex-1 overflow-auto p-2 sm:p-3" style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%` }}>
-        <table className="border-collapse text-sm" style={{ background: 'var(--color-surface)', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <table className="border-collapse text-sm" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {showHeadings && (
           <thead>
             <tr>
@@ -1228,8 +1228,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   const bw = cell.border === 'thick' ? '3px' : cell.border === 'medium' ? '2px' : cell.border === 'thin' ? '1px' : undefined
                   return (
                     <td key={c} className="border p-0 relative" rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
-                      // 选中仅以淡蓝背景表示，绝不修改单元格自身的字体颜色
-                      background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (cell.bg || 'var(--color-surface)'),
+                      // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
+                      // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
+                      background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (cell.bg || '#ffffff'),
                       borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || '#000') : 'var(--color-border)',
                       borderWidth: bw,
                       minWidth: '80px',
@@ -1253,7 +1254,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
                           if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); selectCell(Math.min(rows - 1, r + 1), c) }
                           else if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
-                        }} className="w-full h-7 px-2 outline-none bg-transparent" style={{ color: cell.color || 'var(--color-text)', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }} />
+                        }} className="w-full h-7 px-2 outline-none bg-transparent" style={{ color: cell.color || '#1f2937', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }} />
                       })()}
                     </td>
                   )

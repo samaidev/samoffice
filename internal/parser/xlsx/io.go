@@ -1,8 +1,10 @@
 package xlsx
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -11,19 +13,19 @@ import (
 // ---- 前端 ↔ 后端 的单元格数据格式 ----
 
 type cellJSON struct {
-	Value       string `json:"value"`
-	Formula     string `json:"formula,omitempty"`
-	Bold        bool   `json:"bold"`
-	Italic      bool   `json:"italic"`
-	Under       bool   `json:"under"`
-	Strike      bool   `json:"strike"`
-	Color       string `json:"color"`
-	Bg          string `json:"bg"`
-	Align       string `json:"align"`
+	Value       string  `json:"value"`
+	Formula     string  `json:"formula,omitempty"`
+	Bold        bool    `json:"bold"`
+	Italic      bool    `json:"italic"`
+	Under       bool    `json:"under"`
+	Strike      bool    `json:"strike"`
+	Color       string  `json:"color"`
+	Bg          string  `json:"bg"`
+	Align       string  `json:"align"`
 	FontSize    float64 `json:"fontSize"`
-	FontFamily  string `json:"fontFamily"`
-	Border      string `json:"border"`
-	BorderColor string `json:"borderColor"`
+	FontFamily  string  `json:"fontFamily"`
+	Border      string  `json:"border"`
+	BorderColor string  `json:"borderColor"`
 	MergeRange  *struct {
 		RowSpan int `json:"rowSpan"`
 		ColSpan int `json:"colSpan"`
@@ -32,10 +34,10 @@ type cellJSON struct {
 }
 
 type sheetJSON struct {
-	Name  string               `json:"name"`
-	Rows  int                  `json:"rows"`
-	Cols  int                  `json:"cols"`
-	Cells map[string]cellJSON  `json:"cells"`
+	Name  string              `json:"name"`
+	Rows  int                 `json:"rows"`
+	Cols  int                 `json:"cols"`
+	Cells map[string]cellJSON `json:"cells"`
 }
 
 type workbookJSON struct {
@@ -58,11 +60,18 @@ func borderRank(style int) string {
 
 // ReadXLSX 读取 xlsx 为 JSON，完整保留值、字体色、填充、边框、对齐、合并等格式。
 func ReadXLSX(path string) (string, error) {
-	f, err := excelize.OpenFile(path)
+	// 先读入字节：颜色解析需要原始 styles.xml / theme1.xml
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read file: %w", err)
+	}
+	f, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("open xlsx: %w", err)
 	}
 	defer f.Close()
+	loadStyleCaches(f, data)
+	defer clearStyleCaches(f)
 
 	// 收集每个 sheet 的合并区域
 	mergeMap := map[string][][2][2]int{} // sheetName -> [][2]r,c  (start,end)
@@ -92,36 +101,36 @@ func ReadXLSX(path string) (string, error) {
 				if val == "" {
 					continue
 				}
-			ref, _ := excelize.CoordinatesToCellName(ci+1, ri+1)
-			cj := cellJSON{Value: val}
-			applyCellFormat(f, name, ref, &cj)
-			// 读取公式（若存在则作为纯公式单元格保存）
-			if formula, ferr := f.GetCellFormula(name, ref); ferr == nil && formula != "" {
-				cj.Formula = formula
-			}
-			sj.Cells[fmt.Sprintf("%d-%d", ri, ci)] = cj
-			if ri > maxR {
-				maxR = ri
-			}
-			if ci > maxC {
-				maxC = ci
+				ref, _ := excelize.CoordinatesToCellName(ci+1, ri+1)
+				cj := cellJSON{Value: val}
+				applyCellFormat(f, name, ref, &cj)
+				// 读取公式（若存在则作为纯公式单元格保存）
+				if formula, ferr := f.GetCellFormula(name, ref); ferr == nil && formula != "" {
+					cj.Formula = formula
+				}
+				sj.Cells[fmt.Sprintf("%d-%d", ri, ci)] = cj
+				if ri > maxR {
+					maxR = ri
+				}
+				if ci > maxC {
+					maxC = ci
+				}
 			}
 		}
-	}
-	// 读取完成后，计算所有公式单元格的缓存值（用于前端直接展示计算结果）
-	for key, cj := range sj.Cells {
-		if cj.Formula == "" {
-			continue
+		// 读取完成后，计算所有公式单元格的缓存值（用于前端直接展示计算结果）
+		for key, cj := range sj.Cells {
+			if cj.Formula == "" {
+				continue
+			}
+			parts := strings.SplitN(key, "-", 2)
+			var r, c int
+			fmt.Sscanf(parts[0]+" "+parts[1], "%d %d", &r, &c)
+			ref, _ := excelize.CoordinatesToCellName(c+1, r+1)
+			if computed, cerr := f.CalcCellValue(name, ref); cerr == nil {
+				cj.Value = computed
+			}
+			sj.Cells[key] = cj
 		}
-		parts := strings.SplitN(key, "-", 2)
-		var r, c int
-		fmt.Sscanf(parts[0]+" "+parts[1], "%d %d", &r, &c)
-		ref, _ := excelize.CoordinatesToCellName(c+1, r+1)
-		if computed, cerr := f.CalcCellValue(name, ref); cerr == nil {
-			cj.Value = computed
-		}
-		sj.Cells[key] = cj
-	}
 		// 标记合并区域：左上角写 mergeRange，被覆盖单元格写 hiddenBy
 		for _, mm := range mergeMap[name] {
 			r1, c1 := mm[0][0]-1, mm[0][1]-1
@@ -184,7 +193,10 @@ func applyCellFormat(f *excelize.File, sheet, ref string, cj *cellJSON) {
 			cj.Under = true
 		}
 		cj.Strike = style.Font.Strike
-		if style.Font.Color != "" {
+		// 字体颜色从原始 styles.xml 读取（excelize 对主题色/10 位 ARGB 返回黑色）
+		if c, ok := styleFontColor(f, styleID); ok {
+			cj.Color = c
+		} else if style.Font.Color != "" {
 			if c, ok := normalizeColor(style.Font.Color); ok {
 				cj.Color = c
 			}
@@ -208,12 +220,12 @@ func applyCellFormat(f *excelize.File, sheet, ref string, cj *cellJSON) {
 			cj.Align = "justify"
 		}
 	}
-	if len(style.Fill.Color) > 0 {
-		if c, ok := normalizeColor(style.Fill.Color[0]); ok {
-			cj.Bg = c
-		}
+	// 填充色从原始 styles.xml 读取（excelize 对主题填充/WPS 10 位 ARGB 返回 FF000000 黑色，
+	// 曾导致打开表格出现大片黑色背景）
+	if c, ok := fillRGBFromStyles(f, styleID); ok {
+		cj.Bg = c
 	}
-	// 边框：取任一边非空线型；颜色取第一个有颜色的边
+	// 边框：取任一边非空线型；颜色优先从原始 styles.xml 读取
 	if len(style.Border) > 0 {
 		for _, b := range style.Border {
 			if b.Style != 0 && cj.Border == "" {
@@ -221,6 +233,12 @@ func applyCellFormat(f *excelize.File, sheet, ref string, cj *cellJSON) {
 					cj.Border = r
 				}
 			}
+		}
+	}
+	if c, ok := styleBorderColor(f, styleID); ok {
+		cj.BorderColor = c
+	} else if len(style.Border) > 0 {
+		for _, b := range style.Border {
 			if b.Color != "" && cj.BorderColor == "" {
 				if c, ok := normalizeColor(b.Color); ok {
 					cj.BorderColor = c

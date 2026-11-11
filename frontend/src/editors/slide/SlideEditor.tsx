@@ -80,6 +80,102 @@ interface AnimItem {
 
 type RibbonTab = 'home' | 'insert' | 'design' | 'modern' | 'animations' | 'transition' | 'view'
 
+// prstGeom/内部形状 → 缩略图 clip-path（与主画布保持一致的视觉）
+const SHAPE_CLIP: Record<string, string> = {
+  triangle: 'polygon(50% 0, 100% 100%, 0 100%)',
+  diamond: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+  rightArrow: 'polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%)',
+  star5: 'polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
+  hexagon: 'polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%)',
+  pentagon: 'polygon(50% 0, 100% 38%, 82% 100%, 18% 100%, 0 38%)',
+  heart: 'path("M50 90 L10 50 A20 20 0 0 1 50 30 A20 20 0 0 1 90 50 Z")',
+  cloud: 'ellipse(50% 50% at 50% 50%)',
+  callout: 'polygon(0 0, 100% 0, 100% 70%, 60% 70%, 50% 100%, 40% 70%, 0 70%)',
+}
+
+// SlideThumb — 幻灯片真实缩略图（左侧面板 / 打印讲义共用）。
+// 按 808x454 画布等比缩放，完整渲染：背景、形状（含 paras 逐 run 样式、
+// 填充/渐变/边框/裁剪几何）、图片、艺术字。修复打开 PPT 后左侧缩略图
+// 只显示裸文字、没有样式的问题。
+const SlideThumb = memo(function SlideThumb({ slide, width }: { slide: Slide; width: number }) {
+  const K = width / 808
+  const isDark = slide.bg === '#1e293b' || slide.bg === '#312e81'
+  return (
+    <div style={{ width, height: Math.round(454 * K), overflow: 'hidden', position: 'relative', background: slide.bg, flex: '0 0 auto' }}>
+      <div style={{ width: 808, height: 454, transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative', color: isDark ? '#f1f5f9' : '#0f172a' }}>
+        {/* 无形状时展示 title/content（新建的版式幻灯片） */}
+        {!slide.shapes.length && (
+          <div style={{ position: 'absolute', inset: 0, padding: 40, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            {slide.title && <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.12 }}>{slide.title}</div>}
+            {slide.content && <div style={{ fontSize: 18, marginTop: 8, whiteSpace: 'pre-wrap', opacity: 0.85 }}>{slide.content}</div>}
+          </div>
+        )}
+        {slide.shapes.map((sh, i) => {
+          const isPic = typeof sh.fill === 'string' && sh.fill.startsWith('url(')
+          const left = sh.x / 8, top = sh.y / 8, w = sh.w / 8, h = sh.h / 8
+          if (isPic) {
+            const m = sh.fill.match(/^url\(\s*["']?(.*?)["']?\s*\)$/)
+            return <img key={i} src={m ? m[1] : ''} alt="" style={{ position: 'absolute', left, top, width: w, height: h, objectFit: 'cover' }} />
+          }
+          const bg = sh.gradient
+            ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})`
+            : sh.fill
+          const hasParas = !!(sh.paras && sh.paras.some(p => p.runs && p.runs.length))
+          return (
+            <div key={i} style={{
+              position: 'absolute', left, top, width: w, height: h,
+              display: 'flex', flexDirection: 'column',
+              alignItems: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
+              justifyContent: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
+              textAlign: (sh.textAlign || 'left') as any,
+              padding: 6, overflow: 'hidden',
+              background: bg,
+              backgroundSize: bg.startsWith('url') ? 'cover' : undefined,
+              backgroundRepeat: bg.startsWith('url') ? 'no-repeat' : undefined,
+              backgroundPosition: bg.startsWith('url') ? 'center' : undefined,
+              clipPath: sh.type === 'roundRect' ? 'inset(0 round 8px)' : (SHAPE_CLIP[sh.type] || (sh.type === 'ellipse' ? 'ellipse(50% 50% at 50% 50%)' : undefined)),
+              borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : undefined,
+              border: sh.noDecor
+                ? (sh.stroke ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}` : 'none')
+                : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none'),
+              boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
+              color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
+              fontSize: sh.fontSize ? `${sh.fontSize}px` : '12px',
+              fontWeight: sh.fontBold ? 700 : 400,
+              lineHeight: sh.lineHeight || 1.2,
+              paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined,
+            }}>
+              {hasParas ? sh.paras!.map((p, pi) => (
+                <div key={pi} style={{ width: '100%', textAlign: (p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : p.align === 'l' ? 'left' : undefined) as any }}>
+                  {(p.runs && p.runs.length ? p.runs : [{ text: '' } as any]).map((r, ri) => (
+                    <span key={ri} style={{
+                      color: r.color || undefined,
+                      fontSize: r.fontSize ? `${Math.max(4, r.fontSize)}px` : undefined,
+                      fontWeight: r.bold ? 700 : undefined,
+                      fontStyle: r.italic ? 'italic' : undefined,
+                      textDecoration: r.underline ? 'underline' : undefined,
+                      fontFamily: r.font || undefined,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}>{r.text}</span>
+                  ))}
+                </div>
+              )) : (sh.text ? (
+                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block', width: '100%', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none' }}>{sh.text}</span>
+              ) : null)}
+            </div>
+          )
+        })}
+        {slide.artTexts.map((at, i) => (
+          <div key={'a' + i} style={{ position: 'absolute', left: at.x / 8, top: at.y / 8, color: at.color, fontWeight: 700, fontSize: at.fontSize, textAlign: 'center', maxWidth: at.w / 8, lineHeight: 1.05 }}>
+            {at.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+})
+
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
@@ -239,10 +335,36 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const slidesRef = useRef(slides)
   slidesRef.current = slides
 
+  // 缩略图宽度：面板 w-40(160px)/lg:w-48(192px)，扣除内边距与边框后实际内容宽 144/176
+  const [thumbWidth, setThumbWidth] = useState(() => (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches ? 176 : 144))
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)')
+    const fn = (e: MediaQueryListEvent) => setThumbWidth(e.matches ? 176 : 144)
+    mq.addEventListener('change', fn)
+    return () => mq.removeEventListener('change', fn)
+  }, [])
+
   // 撤销/重做历史栈
   const [past, setPast] = useState<Slide[][]>([])
   const [future, setFuture] = useState<Slide[][]>([])
-  const recordHistory = () => { setPast(p => [...p, slidesRef.current]); setFuture([]) }
+  // 文本输入合并：连续击键（<800ms 间隔）只压栈一次，undo 一次回退整段输入
+  const lastTextRecordTs = useRef(0)
+  // 注意：必须在调用时同步捕获快照。setPast 的 updater 是在渲染期才执行的，
+  // 若此时同批次已并入新的 slides 更新，slidesRef.current 会读到“未来”的状态，
+  // 导致拖拽撤销只回退半步。同步取值保证快照 = 动作发生前的状态。
+  const recordHistory = () => {
+    lastTextRecordTs.current = 0
+    const snap = slidesRef.current
+    setPast(p => [...p, snap])
+    setFuture([])
+  }
+  const recordTextHistory = () => {
+    const now = Date.now()
+    if (now - lastTextRecordTs.current > 800) recordHistory()
+    lastTextRecordTs.current = now
+  }
+  // 拖拽压栈标记：首次实际移动时压栈（避免纯点选产生冗余历史）
+  const dragRecordedRef = useRef(false)
   const undo = () => {
     if (!past.length) return
     const prev = past[past.length - 1]
@@ -280,7 +402,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const addSlide = () => insertSlide(slides.length - 1, 'content')
   const deleteSlide = (idx: number) => { if (slides.length <= 1) return; recordHistory(); setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
   const duplicateSlide = (idx: number) => { recordHistory(); setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
-  const updateActive = (patch: Partial<Slide>, record = true) => { if (record) recordHistory(); setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl)) }
+  const updateActive = (patch: Partial<Slide>, record = true) => {
+    if (record) {
+      // 纯文本字段（标题/正文/备注）的连续编辑合并为一个撤销块
+      const keys = Object.keys(patch)
+      const textOnly = keys.length > 0 && keys.every(k => k === 'title' || k === 'content' || k === 'notes')
+      if (textOnly) recordTextHistory(); else recordHistory()
+    }
+    setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl))
+  }
   const switchSlide = (i: number) => { if (i === active) return; setActive(i) }
   const current = slides[active] || slides[0]
   const isDark = current.bg === '#1e293b' || current.bg === '#312e81'
@@ -379,6 +509,42 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     updateActive({ shapes: newShapes }, record)
   }
 
+  // 把样式应用到形状：文件打开的形状文字样式存放在 paras 的每个 run 上，
+  // 只改顶层属性会被 run 级样式覆盖（表现为工具栏按钮"无效"），
+  // 因此同时同步所有 run / 段落对齐，保证所见即所得。
+  type ShapeRun = NonNullable<ShapeItem['paras']>[number]['runs'][number]
+  const styleShape = (idx: number, patch: Partial<ShapeItem>, runStyle?: (r: ShapeRun) => Partial<ShapeRun>, paraAlign?: string) => {
+    const sh = current.shapes[idx]
+    const next: Partial<ShapeItem> = { ...patch }
+    if (sh.paras && sh.paras.length) {
+      next.paras = sh.paras.map(p => ({
+        ...p,
+        align: paraAlign || p.align,
+        runs: (p.runs || []).map(r => runStyle ? { ...r, ...runStyle(r) } : r),
+      }))
+    }
+    updateShape(idx, next)
+  }
+
+  // 字号放大/缩小：同步顶层与所有 run（有 paras 的形状 run 级字号生效）
+  const bumpFontSize = (delta: number) => {
+    if (!selectedEl) { alert('请先选择元素'); return }
+    if (selectedEl.type === 'art') {
+      const at = current.artTexts[selectedEl.index]
+      updateArtText(selectedEl.index, { fontSize: Math.max(8, (at.fontSize || 36) + delta) })
+      return
+    }
+    const sh = current.shapes[selectedEl.index]
+    const patch: Partial<ShapeItem> = {}
+    if (sh.fontSize) patch.fontSize = Math.max(6, sh.fontSize + delta)
+    if (sh.paras && sh.paras.some(p => (p.runs || []).some(r => r.fontSize))) {
+      patch.paras = sh.paras.map(p => ({ ...p, runs: (p.runs || []).map(r => ({ ...r, fontSize: r.fontSize ? Math.max(6, r.fontSize + delta) : r.fontSize })) }))
+    } else if (!patch.fontSize) {
+      patch.fontSize = Math.max(6, 16 + delta)
+    }
+    updateShape(selectedEl.index, patch)
+  }
+
   // 艺术字操作
   const addArtText = (preset: any) => {
     const text = prompt(t('slide.prompt.wordArt'), 'SamOffice')
@@ -467,7 +633,16 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     const val = editAreaRef.current?.value ?? ''
     if (editing.type === 'shape') {
       const sh = current.shapes[editing.index]
-      if (sh) updateShape(editing.index, { text: val } as any)
+      if (sh) {
+        const patch: Partial<ShapeItem> = { text: val }
+        if (sh.paras && sh.paras.length) {
+          // 有 paras 的形状：编辑后用第一个非空 run 的样式重建单段，
+          // 否则画布继续渲染旧 paras，看到的仍是编辑前的文字
+          const first = sh.paras.flatMap(p => p.runs || []).find(r => (r.text || '').trim()) || sh.paras[0]?.runs?.[0]
+          patch.paras = [{ runs: [{ text: val, color: first?.color, fontSize: first?.fontSize, bold: first?.bold, italic: first?.italic, underline: first?.underline, font: first?.font }] }]
+        }
+        updateShape(editing.index, patch)
+      }
     } else {
       updateArtText(editing.index, { text: val })
     }
@@ -543,6 +718,11 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     const onMove = (e: MouseEvent) => {
       const dx = e.clientX - dragInfo.startX
       const dy = e.clientY - dragInfo.startY
+      // 首次实际移动时压栈，记录拖拽前状态（纯点选不产生历史）
+      if (!dragRecordedRef.current && (dx !== 0 || dy !== 0)) {
+        dragRecordedRef.current = true
+        recordHistory()
+      }
       if (selectedEl.type === 'shape') {
         if (dragInfo.mode === 'move') {
           updateShape(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 8) }, false)
@@ -573,21 +753,22 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
         return
       }
-      // 焦点在输入框/文本域等可编辑元素时，交给浏览器默认行为（如文本框内复制、撤销）
+      // Ctrl+Z/Y 全局接管撤销/重做：焦点在输入框（标题/正文等）时也要能撤销整个编辑动作；
+      // 仅内联编辑文本域（editing 打开）时交给浏览器原生行为，避免非受控 textarea 不同步
       const tag = (e.target as HTMLElement)?.tagName
-      const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
+      const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const k = e.key.toLowerCase()
-        if (k === 'z') { if (!editable) { e.preventDefault(); if (e.shiftKey) redo(); else undo() } return }
-        if (k === 'y') { if (!editable) { e.preventDefault(); redo() } return }
-        if (k === 'c') { if (!editable && selectedEl) { e.preventDefault(); copySelected() } return }
-        if (k === 'x') { if (!editable && selectedEl) { e.preventDefault(); cutSelected() } return }
-        if (k === 'v') { if (!editable) { e.preventDefault(); pasteClipboard() } return }
+        if (k === 'z') { if (!editing) { e.preventDefault(); if (e.shiftKey) redo(); else undo() } return }
+        if (k === 'y') { if (!editing) { e.preventDefault(); redo() } return }
+        if (k === 'c') { if (!inField && selectedEl) { e.preventDefault(); copySelected() } return }
+        if (k === 'x') { if (!inField && selectedEl) { e.preventDefault(); cutSelected() } return }
+        if (k === 'v') { if (!inField) { e.preventDefault(); pasteClipboard() } return }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl])
+  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl, editing])
 
   // 点击/滚动/ESC 关闭右键菜单
   useEffect(() => {
@@ -667,7 +848,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             {LAYOUTS.map(l => <RibbonButton key={l.id} icon={l.icon} label={l.name} onClick={() => updateActive({ layout: l.id as Slide['layout'] })} active={current.layout === l.id} />)}
           </RibbonGroup>
           <RibbonGroup label={t('slide.font')}>
-            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontBold: !sh.fontBold }) } else { alert('加粗已应用于选中元素') } }} />
+            {/* 加粗：切换所有 run（含 paras），修复文件形状样式在 run 级导致的“无效” */}
+            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeBold = runs.some(r => r.text && !r.bold) || (!runs.length && !sh.fontBold); styleShape(selectedEl.index, { fontBold: makeBold }, () => ({ bold: makeBold })) } else { alert('加粗已应用于选中元素') } }} />
             <div className="relative">
               <RibbonButton icon="🎨" label={t('slide.color')} onClick={() => openPanel('color')} />
               {showColorPopup && (
@@ -676,7 +858,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                     {['#4f46e5','#ef4444','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ec4899','#000000'].map(c => (
                       <button key={c} onClick={() => {
                         if (!selectedEl) { alert('请先选择元素'); closeAllPanels(); return }
-                        if (selectedEl.type === 'shape') updateShape(selectedEl.index, { fontColor: c })
+                        // 颜色同步到所有 run，否则 paras 渲染时被 run 级颜色覆盖看不到变化
+                        if (selectedEl.type === 'shape') styleShape(selectedEl.index, { fontColor: c }, () => ({ color: c }))
                         else updateArtText(selectedEl.index, { color: c })
                         closeAllPanels()
                       }} className="w-6 h-6 rounded-md border transition-transform hover:scale-110" style={{ background: c, borderColor: 'var(--color-border)' }} />
@@ -685,9 +868,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 </div>
               )}
             </div>
-            {/* 字号调整：放大 / 缩小 */}
-            <RibbonButton icon="A+" label={t('slide.fontSizeUp')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontSize: (sh.fontSize || 16) + 2 }) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { fontSize: (at.fontSize || 36) + 2 }) } }} />
-            <RibbonButton icon="A-" label={t('slide.fontSizeDown')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { fontSize: Math.max(6, (sh.fontSize || 16) - 2) }) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { fontSize: Math.max(8, (at.fontSize || 36) - 2) }) } }} />
+            {/* 字号调整：放大 / 缩小（同步顶层与所有 run） */}
+            <RibbonButton icon="A+" label={t('slide.fontSizeUp')} onClick={() => bumpFontSize(2)} />
+            <RibbonButton icon="A-" label={t('slide.fontSizeDown')} onClick={() => bumpFontSize(-2)} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
             {/* 行距 */}
@@ -709,9 +892,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             <RibbonButton icon="1." label={t('slide.numberedList')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { numbered: !sh.numbered, bullet: false }) } }} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
-            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { updateShape(selectedEl.index, { textAlign: 'left' }) } else { alert('左对齐已应用于选中元素') } }} />
-            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { updateShape(selectedEl.index, { textAlign: 'center' }) } else { alert('居中对齐已应用于选中元素') } }} />
-            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { updateShape(selectedEl.index, { textAlign: 'right' }) } else { alert('右对齐已应用于选中元素') } }} />
+            {/* 对齐：同时写 paras 每段的 align，否则被段落级对齐覆盖“无效” */}
+            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { styleShape(selectedEl.index, { textAlign: 'left' }, undefined, 'l') } else { alert('左对齐已应用于选中元素') } }} />
+            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { styleShape(selectedEl.index, { textAlign: 'center' }, undefined, 'c') } else { alert('居中对齐已应用于选中元素') } }} />
+            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { styleShape(selectedEl.index, { textAlign: 'right' }, undefined, 'r') } else { alert('右对齐已应用于选中元素') } }} />
           </RibbonGroup>
         </>)}
 
@@ -1117,64 +1301,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           // 缩略图缩放（画布 808x454 → 约 86px 宽）
           const K = 0.106
 
-          const clipFor = (type: string) => {
-            switch (type) {
-              case 'rect': return 'inset(0 0 0 0)'
-              case 'roundRect': return 'inset(12% 8% 12% 8% round 18px)'
-              case 'ellipse': return 'ellipse(50% 50% at 50% 50%)'
-              case 'triangle': return 'polygon(50% 6%, 94% 94%, 6% 94%)'
-              case 'diamond': return 'polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%)'
-              case 'rightArrow': return 'polygon(0% 35%, 62% 35%, 62% 8%, 100% 50%, 62% 92%, 62% 65%, 0% 65%)'
-              case 'star5': return 'polygon(50% 4%, 61% 38%, 98% 38%, 68% 60%, 79% 95%, 50% 73%, 21% 95%, 32% 60%, 2% 38%, 39% 38%)'
-              case 'hexagon': return 'polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0% 50%)'
-              case 'pentagon': return 'polygon(50% 6%, 96% 40%, 78% 95%, 22% 95%, 4% 40%)'
-              case 'heart': return 'path("M50,88 C0,55 8,5 50,30 C92,5 100,55 50,88 Z")'
-              case 'cloud': return 'path("M25,70 a18,18 0 1,1 18,-22 a16,16 0 1,1 30,8 a16,16 0 1,1 -6,24 Z")'
-              case 'callout': return 'path("M12,8 h64 a8,8 0 0,1 8,8 v34 a8,8 0 0,1 -8,8 h-30 l-14,16 v-16 h-20 a8,8 0 0,1 -8,-8 v-34 a8,8 0 0,1 8,-8 Z")'
-              default: return 'inset(0 0 0 0)'
-            }
-          }
-
-          // 单张幻灯片缩略图（真实渲染形状 / 文字 / 图片）
-          const SlideMini = ({ slide }: { slide: Slide }) => {
-            const isDark = slide.bg === '#1e293b' || slide.bg === '#312e81'
-            return (
-              <div
-                style={{
-                  width: 808 * K, height: 454 * K, overflow: 'hidden', position: 'relative',
-                  background: slide.bg, border: '1px solid #e5e7eb', color: isDark ? '#f1f5f9' : '#0f172a',
-                  flex: '0 0 auto',
-                }}
-              >
-                <div style={{ width: 808, height: 454, transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative' }}>
-                  {!slide.shapes.length && (
-                  <div style={{ position: 'absolute', inset: 0, padding: 40, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                    {slide.title && <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.12 }}>{slide.title}</div>}
-                    {slide.content && <div style={{ fontSize: 18, marginTop: 8, whiteSpace: 'pre-wrap', opacity: 0.85 }}>{slide.content}</div>}
-                  </div>
-                  )}
-                  {slide.shapes.map((sh, i) => {
-                    const isPic = typeof sh.fill === 'string' && sh.fill.startsWith('url(')
-                    const left = sh.x / 8, top = sh.y / 8, w = sh.w / 8, h = sh.h / 8
-                    if (isPic) {
-                      const m = sh.fill.match(/^url\(\s*["']?(.*?)["']?\s*\)$/)
-                      return <img key={i} src={m ? m[1] : ''} alt="" style={{ position: 'absolute', left, top, width: w, height: h, objectFit: 'cover' }} />
-                    }
-                    return (
-                      <div key={i} style={{ position: 'absolute', left, top, width: w, height: h, display: 'flex', alignItems: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center', justifyContent: sh.textAlign === 'left' ? 'flex-start' : sh.textAlign === 'right' ? 'flex-end' : 'center', textAlign: sh.textAlign || 'left', padding: 6, clipPath: clipFor(sh.type), overflow: 'hidden', background: sh.fill || 'transparent', color: sh.fontColor, fontWeight: sh.fontBold ? 700 : 400 }}>
-                        <span style={{ fontSize: Math.max(8, (sh.fontSize || 18) / 2.2) }}>{sh.text}</span>
-                      </div>
-                    )
-                  })}
-                  {slide.artTexts.map((at, i) => (
-                    <div key={'a' + i} style={{ position: 'absolute', left: at.x / 8, top: at.y / 8, color: at.color, fontWeight: 700, fontSize: Math.max(8, at.fontSize / 2.2), textAlign: 'center', maxWidth: at.w / 8, lineHeight: 1.05 }}>
-                      {at.text}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          }
+          // 单张幻灯片缩略图（复用 SlideThumb，与主画布/左侧面板一致的真实渲染）
+          const SlideMini = ({ slide }: { slide: Slide }) => <SlideThumb slide={slide} width={808 * K} />
 
           if (showNotes) {
             return (
@@ -1231,11 +1359,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             {slides.map((s, i) => (
               <div key={s.id} onClick={() => switchSlide(i)} className={`group relative p-1.5 border-2 rounded-lg cursor-pointer transition-all ${i === active ? 'shadow-md' : 'hover:shadow-sm'}`}
                 style={{ borderColor: i === active ? 'var(--color-primary)' : 'var(--color-border)', background: 'var(--color-surface)' }}>
-                <div className="aspect-video rounded overflow-hidden flex flex-col justify-center items-center text-[10px] text-center p-1 relative" style={{ background: s.bg }}>
-                  <div className="font-medium truncate w-full leading-tight" style={{ color: (s.bg === '#1e293b' || s.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{s.title}</div>
-                  {s.shapes.length > 0 && <div className="text-[8px] mt-0.5" style={{ color: isDark ? '#94a3b8' : '#64748b' }}>📊{s.shapes.length}</div>}
-                  {s.animations.length > 0 && <div className="text-[8px]" style={{ color: isDark ? '#94a3b8' : '#64748b' }}>✨{s.animations.length}</div>}
-                  <div className="opacity-50 mt-0.5" style={{ color: (s.bg === '#1e293b' || s.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{i + 1}</div>
+                {/* 真实迷你画布：完整渲染形状/文字样式/图片，修复缩略图只剩裸文字 */}
+                <div className="rounded overflow-hidden relative" style={{ background: s.bg }}>
+                  <SlideThumb slide={s} width={thumbWidth} />
+                  {s.animations.length > 0 && (
+                    <div className="absolute top-0.5 right-0.5 text-[8px] px-1 rounded" style={{ background: 'rgba(0,0,0,0.35)', color: '#fff' }}>✨{s.animations.length}</div>
+                  )}
                 </div>
                 <div className="absolute -top-2 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button onClick={e => { e.stopPropagation(); duplicateSlide(i) }} className="w-5 h-5 rounded-full bg-slate-600 text-white text-[10px] flex items-center justify-center">⎘</button>
@@ -1274,7 +1403,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
-                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
+                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
                   onDoubleClick={(e) => { e.stopPropagation(); startEdit('shape', i) }}
                   onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'shape', index: i }) }}
                   style={{
@@ -1350,15 +1479,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   </div>
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
-                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
-                    <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.w, origY: sh.h, mode: 'resize' }) }} className="absolute -bottom-1 -right-1 w-3 h-3 bg-white border-2 rounded-full cursor-se-resize" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
+                    <div onMouseDown={(e) => { e.stopPropagation(); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)', zIndex: 22 }} />
                   </>}
                 </div>
               ))}
 
               {/* 艺术字渲染层 — zIndex 21 > 文字内容 z-10 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
                   {editing?.type === 'art' && editing?.index === i ? (
                     <textarea ref={editAreaRef} defaultValue={at.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="outline-none bg-transparent resize-none" style={{ fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700, color: at.color, textAlign: 'center', background: 'rgba(255,255,255,0.15)', padding: 2, minWidth: 80 }} />
                   ) : (
@@ -1374,7 +1503,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   }}>{at.text}</span>
                   )}
                   <button onClick={() => removeArtText(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
-                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); recordHistory(); setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
+                  {selectedEl?.type === 'art' && selectedEl?.index === i && <div onMouseDown={(e) => { e.stopPropagation(); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.rotation || 0, origY: 0, mode: 'rotate' }) }} className="absolute -top-6 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-2 rounded-full cursor-grab" style={{ borderColor: 'var(--color-primary)' }} />}
                 </div>
               ))}
 

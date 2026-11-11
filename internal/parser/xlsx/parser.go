@@ -14,11 +14,12 @@ import (
 	"github.com/zai/samoffice/internal/core"
 )
 
-// ---- styles.xml 镜像结构（仅取填充色所需的字段）----
+// ---- styles.xml 镜像结构（颜色/字体/边框/填充解析所需字段）----
 type styleColor struct {
-	RGB     string `xml:"rgb,attr"`
-	Theme   *int   `xml:"theme,attr"`
-	Indexed int    `xml:"indexed,attr"`
+	RGB     string   `xml:"rgb,attr"`
+	Theme   *int     `xml:"theme,attr"`
+	Indexed *int     `xml:"indexed,attr"`
+	Tint    *float64 `xml:"tint,attr"`
 }
 type stylePatternFillEl struct {
 	PatternType string      `xml:"patternType,attr"`
@@ -28,17 +29,38 @@ type stylePatternFillEl struct {
 type styleFill struct {
 	PatternFill *stylePatternFillEl `xml:"patternFill"`
 }
+type styleFont struct {
+	Color *styleColor `xml:"color"`
+}
+type styleBorderSide struct {
+	Style string      `xml:"style,attr"`
+	Color *styleColor `xml:"color"`
+}
+type styleBorder struct {
+	Left   *styleBorderSide `xml:"left"`
+	Right  *styleBorderSide `xml:"right"`
+	Top    *styleBorderSide `xml:"top"`
+	Bottom *styleBorderSide `xml:"bottom"`
+}
 type styleXf struct {
-	FillID *int `xml:"fillId,attr"`
+	FillID   *int `xml:"fillId,attr"`
+	FontID   *int `xml:"fontId,attr"`
+	BorderID *int `xml:"borderId,attr"`
 }
 type styleSheetXML struct {
-	XMLName xml.Name     `xml:"styleSheet"`
+	XMLName xml.Name `xml:"styleSheet"`
 	CellXfs struct {
 		Xf []styleXf `xml:"xf"`
 	} `xml:"cellXfs"`
 	Fills struct {
 		Fill []styleFill `xml:"fill"`
 	} `xml:"fills"`
+	Fonts struct {
+		Font []styleFont `xml:"font"`
+	} `xml:"fonts"`
+	Borders struct {
+		Border []styleBorder `xml:"border"`
+	} `xml:"borders"`
 }
 
 // parseStylesXML 从 xlsx 字节中读取 xl/styles.xml 并解析出填充色映射。
@@ -66,14 +88,22 @@ func parseStylesXML(data []byte) *styleSheetXML {
 
 // styleFillID 返回某 style 索引对应的 fill 索引。
 func styleFillID(f *excelize.File, styleID int) int {
+	if xf := xfOf(f, styleID); xf != nil {
+		if xf.FillID == nil {
+			return -1
+		}
+		return *xf.FillID
+	}
+	return -1
+}
+
+// xfOf 返回某 style 索引的 cellXf（越界返回 nil）。
+func xfOf(f *excelize.File, styleID int) *styleXf {
 	ss := stylesOf(f)
 	if ss == nil || styleID < 0 || styleID >= len(ss.CellXfs.Xf) {
-		return -1
+		return nil
 	}
-	if ss.CellXfs.Xf[styleID].FillID == nil {
-		return -1
-	}
-	return *ss.CellXfs.Xf[styleID].FillID
+	return &ss.CellXfs.Xf[styleID]
 }
 
 // stylePatternFill 返回某 fill 索引的 patternFill（可能越界时返回 nil）。
@@ -88,11 +118,33 @@ func stylePatternFill(f *excelize.File, fillID int) *stylePatternFillEl {
 // stylesCache 在解析期间缓存 styles.xml 解析结果，避免每个单元格重复解压。
 var stylesCache = map[*excelize.File]*styleSheetXML{}
 
+// themesCache 在解析期间缓存 theme1.xml 的 clrScheme 颜色表。
+var themesCache = map[*excelize.File]map[string]string{}
+
 func stylesOf(f *excelize.File) *styleSheetXML {
 	if v, ok := stylesCache[f]; ok {
 		return v
 	}
 	return nil
+}
+
+func themeOf(f *excelize.File) map[string]string {
+	if v, ok := themesCache[f]; ok {
+		return v
+	}
+	return nil
+}
+
+// loadStyleCaches 解析原始 styles.xml 与 theme1.xml 并写入缓存（Parse/ReadXLSX 共用）。
+func loadStyleCaches(f *excelize.File, data []byte) {
+	stylesCache[f] = parseStylesXML(data)
+	themesCache[f] = parseThemeXML(data)
+}
+
+// clearStyleCaches 释放解析缓存。
+func clearStyleCaches(f *excelize.File) {
+	delete(stylesCache, f)
+	delete(themesCache, f)
 }
 
 type Parser struct{}
@@ -102,7 +154,7 @@ func New() *Parser { return &Parser{} }
 func (p *Parser) Supported() []string { return []string{".xlsx"} }
 
 func (p *Parser) CanParse(path string, header []byte) bool {
-        return strings.HasSuffix(strings.ToLower(path), ".xlsx")
+	return strings.HasSuffix(strings.ToLower(path), ".xlsx")
 }
 
 // Parse 解析 xlsx 为 UDM
@@ -121,9 +173,9 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 	}
 	defer f.Close()
 
-	// 解析 styles.xml 用于可靠读取单元格填充色（绕过 excelize 对主题的依赖）
-	stylesCache[f] = parseStylesXML(data)
-	defer delete(stylesCache, f)
+	// 解析 styles.xml / theme1.xml 用于可靠读取单元格填充色、字体色（绕过 excelize 对主题的依赖）
+	loadStyleCaches(f, data)
+	defer clearStyleCaches(f)
 
 	doc := &core.Document{
 		Meta:   core.Meta{Title: "Spreadsheet"},
@@ -286,10 +338,9 @@ func applyCellStyle(f *excelize.File, sheetName, cellRef string, txt *core.Text)
 		if style.Font.Strike {
 			txt.Strike = true
 		}
-		if style.Font.Color != "" {
-			if c, ok := normalizeColor(style.Font.Color); ok {
-				txt.Color = c
-			}
+		// 字体颜色从原始 styles.xml 读取（excelize 对主题色返回 000000）
+		if c, ok := styleFontColor(f, styleID); ok {
+			txt.Color = c
 		}
 		if style.Font.Size > 0 {
 			txt.FontSize = style.Font.Size
@@ -317,8 +368,9 @@ func applyCellStyle(f *excelize.File, sheetName, cellRef string, txt *core.Text)
 }
 
 // fillRGBFromStyles 从原始 styles.xml 读取单元格填充色（最可靠的方式）。
-// excelize 解码后的 Style.Fill.Color 依赖主题（f.Theme），而本解析流程未加载
-// 主题时它会返回 000000，因此这里直接解析 xl/styles.xml 的 patternFill。
+// excelize 解码后的 Style.Fill.Color 依赖主题（f.Theme）且对 WPS 的 10 位 ARGB
+// 返回 000000，因此这里直接解析 xl/styles.xml 的 patternFill，并支持
+// rgb/theme（含 tint）/indexed 三种颜色。
 // 纯色填充用 fgColor，带图案（如细条纹）的填充用 bgColor。
 func fillRGBFromStyles(f *excelize.File, styleID int) (string, bool) {
 	fillID := styleFillID(f, styleID)
@@ -329,6 +381,9 @@ func fillRGBFromStyles(f *excelize.File, styleID int) (string, bool) {
 	if pf == nil {
 		return "", false
 	}
+	if strings.EqualFold(pf.PatternType, "none") {
+		return "", false // 明确无填充
+	}
 	useFg := pf.PatternType == "" || strings.EqualFold(pf.PatternType, "solid")
 	var col *styleColor
 	if useFg && pf.FgColor != nil {
@@ -338,10 +393,47 @@ func fillRGBFromStyles(f *excelize.File, styleID int) (string, bool) {
 	} else if pf.FgColor != nil {
 		col = pf.FgColor
 	}
-	if col == nil || col.RGB == "" {
+	if col == nil {
 		return "", false
 	}
-	return normalizeColor(col.RGB)
+	return resolveStyleColor(col, themeOf(f))
+}
+
+// styleFontColor 返回某 style 索引对应的字体颜色（从原始 styles.xml 读取，
+// 绕开 excelize 对主题色/10 位 ARGB 返回黑色的缺陷）。
+func styleFontColor(f *excelize.File, styleID int) (string, bool) {
+	ss := stylesOf(f)
+	xf := xfOf(f, styleID)
+	if ss == nil || xf == nil || xf.FontID == nil {
+		return "", false
+	}
+	fid := *xf.FontID
+	if fid < 0 || fid >= len(ss.Fonts.Font) {
+		return "", false
+	}
+	return resolveStyleColor(ss.Fonts.Font[fid].Color, themeOf(f))
+}
+
+// styleBorderColor 返回某 style 索引对应的边框颜色（取第一个有色边）。
+func styleBorderColor(f *excelize.File, styleID int) (string, bool) {
+	ss := stylesOf(f)
+	xf := xfOf(f, styleID)
+	if ss == nil || xf == nil || xf.BorderID == nil {
+		return "", false
+	}
+	bid := *xf.BorderID
+	if bid < 0 || bid >= len(ss.Borders.Border) {
+		return "", false
+	}
+	b := ss.Borders.Border[bid]
+	for _, side := range []*styleBorderSide{b.Left, b.Right, b.Top, b.Bottom} {
+		if side != nil && side.Color != nil {
+			if c, ok := resolveStyleColor(side.Color, themeOf(f)); ok {
+				return c, true
+			}
+		}
+	}
+	return "", false
 }
 
 // normalizeColor 把颜色值规整为 #RRGGBB。支持 6 位 RGB、8 位 ARGB（去掉 alpha
