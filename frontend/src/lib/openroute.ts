@@ -15,6 +15,21 @@ export type OpenTab =
   | 'pdf'
   | 'about'
 
+export interface SlideRun {
+  text?: string
+  color?: string
+  sizePt?: number
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  font?: string
+}
+
+export interface SlidePara {
+  align?: string // l|c|r
+  runs?: SlideRun[]
+}
+
 export interface SlideShape {
   kind: string // text | rect | pic
   type?: string // rect/ellipse/triangle/... 几何预设（保存时映射为 PPTX prstGeom）
@@ -24,9 +39,17 @@ export interface SlideShape {
   color?: string
   sizePt?: number
   bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  font?: string
   align?: string // l|c|r
   vanchor?: string // t|ctr|b
   img?: string // data URL
+  geom?: string // PPTX prstGeom 原始值
+  ph?: string // 占位符类型
+  lineColor?: string // 形状边框色（a:ln）
+  lineWpt?: number // 边框宽（磅）
+  paras?: SlidePara[] // 逐段逐 run 完整样式
 }
 
 export interface SlideData {
@@ -130,9 +153,32 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
             color: typeof s.color === 'string' ? s.color : undefined,
             sizePt: typeof s.sizePt === 'number' ? s.sizePt : undefined,
             bold: !!s.bold,
+            italic: !!s.italic,
+            underline: !!s.underline,
+            font: typeof s.font === 'string' ? s.font : undefined,
             align: typeof s.align === 'string' ? s.align : undefined,
             vanchor: typeof s.vanchor === 'string' ? s.vanchor : undefined,
             img: typeof s.img === 'string' ? s.img : undefined,
+            geom: typeof s.geom === 'string' ? s.geom : undefined,
+            ph: typeof s.ph === 'string' ? s.ph : undefined,
+            lineColor: typeof s.lineColor === 'string' ? s.lineColor : undefined,
+            lineWpt: typeof s.lineWpt === 'number' ? s.lineWpt : undefined,
+            paras: Array.isArray(s.paras)
+              ? s.paras.map((p: any) => ({
+                  align: typeof p?.align === 'string' ? p.align : undefined,
+                  runs: Array.isArray(p?.runs)
+                    ? p.runs.map((r: any) => ({
+                        text: typeof r?.text === 'string' ? r.text : undefined,
+                        color: typeof r?.color === 'string' ? r.color : undefined,
+                        sizePt: typeof r?.sizePt === 'number' ? r.sizePt : undefined,
+                        bold: !!r?.bold,
+                        italic: !!r?.italic,
+                        underline: !!r?.underline,
+                        font: typeof r?.font === 'string' ? r.font : undefined,
+                      }))
+                    : [],
+                }))
+              : undefined,
           }))
         : []
       slides.push({

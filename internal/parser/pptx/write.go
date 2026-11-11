@@ -31,20 +31,39 @@ type slideWrite struct {
 }
 
 type shapeWrite struct {
-	Kind    string `json:"kind"`    // text | rect | pic
-	Type    string `json:"type"`    // rect/ellipse/triangle/... (几何)
-	X       int64  `json:"x"`       // EMU
-	Y       int64  `json:"y"`       // EMU
-	Cx      int64  `json:"cx"`      // EMU
-	Cy      int64  `json:"cy"`      // EMU
-	Fill    string `json:"fill"`    // #RRGGBB 或 url("data:...")
-	Text    string `json:"text"`    // 多行以 \n 分隔
-	Color   string `json:"color"`   // #RRGGBB
-	SizePt  int    `json:"sizePt"`  // 磅
-	Bold    bool   `json:"bold"`    // 文字加粗
-	Align   string `json:"align"`   // l|c|r
-	Vanchor string `json:"vanchor"` // t|ctr|b
-	Img     string `json:"img"`     // 图片 data URL
+	Kind      string      `json:"kind"`   // text | rect | pic
+	Type      string      `json:"type"`   // rect/ellipse/triangle/... (几何)
+	X         int64       `json:"x"`      // EMU
+	Y         int64       `json:"y"`      // EMU
+	Cx        int64       `json:"cx"`     // EMU
+	Cy        int64       `json:"cy"`     // EMU
+	Fill      string      `json:"fill"`   // #RRGGBB 或 url("data:...")
+	Text      string      `json:"text"`   // 多行以 \n 分隔
+	Color     string      `json:"color"`  // #RRGGBB
+	SizePt    int         `json:"sizePt"` // 磅
+	Bold      bool        `json:"bold"`   // 文字加粗
+	Italic    bool        `json:"italic"`
+	Underline bool        `json:"underline"`
+	Font      string      `json:"font"`
+	Align     string      `json:"align"`   // l|c|r
+	Vanchor   string      `json:"vanchor"` // t|ctr|b
+	Img       string      `json:"img"`     // 图片 data URL
+	Paras     []paraWrite `json:"paras"`   // 逐段逐 run（优先于 Text/Color 等扁平字段）
+}
+
+type paraWrite struct {
+	Align string     `json:"align"` // l|c|r
+	Runs  []runWrite `json:"runs"`
+}
+
+type runWrite struct {
+	Text      string `json:"text"`
+	Color     string `json:"color"`
+	SizePt    int    `json:"sizePt"`
+	Bold      bool   `json:"bold"`
+	Italic    bool   `json:"italic"`
+	Underline bool   `json:"underline"`
+	Font      string `json:"font"`
 }
 
 // ---------- 公共入口 ----------
@@ -129,6 +148,17 @@ func normColor(c string) string {
 		return ""
 	}
 	return strings.ToUpper(c)
+}
+
+// normFont 清理字体名（去引号/空白）；空或主题占位名返回 ""
+func normFont(f string) string {
+	f = strings.TrimSpace(f)
+	f = strings.Trim(f, "\"'")
+	switch strings.ToLower(f) {
+	case "", "+mn-lt", "+mj-lt", "sans-serif", "serif":
+		return ""
+	}
+	return f
 }
 
 // xmlEsc 转义 XML 文本
@@ -314,31 +344,83 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string) string 
 			b.WriteString(`<p:txBody><a:bodyPr anchor="`)
 			b.WriteString(vanchorToPptx(sh.Vanchor))
 			b.WriteString(`"/><a:lstStyle/>`)
-			lines := strings.Split(sh.Text, "\n")
-			for li, line := range lines {
-				if li > 0 {
-					b.WriteString(`<a:p/>`)
-				}
-				b.WriteString(`<a:p><a:pPr algn="`)
-				b.WriteString(alignToPptx(sh.Align))
-				b.WriteString(`"/>`)
-				if line != "" {
-					b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
-					b.WriteString(fmt.Sprintf("%d", sz*100))
-					b.WriteString(`"`)
-					if sh.Bold {
-						b.WriteString(` b="1"`)
+			if len(sh.Paras) > 0 {
+				// 逐段逐 run 写出（保留每个 run 的颜色/字号/加粗/斜体/下划线/字体）
+				for _, pa := range sh.Paras {
+					b.WriteString(`<a:p><a:pPr algn="`)
+					b.WriteString(alignToPptx(pa.Align))
+					b.WriteString(`"/>`)
+					for _, rn := range pa.Runs {
+						if rn.Text == "" {
+							continue
+						}
+						runSz := rn.SizePt
+						if runSz <= 0 {
+							runSz = sz
+						}
+						runColor := normColor(rn.Color)
+						if runColor == "" {
+							runColor = color
+						}
+						b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
+						b.WriteString(fmt.Sprintf("%d", runSz*100))
+						b.WriteString(`"`)
+						if rn.Bold {
+							b.WriteString(` b="1"`)
+						}
+						if rn.Italic {
+							b.WriteString(` i="1"`)
+						}
+						if rn.Underline {
+							b.WriteString(` u="sng"`)
+						}
+						b.WriteString(`><a:solidFill><a:srgbClr val="`)
+						b.WriteString(runColor)
+						b.WriteString(`"/></a:solidFill>`)
+						if tf := normFont(rn.Font); tf != "" {
+							b.WriteString(`<a:latin typeface="`)
+							b.WriteString(xmlEsc(tf))
+							b.WriteString(`"/>`)
+						}
+						b.WriteString(`</a:rPr><a:t>`)
+						b.WriteString(xmlEsc(rn.Text))
+						b.WriteString(`</a:t></a:r>`)
 					}
-					b.WriteString(`><a:solidFill><a:srgbClr val="`)
-					b.WriteString(color)
-					b.WriteString(`"/></a:solidFill></a:rPr><a:t>`)
-					b.WriteString(xmlEsc(line))
-					b.WriteString(`</a:t></a:r>`)
+					b.WriteString(`</a:p>`)
 				}
-				b.WriteString(`</a:p>`)
-			}
-			if len(lines) == 0 {
-				b.WriteString(`<a:p><a:endParaRPr lang="en-US"/></a:p>`)
+			} else {
+				lines := strings.Split(sh.Text, "\n")
+				for li, line := range lines {
+					if li > 0 {
+						b.WriteString(`<a:p/>`)
+					}
+					b.WriteString(`<a:p><a:pPr algn="`)
+					b.WriteString(alignToPptx(sh.Align))
+					b.WriteString(`"/>`)
+					if line != "" {
+						b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
+						b.WriteString(fmt.Sprintf("%d", sz*100))
+						b.WriteString(`"`)
+						if sh.Bold {
+							b.WriteString(` b="1"`)
+						}
+						if sh.Italic {
+							b.WriteString(` i="1"`)
+						}
+						if sh.Underline {
+							b.WriteString(` u="sng"`)
+						}
+						b.WriteString(`><a:solidFill><a:srgbClr val="`)
+						b.WriteString(color)
+						b.WriteString(`"/></a:solidFill></a:rPr><a:t>`)
+						b.WriteString(xmlEsc(line))
+						b.WriteString(`</a:t></a:r>`)
+					}
+					b.WriteString(`</a:p>`)
+				}
+				if len(lines) == 0 {
+					b.WriteString(`<a:p><a:endParaRPr lang="en-US"/></a:p>`)
+				}
 			}
 			b.WriteString(`</p:txBody></p:sp>`)
 		}

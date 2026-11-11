@@ -271,9 +271,8 @@ ${t('sample.md.more')}
       case 'slide': {
         const src = w.slideSnapshot ?? w.slides ?? null
         if (!src) return 'null'
-        return JSON.stringify(src.map((s: any) => ({
-          title: s.title ?? '', content: s.content ?? '', notes: s.notes ?? '',
-        })))
+        // 完整序列化（含 shapes/bg/paras），否则形状编辑不会被判为“脏”，且指纹不一致
+        return JSON.stringify(src)
       }
       default:
         return '' // pdf / about：只读，恒不脏
@@ -301,7 +300,7 @@ ${t('sample.md.more')}
     setMdContent(w.md ?? sampleMd)
     setHtmlContent(w.html ?? '')
     setSheetInitial(w.sheets ? w.sheets.map(s => ({ name: s.name, cells: s.cells })) : null)
-    setSlideInitial(w.slides ? w.slides.map(s => ({ title: s.title, content: s.content, notes: s.notes })) : null)
+    setSlideInitial(w.slides ? w.slides.map(s => ({ ...s })) : null)
     setSheetSnapshot(w.sheetSnapshot ?? null)
     setSlideSnapshot(w.slideSnapshot ?? null)
     setPdfOpenSignal(w.pdf ?? null)

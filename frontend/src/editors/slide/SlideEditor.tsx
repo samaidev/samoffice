@@ -63,6 +63,9 @@ interface ShapeItem {
   vAlign?: 'top' | 'middle' | 'bottom'
   isFootnote?: boolean
   glowColor?: string; glowRadius?: number
+  paras?: { align?: string; runs: { text?: string; color?: string; fontSize?: number; bold?: boolean; italic?: boolean; underline?: boolean; font?: string }[] }[]
+  // 来自文件的形状：不画装饰边框，边框用文件里的 a:ln
+  noDecor?: boolean
 }
 
 interface ArtTextItem {
@@ -118,11 +121,32 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     if (!shapes || !shapes.length) return []
     const SX = 6464 / pageW // 808px 宽 = 6464 单位 (x/8)
     const SY = 3632 / pageH // 454px 高 = 3632 单位 (y/4.5)
+    // 字号 pt → 画布 px（与几何同比例）
+    const ptToPx = (pt: number) => Math.round(pt * 914400 * 808 / (72 * pageW))
+    // PPTX prstGeom → 内部形状类型
+    const GEOM_MAP: Record<string, string> = {
+      ellipse: 'ellipse', roundRect: 'roundRect', triangle: 'triangle',
+      diamond: 'diamond', rightArrow: 'rightArrow', star5: 'star5',
+      hexagon: 'hexagon', pentagon: 'pentagon', heart: 'heart',
+      cloud: 'cloud', wedgeRectCallout: 'callout',
+    }
     return shapes.map((s) => {
       const isPic = s.kind === 'pic'
       const fill = isPic && s.img ? `url("${s.img}")` : (s.fill || '')
+      const paras = (s.paras || []).map((p) => ({
+        align: p.align,
+        runs: (p.runs || []).map((r) => ({
+          text: r.text || '',
+          color: r.color,
+          fontSize: r.sizePt ? ptToPx(r.sizePt) : undefined,
+          bold: r.bold,
+          italic: r.italic,
+          underline: r.underline,
+          font: r.font,
+        })),
+      }))
       return {
-        type: 'rect',
+        type: isPic ? 'rect' : (GEOM_MAP[s.geom || ''] || 'rect'),
         x: (s.x || 0) * SX,
         y: (s.y || 0) * SY,
         w: (s.cx || 0) * SX,
@@ -133,11 +157,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         glow: false,
         gradient: '',
         rotation: 0,
-        fontSize: s.sizePt ? Math.round(s.sizePt * 914400 * 808 / (72 * pageW)) : undefined,
+        fontSize: s.sizePt ? ptToPx(s.sizePt) : undefined,
         fontBold: !!s.bold,
         fontColor: s.color || undefined,
         textAlign: s.align === 'l' ? 'left' : s.align === 'r' ? 'right' : s.align === 'c' ? 'center' : undefined,
         vAlign: s.vanchor === 't' ? 'top' : s.vanchor === 'b' ? 'bottom' : s.vanchor === 'ctr' ? 'middle' : undefined,
+        paras: paras.length ? paras : undefined,
+        noDecor: true,
+        stroke: s.lineColor || undefined,
+        strokeWidth: s.lineWpt || undefined,
       }
     })
   }
@@ -160,7 +188,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           title: s.title || (i === 0 ? t('slide.titleDefault') : t('slide.contentSlide')),
           content: s.content || (i === 0 ? t('slide.subtitleDefault') : t('slide.contentPlaceholder')),
           bg: s.bg || '#ffffff',
-          layout: (i === 0 && !s.content ? 'title' : 'content') as Slide['layout'],
+          layout: 'blank', // 文件打开的幻灯片全部内容都在 shapes 里，用 blank 布局避免默认标题/正文输入框与形状层重叠
           transition: i === 0 ? 'fade' : '',
           notes: s.notes || '',
           shapes: emuShapesToItems(s.shapes, pageW, pageH),
@@ -284,11 +312,24 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           fill: isPic ? undefined : (sh.fill || ''),
           text: sh.text,
           color: sh.fontColor,
-          sizePt: sh.fontSize,
+          // 画布 px → 磅（与加载时的 ptToPx 互逆），修复以前直接把 px 当磅写回的问题
+          sizePt: sh.fontSize ? Math.round(sh.fontSize * 72 * PAGE_W / (914400 * 808)) : undefined,
           bold: sh.fontBold,
           align: sh.textAlign === 'left' ? 'l' : sh.textAlign === 'right' ? 'r' : sh.textAlign === 'center' ? 'c' : 'l',
           vanchor: sh.vAlign === 'top' ? 't' : sh.vAlign === 'bottom' ? 'b' : 'ctr',
           img,
+          paras: sh.paras && sh.paras.length ? sh.paras.map(p => ({
+            align: p.align,
+            runs: (p.runs || []).map(r => ({
+              text: r.text,
+              color: r.color,
+              sizePt: r.fontSize ? Math.round(r.fontSize * 72 * PAGE_W / (914400 * 808)) : undefined,
+              bold: r.bold,
+              italic: r.italic,
+              underline: r.underline,
+              font: r.font,
+            })),
+          })) : undefined,
         })
       }
       // 艺术字也作为文本形状保存
@@ -1106,10 +1147,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 }}
               >
                 <div style={{ width: 808, height: 454, transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative' }}>
+                  {!slide.shapes.length && (
                   <div style={{ position: 'absolute', inset: 0, padding: 40, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                     {slide.title && <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.12 }}>{slide.title}</div>}
                     {slide.content && <div style={{ fontSize: 18, marginTop: 8, whiteSpace: 'pre-wrap', opacity: 0.85 }}>{slide.content}</div>}
                   </div>
+                  )}
                   {slide.shapes.map((sh, i) => {
                     const isPic = typeof sh.fill === 'string' && sh.fill.startsWith('url(')
                     const left = sh.x / 8, top = sh.y / 8, w = sh.w / 8, h = sh.h / 8
@@ -1224,7 +1267,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none leading-relaxed relative z-10" style={{ color: isDark ? '#cbd5e1' : '#334155' }} placeholder={t('slide.placeholder.content')} />
                 </>
               )}
-              {current.layout === 'blank' && (
+              {current.layout === 'blank' && !current.shapes.length && (
                 <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder={t('slide.placeholder.blank')} />
               )}
 
@@ -1261,7 +1304,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                              undefined,
                     boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
                     filter: sh.glow ? `drop-shadow(0 0 8px ${sh.fill})` : 'none',
-                    border: sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none',
+                    border: sh.noDecor
+                      ? (sh.stroke ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}` : 'none')
+                      : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none'),
                     color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
                     fontSize: sh.fontSize ? `${sh.fontSize}px` : '12px',
                     fontWeight: sh.fontBold ? 700 : 400,
@@ -1280,7 +1325,23 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                     {editing?.type === 'shape' && editing?.index === i ? (
                       <textarea ref={editAreaRef} defaultValue={sh.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="w-full h-full outline-none bg-transparent resize-none" style={{ color: 'inherit', fontSize: 'inherit', fontWeight: 'inherit', textAlign: (sh.textAlign || 'center') as any, lineHeight: 'inherit', background: 'rgba(255,255,255,0.15)', padding: 2 }} />
                     ) : sh.text && !(sh.media && (sh.media.type === 'video' || sh.media.type === 'audio')) && (<span style={{ pointerEvents: 'none', display: 'block', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                      {sh.bullet
+                      {sh.paras && sh.paras.some(p => p.runs && p.runs.length) ? (
+                        sh.paras.map((p, pi) => (
+                          <div key={pi} style={{ width: '100%', textAlign: p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : p.align === 'l' ? 'left' : undefined }}>
+                            {((p.runs && p.runs.length) ? p.runs : [{ text: '' } as any]).map((r, ri) => (
+                              <span key={ri} style={{
+                                color: r.color || undefined,
+                                fontSize: r.fontSize ? `${Math.max(8, r.fontSize)}px` : undefined,
+                                fontWeight: r.bold ? 700 : undefined,
+                                fontStyle: r.italic ? 'italic' : undefined,
+                                textDecoration: r.underline ? 'underline' : undefined,
+                                fontFamily: r.font || undefined,
+                                whiteSpace: 'pre-wrap',
+                              }}>{r.text}</span>
+                            ))}
+                          </div>
+                        ))
+                      ) : sh.bullet
                         ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                         : sh.numbered
                         ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
