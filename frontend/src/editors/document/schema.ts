@@ -100,6 +100,10 @@ export const schema = new Schema({
         if (a.keepLines) s.push('break-inside: avoid')
         if (a.pageBreakBefore) s.push('break-before: page')
         const domAttrs: any = { style: s.join('; ') }
+        // 命名样式透出到 data-style：目录条目（TOC Entry）等依赖 CSS 选择器定制渲染
+        // （点线引导符 + 右对齐页码），此前无此属性导致目录条目无法特殊排版。
+        if (a.style) domAttrs['data-style'] = a.style
+        if (a.id) domAttrs['data-block-id'] = a.id
         if (a.pageBreakBefore) domAttrs.class = 'pm-break-before'
         if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
         if (a.dropCap) { domAttrs['data-dropcap'] = '1'; domAttrs.class = ((domAttrs.class || '') + ' pm-dropcap').trim() }
@@ -190,6 +194,7 @@ export const schema = new Schema({
         const domAttrs: any = { style: s.join('; ') }
         if (a.pageBreakBefore) domAttrs.class = 'pm-break-before'
         if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
+        if (a.style) domAttrs['data-style'] = a.style
         return ['h' + node.attrs.level, domAttrs, 0]
       },
       parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({ tag: `h${level}`, attrs: { level } }))
@@ -232,6 +237,7 @@ export const schema = new Schema({
         colspan: { default: 1 },
         rowspan: { default: 1 },
         align: { default: '' },
+        vAlign: { default: '' },  // 单元格垂直对齐：'' = 顶对齐 | middle | bottom（对齐 MS Word 表格工具）
         isHeader: { default: false },
         borderW: { default: 0 },
       },
@@ -239,7 +245,7 @@ export const schema = new Schema({
         const tag = node.attrs.isHeader ? 'th' : 'td'
         const bw = node.attrs.borderW
         const border = bw && bw > 0 ? `${bw}pt solid #cbd5e1` : '1px solid #cbd5e1'
-        const s: string[] = [`border: ${border}`, 'padding: 6px 10px', 'vertical-align: top']
+        const s: string[] = [`border: ${border}`, 'padding: 6px 10px', `vertical-align: ${node.attrs.vAlign || 'top'}`]
         if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
         const attrs: any = { style: s.join('; ') }
         if (node.attrs.colspan > 1) attrs.colspan = node.attrs.colspan
@@ -252,6 +258,7 @@ export const schema = new Schema({
           colspan: parseInt(dom.getAttribute('colspan') || '1'),
           rowspan: parseInt(dom.getAttribute('rowspan') || '1'),
           align: dom.style.textAlign || '',
+          vAlign: dom.style.verticalAlign && dom.style.verticalAlign !== 'baseline' ? dom.style.verticalAlign : '',
           isHeader: dom.tagName === 'TH',
           borderW: 0,
         })
@@ -451,6 +458,8 @@ export const schema = new Schema({
         float: { default: '' },         // '' | 'left' | 'right'
         borderW: { default: 1 },        // 边框线宽 pt
         lineStyle: { default: 'solid' },// solid | dash | dot | dashDot
+        vAlign: { default: '' },        // 内容垂直对齐：'' = 顶 | middle | bottom（对齐 MS Word 文本框）
+        textDirection: { default: '' }, // 文字方向：'' = 横排 | vertical = 竖排（writing-mode）
       },
       toDOM: (node) => {
         const shape = node.attrs.shape || 'rect'
@@ -473,10 +482,19 @@ export const schema = new Schema({
         const widthStyle = node.attrs.width > 0 ? ` width: ${node.attrs.width}px;` : ''
         const floatStyle = node.attrs.float === 'left' ? ' float: left; margin-right: 16px;' :
                            node.attrs.float === 'right' ? ' float: right; margin-left: 16px;' : ''
+        // 内容垂直对齐：flex 列布局 + justify-content（ProseMirror 内容仍可正常编辑）
+        const va = node.attrs.vAlign || ''
+        const vAlignStyle = va === 'middle' ? ' display: flex; flex-direction: column; justify-content: center;'
+                          : va === 'bottom' ? ' display: flex; flex-direction: column; justify-content: flex-end;'
+                          : va === 'top' ? ' display: flex; flex-direction: column; justify-content: flex-start;'
+                          : ''
+        const dirStyle = node.attrs.textDirection === 'vertical' ? ' writing-mode: vertical-rl; text-orientation: mixed;'
+                       : node.attrs.textDirection === 'verticalLeft' ? ' writing-mode: vertical-lr; text-orientation: mixed; rotate: 180deg;'
+                       : ''
         return ['div', {
           class: 'text-box',
           'data-shape': shape,
-          style: baseStyle + ' ' + (shapeStyles[shape] || '') + widthStyle + floatStyle,
+          style: baseStyle + ' ' + (shapeStyles[shape] || '') + widthStyle + floatStyle + vAlignStyle + dirStyle,
         }, 0]
       },
       parseDOM: [{
@@ -528,12 +546,32 @@ export const schema = new Schema({
       attrs: { num: { default: 1 } },
     },
 
-    // === 目录条目（可点击跳转） ===
+    // === 目录条目（可点击跳转 + 点线引导符 + 页码，对齐 MS Word 目录外观） ===
+    // page 属性由分页引擎回报后回填（updateTocPageNumbers），与 Word 的“更新域”等价。
     tocLink: {
       inline: true, group: 'inline', atom: true,
-      attrs: { target: { default: '' }, label: { default: '' } },
-      toDOM: (node) => ['span', { class: 'sam-toc-link', 'data-target': node.attrs.target, style: 'color:#1d4ed8;cursor:pointer' }, node.attrs.label],
-      parseDOM: [{ tag: 'span.sam-toc-link', getAttrs: (dom: any) => ({ target: dom.getAttribute('data-target') || '', label: dom.textContent || '' }) }],
+      attrs: { target: { default: '' }, label: { default: '' }, page: { default: '' }, level: { default: 1 } },
+      toDOM: (node) => {
+        const wrap = document.createElement('span')
+        wrap.className = 'sam-toc-link'
+        wrap.setAttribute('data-target', node.attrs.target || '')
+        const txt = document.createElement('span')
+        txt.className = 'sam-toc-text'
+        txt.textContent = node.attrs.label || ''
+        const leader = document.createElement('span')
+        leader.className = 'sam-toc-leader'
+        const pg = document.createElement('span')
+        pg.className = 'sam-toc-page'
+        pg.textContent = node.attrs.page || ''
+        wrap.append(txt, leader, pg)
+        return wrap
+      },
+      parseDOM: [{ tag: 'span.sam-toc-link', getAttrs: (dom: any) => ({
+        target: dom.getAttribute('data-target') || '',
+        label: dom.querySelector('.sam-toc-text')?.textContent || dom.textContent || '',
+        page: dom.querySelector('.sam-toc-page')?.textContent || '',
+        level: parseInt(dom.getAttribute('data-level') || '1') || 1,
+      }) }],
     },
 
     // === 书签（P1） ===

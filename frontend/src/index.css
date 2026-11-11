@@ -548,6 +548,47 @@ input:focus, textarea:focus, select:focus {
   max-height: calc(100vh - 100px);
   overflow-y: auto;
 }
+
+/* === 目录条目（对齐 MS Word 目录外观）===
+ * 结构：<p data-style="TOC Entry"><span.sam-toc-link><span.sam-toc-text>标题</span>
+ *        <span.sam-toc-leader/>（点线引导符）<span.sam-toc-page>页码</span></span></p>
+ * flex 让引导符自动填满标题与页码之间的空隙，页码右对齐。
+ */
+.ProseMirror p[data-style='TOC Entry'] {
+  display: flex;
+  align-items: baseline;
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+.ProseMirror p[data-style='TOC Entry'] > .sam-toc-link {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  min-width: 0;
+  color: inherit;
+  cursor: pointer;
+}
+.ProseMirror p[data-style='TOC Entry'] > .sam-toc-link:hover .sam-toc-text {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+.ProseMirror .sam-toc-leader {
+  flex: 1 1 auto;
+  min-width: 24px;
+  margin: 0 4px;
+  border-bottom: 1px dotted var(--color-text-muted, #94a3b8);
+  transform: translateY(-3px);
+}
+.ProseMirror .sam-toc-page {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary, #475569);
+}
+/* 目录标题段 */
+.ProseMirror p[data-style='Table of Contents'] {
+  margin-top: 8px;
+  margin-bottom: 6px;
+}
 /* RibbonGroup 内的弹出菜单：留出 group label 的高度
  * 0.5rem (8px) = 安全间距，让 popup 与按钮紧密连接但不重叠
  * 原值 2rem (32px) 造成 popup 视觉脱节，像是浮在空中 */

@@ -33,6 +33,8 @@ export function TextBoxStylePanel({ node, onChange, onClose }: Props) {
   const [bgColor, setBgColor] = useState(a.bgColor || '#fef3c7')
   const [width, setWidth] = useState(Number(a.width) || 0)
   const [floatV, setFloatV] = useState(a.float || '')
+  const [vAlign, setVAlign] = useState(a.vAlign || '')
+  const [textDirection, setTextDirection] = useState(a.textDirection || '')
 
   const commit = (patch: Record<string, any>) => onChange(patch)
 
@@ -171,6 +173,55 @@ export function TextBoxStylePanel({ node, onChange, onClose }: Props) {
                   border: '1px solid var(--color-border)',
                 }}
                 onClick={() => { setFloatV(f.v); commit({ float: f.v }) }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 内容垂直对齐（对齐 MS Word 文本框“垂直对齐方式”） */}
+        <div>
+          <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--color-text-muted)' }}>垂直对齐</label>
+          <div className="grid grid-cols-3 gap-1">
+            {[
+              { v: 'top', label: '顶端' },
+              { v: 'middle', label: '居中' },
+              { v: 'bottom', label: '底端' },
+            ].map((f) => (
+              <button
+                key={f.v}
+                className="text-xs py-1.5 rounded"
+                style={{
+                  background: vAlign === f.v ? 'var(--color-primary)' : 'var(--color-bg-alt)',
+                  color: vAlign === f.v ? 'white' : 'var(--color-text)',
+                  border: '1px solid var(--color-border)',
+                }}
+                onClick={() => { setVAlign(f.v); commit({ vAlign: f.v }) }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 文字方向（横排/竖排） */}
+        <div>
+          <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--color-text-muted)' }}>文字方向</label>
+          <div className="grid grid-cols-2 gap-1">
+            {[
+              { v: '', label: '横排' },
+              { v: 'vertical', label: '竖排' },
+            ].map((f) => (
+              <button
+                key={f.v}
+                className="text-xs py-1.5 rounded"
+                style={{
+                  background: textDirection === f.v ? 'var(--color-primary)' : 'var(--color-bg-alt)',
+                  color: textDirection === f.v ? 'white' : 'var(--color-text)',
+                  border: '1px solid var(--color-border)',
+                }}
+                onClick={() => { setTextDirection(f.v); commit({ textDirection: f.v }) }}
               >
                 {f.label}
               </button>

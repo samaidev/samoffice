@@ -88,6 +88,8 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
         float: tb.float || '',
         borderW: Number(tb.borderW) || 1,
         lineStyle: tb.lineStyle || 'solid',
+        vAlign: tb.vAlign || '',
+        textDirection: tb.textDirection || '',
       }, inner)
     }
     case 'formula' in (b as any) && (b as any).formula: {
@@ -126,6 +128,7 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
             colspan: cell.colSpan || 1,
             rowspan: cell.rowSpan || 1,
             align: cell.align || '',
+            vAlign: (cell as any).vAlign || '',
             isHeader: !!cell.isHeader,
             borderW: tb.border || 0,
           },
@@ -302,6 +305,8 @@ function pmToBlock(node: Node): Block | null {
         float: tb.attrs.float || '',
         borderW: Number(tb.attrs.borderW) || 1,
         lineStyle: tb.attrs.lineStyle || 'solid',
+        vAlign: tb.attrs.vAlign || '',
+        textDirection: tb.attrs.textDirection || '',
       } as any
     }
     case 'footnote':
@@ -328,6 +333,7 @@ function pmToBlock(node: Node): Block | null {
             colSpan: (cell.attrs.colspan as number) || 1,
             rowSpan: (cell.attrs.rowspan as number) || 1,
             align: (cell.attrs.align as string) || '',
+            vAlign: (cell.attrs.vAlign as string) || '',
             isHeader: !!cell.attrs.isHeader,
           }
         }),
@@ -344,7 +350,11 @@ function pmToInline(node: Node): Inline[] {
   node.forEach((child) => {
     if (!child.isText) {
       if (child.type.name === 'tocLink') {
-        if (child.attrs.label) result.push({ content: child.attrs.label } as any)
+        // 目录条目导出为“标题\t页码”文本：docx 渲染器对 TOC Entry 样式段落
+        // 生成右对齐点线制表位，\t 转成 <w:tab/>，Word/WPS 中呈现标准目录外观
+        const label = child.attrs.label || ''
+        const page = child.attrs.page ? String(child.attrs.page) : ''
+        result.push({ content: page ? `${label}\t${page}` : label } as any)
       } else if (child.type.name === 'footnote') {
         // 脚注引用：内联原子节点必须序列化，否则保存后正文中的 [n] 标记消失
         result.push({ type: 'footnote', num: Number(child.attrs.num) || 1, content: child.attrs.content || '' } as any)

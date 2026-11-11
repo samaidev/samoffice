@@ -187,6 +187,8 @@ type TableCell struct {
         Blocks   []Block  `json:"blocks,omitempty"`
         RowSpan  int      `json:"rowSpan,omitempty"`
         ColSpan  int      `json:"colSpan,omitempty"`
+        Align    string   `json:"align,omitempty"`                     // 单元格水平对齐（前端 table_cell.align）
+        VAlign   string   `json:"vAlign,omitempty"`                    // 单元格垂直对齐：top|middle|bottom（docx 导出为 w:vAlign）
         IsHeader bool     `json:"isHeader,omitempty"`
         Formula  string   `json:"formula,omitempty"` // 单元格公式（xls/xlsx 解析填充）
         // VMerge 为垂直合并中间态（不进 JSON）：0=不合并 1=被合并占位 3=合并起点。
@@ -243,6 +245,8 @@ type Textbox struct {
         Width       float64 `json:"width,omitempty"`
         Wrap        string  `json:"float,omitempty"`
         Radius      float64 `json:"radius,omitempty"`
+        VAlign        string `json:"vAlign,omitempty"`        // 内容垂直对齐：top|middle|bottom（前端 text_box.vAlign）
+        TextDirection string `json:"textDirection,omitempty"` // 文字方向：""=横排 | vertical=竖排
         Rotation    float64 `json:"rotation,omitempty"`
 }
 

@@ -1427,6 +1427,22 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                                                 }
                                         }
                                 }
+                        case "vAlign":
+                                // 单元格垂直对齐（Word 表格属性 → 前端 table_cell.vAlign）
+                                if inTcPr {
+                                        for _, a := range t.Attr {
+                                                if a.Name.Local == "val" {
+                                                        switch a.Value {
+                                                        case "center":
+                                                                curCell.VAlign = "middle"
+                                                        case "bottom":
+                                                                curCell.VAlign = "bottom"
+                                                        default:
+                                                                curCell.VAlign = ""
+                                                        }
+                                                }
+                                        }
+                                }
                         case "vMerge":
                                 if inTcPr {
                                         val := ""

@@ -493,3 +493,34 @@ export function setCellAlign(state: any, dispatch: any, align: string): boolean 
   dispatch(tr)
   return true
 }
+
+// 设置单元格垂直对齐（顶/中/底，对齐 MS Word 表格工具的"垂直对齐方式"）。
+// 与 setCellAlign 不同：支持选区内多个单元格同时设置（框选多格后一键对齐）。
+export function setCellVAlign(state: any, dispatch: any, vAlign: string): boolean {
+  const { $from, $to } = state.selection
+  const tr = state.tr
+  let changed = false
+  state.doc.nodesBetween($from.pos, $to.pos, (node: any, pos: number) => {
+    if (node.type.name === 'table_cell') {
+      // 跳过被 rowspan 覆盖的占位（nodeAt 命中即真实单元格）
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, vAlign })
+      changed = true
+      return false // 不深入单元格内部
+    }
+    return true
+  })
+  if (!changed) {
+    // 光标在单元格内但选区未跨单元格：回退到单格路径
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d)
+      if (node.type.name === 'table_cell') {
+        tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, vAlign })
+        changed = true
+        break
+      }
+    }
+  }
+  if (!changed) return false
+  dispatch(tr)
+  return true
+}

@@ -12,7 +12,7 @@ import { udmToProseMirror, proseMirrorToUDM } from './convert'
 import { BUILTIN_STYLES, BUILTIN_STYLE_MAP, AppStyle, StyleFormat, styleDefToFormat, outlineLevelFromName } from './styles'
 import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
-import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign } from './tableCommands'
+import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign } from './tableCommands'
 import { columnResizing, tableEditing, CellSelection } from 'prosemirror-tables'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
@@ -20,6 +20,14 @@ import { Dropdown } from '../../components/Dropdown'
 import { Ruler } from '../../components/Ruler'
 import { MathEditorModal } from './MathEditorModal'
 import { TextBoxStylePanel } from './TextBoxStylePanel'
+import {
+  IconAlignLeft, IconAlignCenter, IconAlignRight, IconAlignJustify,
+  IconBulletList, IconNumberList, IconIndentInc, IconIndentDec,
+  IconLineSpacing, IconSpaceBefore, IconSpaceAfter,
+  IconSuperscript, IconSubscript,
+  IconFontColor, IconHighlight, IconShading,
+  IconVAlignTop, IconVAlignMiddle, IconVAlignBottom, IconTextDirection,
+} from './ribbonIcons'
 import type { Document, SpellError, PageNumberConfig, Backend } from '../../types/udm'
 
 interface Props {
@@ -36,8 +44,11 @@ interface Props {
 type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
 
 const LINE_HEIGHTS = [{ name: '1.0', value: '1.0' }, { name: '1.5', value: '1.5' }, { name: '1.75', value: '1.75' }, { name: '2.0', value: '2.0' }, { name: '固定28pt (公文)', value: '28pt' }, { name: '固定30pt', value: '30pt' }]
-const COLORS = ['#000000','#374151','#6B7280','#9CA3AF','#EF4444','#F59E0B','#10B981','#3B82F6','#6366F1','#8B5CF6','#EC4899','#6B7280']
-const HL_COLORS = ['#fef08a','#bbf7d0','#bfdbfe','#fbcfe8','#fed7aa','#e9d5ff']
+// 文字颜色：去重（旧数组有两个 #6B7280）并扩充为 18 色三行，对齐 MS Word 常用色盘
+const COLORS = ['#000000','#7F7F7F','#8C4510','#1F3864','#2E75B6','#217046',
+                '#404040','#595959','#C45911','#FFC000','#548235','#7030A0',
+                '#808080','#BFBFBF','#F2F2F2','#D6DCE4','#DEEBF7','#E2EFD9']
+const HL_COLORS = ['#fef08a','#fed7aa','#fca5a5','#bbf7d0','#bfdbfe','#fbcfe8','#e9d5ff','#d4d4d8']
 
 function readBool(key: string): boolean {
   try { return localStorage.getItem(key) === '1' } catch { return false }
@@ -61,6 +72,139 @@ function RibbonGroup({ label, children }: any) {
     <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
       <div className="flex items-center gap-1 py-1 flex-1">{children}</div>
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
+    </div>
+  )
+}
+
+// === 颜色选择面板（共用）：色块网格 + 自动/无色 + 自定义色 ===
+// 此前颜色按钮只是"透明按钮+底边框色条"，看起来像空的残缺色块（用户反馈"颜色块按钮显示不全"），
+// 弹出面板也只有几个色块。统一为：图标按钮（A+色条）+ 面板带"自动/其他颜色"。
+function ColorGrid({ colors, onPick, onClear, clearLabel, customLabel }: { colors: string[]; onPick: (c: string) => void; onClear?: () => void; clearLabel?: string; customLabel?: string }) {
+  const [custom, setCustom] = useState('#ff0000')
+  return (
+    <div style={{ minWidth: 216 }}>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(9, 20px)' }}>
+        {colors.map(c => (
+          <button key={c} type="button" title={c} onClick={() => onPick(c)}
+            className="rounded transition-transform hover:scale-110"
+            style={{ width: 20, height: 20, background: c, border: '1px solid rgba(0,0,0,0.18)' }} />
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-2 pt-2" style={{ borderTop: '1px solid var(--color-border)' }}>
+        {onClear && (
+          <button type="button" className="text-xs px-2 py-1 rounded" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }}
+            onClick={onClear}>{clearLabel || '自动'}</button>
+        )}
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
+          {customLabel || '其他颜色'}
+          <input type="color" value={custom} onChange={e => { setCustom(e.target.value); onPick(e.target.value) }}
+            className="w-7 h-6 rounded cursor-pointer border-0 p-0" />
+        </label>
+      </div>
+    </div>
+  )
+}
+
+// === 悬浮格式工具栏（对齐 MS Word 选中文本时弹出的 mini toolbar） ===
+// 修复点：1) 用 ref 实测宽度做边界收敛，旧版硬编码 300px 在扩充按钮后估不准；
+// 2) 颜色面板默认向下弹出，空间不足时自动翻转到上方（旧版固定向上，贴近顶部时被裁剪）；
+// 3) 补齐 MS Word mini 栏应有的高频按钮：字号、字色、高亮、对齐、标题。
+function SelectionMiniToolbar(props: {
+  pos: { x: number; y: number }
+  activeMarks: Set<string>
+  activeColor: string
+  activeFontSize: string
+  fontSizeOptions: { label: string; value: string }[]
+  exec: (cmd: string) => void
+  setTextColor: (c: string) => void
+  clearColor: () => void
+  setHighlight: (c: string) => void
+  setFontSize: (v: string) => void
+  t: (k: string) => string
+  onClosePopup: () => void
+}) {
+  const { pos, activeMarks, activeColor, activeFontSize, fontSizeOptions, exec, setTextColor, clearColor, setHighlight, setFontSize, t } = props
+  const [colorOpen, setColorOpen] = useState(false)
+  const [hlOpen, setHlOpen] = useState(false)
+  const [measured, setMeasured] = useState({ w: 380, h: 38 })
+  const barRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (barRef.current) {
+      const r = barRef.current.getBoundingClientRect()
+      setMeasured({ w: Math.ceil(r.width), h: Math.ceil(r.height) })
+    }
+  }, [])
+
+  const vw = window.innerWidth, vh = window.innerHeight
+  let mx = pos.x - measured.w / 2
+  let my = pos.y - measured.h - 8
+  if (mx + measured.w > vw - 8) mx = vw - measured.w - 8
+  if (mx < 8) mx = 8
+  if (my < 8) my = pos.y + 12 // 放到选区下方
+  if (my + measured.h > vh - 8) my = Math.max(8, vh - measured.h - 8)
+
+  const popupOpensUp = my + measured.h + 220 > vh
+
+  const btn = (onClick: () => void, label: React.ReactNode, title: string, active?: boolean) => (
+    <button onClick={onClick} className={`toolbar-btn ${active ? 'active' : ''}`} title={title} type="button" style={{ width: 28, height: 28 }}>{label}</button>
+  )
+
+  return (
+    <div ref={barRef} className="fixed z-50 flex items-center gap-0.5 px-1.5 py-1 rounded-lg shadow-xl animate-fade-in"
+      style={{ left: mx, top: my, background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}
+      onMouseDown={e => { if (!(e.target as HTMLElement).closest('input')) e.preventDefault() }}>
+      {btn(() => exec('bold'), <b>B</b>, t('doc.bold') + ' Ctrl+B', activeMarks.has('bold'))}
+      {btn(() => exec('italic'), <i>I</i>, t('doc.italic') + ' Ctrl+I', activeMarks.has('italic'))}
+      {btn(() => exec('underline'), <u>U</u>, t('doc.underline') + ' Ctrl+U', activeMarks.has('underline'))}
+      <Dropdown
+        className="text-xs rounded-md px-1 ribbon-input"
+        style={{ width: 62, height: 26, fontSize: 12 }}
+        editable
+        inputMode="numeric"
+        inputValue={activeFontSize.replace(/px$/, '')}
+        value={activeFontSize}
+        onChange={(v: string) => setFontSize(v)}
+        options={fontSizeOptions}
+        title={t('doc.fontSize')}
+      />
+      <div className="toolbar-divider" />
+      <div className="relative">
+        <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 28 }}
+          onClick={() => { setColorOpen(!colorOpen); setHlOpen(false) }}>
+          <IconFontColor color={activeColor || '#111111'} />
+        </button>
+        {colorOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setColorOpen(false)} />
+            <div className="absolute ribbon-popup" style={{ ...(popupOpensUp ? { bottom: '100%', marginBottom: 6, top: 'auto' } : { top: '100%', marginTop: 6, bottom: 'auto' }), left: 0, right: 'auto', zIndex: 51 } as any}>
+              <ColorGrid colors={COLORS} onPick={c => { setTextColor(c); setColorOpen(false) }} onClear={clearColor} clearLabel={t('doc.autoColor')} customLabel={t('doc.customColor')} />
+            </div>
+          </>
+        )}
+      </div>
+      <div className="relative">
+        <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 28 }}
+          onClick={() => { setHlOpen(!hlOpen); setColorOpen(false) }}>
+          <IconHighlight />
+        </button>
+        {hlOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setHlOpen(false)} />
+            <div className="absolute ribbon-popup" style={{ ...(popupOpensUp ? { bottom: '100%', marginBottom: 6, top: 'auto' } : { top: '100%', marginTop: 6, bottom: 'auto' }), left: 0, right: 'auto', zIndex: 51 } as any}>
+              <ColorGrid colors={HL_COLORS} onPick={c => { setHighlight(c); setHlOpen(false) }} />
+            </div>
+          </>
+        )}
+      </div>
+      <div className="toolbar-divider" />
+      {btn(() => exec('alignLeft'), <IconAlignLeft />, t('doc.alignLeft'))}
+      {btn(() => exec('alignCenter'), <IconAlignCenter />, t('doc.alignCenter'))}
+      {btn(() => exec('alignRight'), <IconAlignRight />, t('doc.alignRight'))}
+      <div className="toolbar-divider" />
+      {btn(() => exec('h1'), 'H1', t('doc.heading1'))}
+      {btn(() => exec('h2'), 'H2', t('doc.heading2'))}
+      {btn(() => exec('h3'), 'H3', t('doc.heading3'))}
     </div>
   )
 }
@@ -467,6 +611,15 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [footnotes, setFootnotes] = useState<FootnoteData[]>([])
   // 每个顶级块所在的页码（由分页引擎回报），用于把脚注显示在引用所在页底部
   const [blockPages, setBlockPages] = useState<number[]>([])
+  const blockPagesRef = useRef<number[]>([])  // 供 generateTOC/updateTocPageNumbers 同步读取最新页码
+  // 目录页码自动回填：分页引擎每次回报页码即刷新 TOC 条目（等价 MS Word“更新域”）。
+  // updateTocPageNumbers 无变化时不派发事务，因此不会形成 dispatch→重算 死循环。
+  useEffect(() => {
+    if (blockPages.length === 0) return
+    const timer = setTimeout(() => updateTocPageNumbers(), 60)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockPages])
   // 将脚注按“引用所在页”分组，使脚注显示在对应页底部而非文档末尾
   const footnotesByPage = useMemo(() => {
     const map: Record<number, FootnoteData[]> = {}
@@ -597,6 +750,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
   const [activeMarks, setActiveMarks] = useState<Set<string>>(new Set())
   const [activeAttrs, setActiveAttrs] = useState<any>({})
+  const [cellVAlign, setCellVAlignState] = useState('')  // 当前单元格垂直对齐（表格工具栏高亮用）
   const [activeFont, setActiveFont] = useState('')
   const [activeFontSize, setActiveFontSize] = useState('')
   const [activeColor, setActiveColor] = useState('')
@@ -866,7 +1020,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
-        createPaginationPlugin(() => metricsRef.current, setPageCount, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, setBlockPages),
+        createPaginationPlugin(() => metricsRef.current, setPageCount, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, (pages: number[]) => { blockPagesRef.current = pages; setBlockPages(pages) }),
         // 差异对比高亮（左侧：被删除段落标红），仅在并排对比时生效
         diffDecorationPlugin(diffDelRef),
         // 格式刷：暂存源格式后，下一次在目标选区上直接套用源 marks。
@@ -1154,7 +1308,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         blur: () => { setFocused(false); return false },
         mouseup: (view: any, e: any) => {
           const v = viewRef.current
-          if (v && !v.state.selection.empty) { setShowMiniToolbar(true); setMiniToolbarPos({ x: e.clientX, y: e.clientY - 50 }) }
+          if (v && !v.state.selection.empty) { setShowMiniToolbar(true); setMiniToolbarPos({ x: e.clientX, y: e.clientY }) }
           else { setShowMiniToolbar(false) }
           return false
         },
@@ -1308,8 +1462,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     if (empty) { state.storedMarks?.forEach(collect); $from.marks().forEach(collect) } else { state.doc.nodesBetween(from, to, (n) => n.marks.forEach(collect)) }
     if ($from.parent.type.name === 'heading') marks.add(`heading-${$from.parent.attrs.level}`)
     let isInTable = false
-    for (let d = $from.depth; d > 0; d--) { if ($from.node(d).type.name === 'table') { isInTable = true; break } }
+    let cellVa = ''
+    for (let d = $from.depth; d > 0; d--) {
+      const n = $from.node(d)
+      if (n.type.name === 'table_cell' && !cellVa) cellVa = n.attrs.vAlign || ''
+      if (n.type.name === 'table') { isInTable = true; break }
+    }
     setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c); setActiveCharSpacing(cs)
+    setCellVAlignState(cellVa)
     // Track if cursor is on an image or shape node (for float/wrap buttons)
     const sel = state.selection
     const selNode = sel instanceof NodeSelection ? sel.node : null
@@ -1435,37 +1595,77 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     }
   }
 
+  // 判定目录相关段落：标题段（style='Table of Contents'）或条目段（style='TOC Entry'/含 tocLink）
+  const isTocRelatedPara = (node: any): boolean => {
+    if (node.type.name !== 'paragraph') return false
+    if (node.attrs.style === 'Table of Contents' || node.attrs.style === 'TOC Entry') return true
+    let hasLink = false
+    node.content.forEach((c: any) => { if (c.type.name === 'tocLink') hasLink = true })
+    return hasLink
+  }
+
+  // 收集全部标题（heading 或段落型标题），附顶层块序号（对应分页引擎 blockPages 下标）
+  const collectHeadings = (doc: any) => {
+    const heads: { level: number; text: string; id: string; blockIndex: number }[] = []
+    let idx = -1
+    doc.forEach((node: any) => {
+      idx++
+      const lvl = node.type.name === 'heading' ? Math.max(1, node.attrs.level || 1)
+        : node.type.name === 'paragraph' ? (node.attrs.outlineLevel || outlineLevelFromName(node.attrs.style || '') || 0) : 0
+      if (lvl > 0) heads.push({ level: lvl, text: node.textContent || `标题 ${lvl}`, id: node.attrs.id || '', blockIndex: idx })
+    })
+    return heads
+  }
+
+  // 依据分页引擎回报的每块页码，把页码回填到 tocLink.page（等价 MS Word“更新域”）。
+  // 无变化时不派发事务，因此不会形成 dispatch→重算→dispatch 死循环。
+  const updateTocPageNumbers = () => {
+    const v = viewRef.current; if (!v) return
+    const pages = blockPagesRef.current
+    if (!pages || pages.length === 0) return
+    const { state, dispatch } = v
+    const idPage = new Map<string, string>()
+    let idx = -1
+    state.doc.forEach((node: any) => {
+      idx++
+      const lvl = node.type.name === 'heading' ? Math.max(1, node.attrs.level || 1)
+        : node.type.name === 'paragraph' ? (node.attrs.outlineLevel || outlineLevelFromName(node.attrs.style || '') || 0) : 0
+      if (lvl > 0 && node.attrs.id) idPage.set(node.attrs.id, String((pages[idx] != null ? pages[idx] : idx) + 1))
+    })
+    const tr = state.tr
+    let changed = false
+    state.doc.descendants((node: any, pos: number) => {
+      if (node.type.name !== 'tocLink') return true
+      const target = node.attrs.target
+      if (!target) return false
+      const pg = idPage.get(target)
+      if (pg != null && pg !== String(node.attrs.page || '')) {
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, page: pg })
+        changed = true
+      }
+      return false
+    })
+    if (changed) dispatch(tr)
+  }
+
   const generateTOC = () => {
     const v = viewRef.current
     if (!v) return
     const { state, dispatch } = v
-    // 判断一个块节点是否为“标题”：heading 节点，或带 outlineLevel 的段落，
-    // 或样式名匹配 Heading 模式（如 “Heading 1”“My Heading 2”）。
-    // 关键修复：WYSIWYG 里用「标题样式」写的文字是 paragraph + style，
-    // 不是 heading 节点——旧实现只认 heading，导致“没有标题”无法生成目录。
-    const isHeadingNode = (node: any): number => {
-      if (node.type.name === 'heading') return Math.max(1, node.attrs.level || 1)
-      if (node.type.name === 'paragraph') {
-        const lvl = node.attrs.outlineLevel || outlineLevelFromName(node.attrs.style || '') || 0
-        if (lvl > 0) return lvl
-      }
-      return 0
-    }
+    // 标题判定：heading 节点，或带 outlineLevel 的段落，或样式名匹配 Heading 模式。
+    // WYSIWYG 里用「标题样式」写的文字是 paragraph + style，不是 heading 节点。
     // 1) 为缺少 id 的标题（含段落型标题）分配稳定 id
     const tr0 = state.tr
     state.doc.descendants((node: any, pos: number) => {
-      const lvl = isHeadingNode(node)
-      if (lvl && !node.attrs.id) {
+      const lvl = node.type.name === 'heading' ? Math.max(1, node.attrs.level || 1)
+        : node.type.name === 'paragraph' ? (node.attrs.outlineLevel || outlineLevelFromName(node.attrs.style || '') || 0) : 0
+      if (lvl > 0 && !node.attrs.id) {
         tr0.setNodeMarkup(pos, null, { ...node.attrs, id: 'h-' + Math.random().toString(36).slice(2, 9) })
       }
     })
     if (tr0.docChanged) dispatch(tr0)
     // 2) 收集标题（提纲级别），生成多级编号
-    const headings: { level: number; text: string; id: string }[] = []
-    v.state.doc.descendants((node: any) => {
-      const lvl = isHeadingNode(node)
-      if (lvl) headings.push({ level: lvl, text: node.textContent || `标题 ${lvl}`, id: node.attrs.id })
-    })
+    const headings = collectHeadings(v.state.doc)
     if (headings.length === 0) { alert(t('doc.noHeadingsForToc')); return }
     const counters: number[] = []
     const numbered = headings.map((h) => {
@@ -1475,41 +1675,65 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       const num = counters.slice(1, lvl + 1).filter((x) => x).join('.')
       return { ...h, num }
     })
-    // 3) 移除旧目录（标题块或含 tocLink 的段落）
-    const tr = v.state.tr
-    const toRemove: number[] = []
-    tr.doc.descendants((node: any, pos: number) => {
-      if (node.type.name !== 'paragraph') return
-      let hasLink = false
-      node.content.forEach((c: any) => { if (c.type.name === 'tocLink') hasLink = true })
-      if (node.attrs.style === 'Table of Contents' || hasLink) toRemove.push(pos)
-    })
-    for (let i = toRemove.length - 1; i >= 0; i--) {
-      const pos = toRemove[i]
-      const node = tr.doc.nodeAt(pos)!
-      tr.delete(pos, pos + node.nodeSize)
+    // 3) 组装目录节点：标题 + 条目（点线引导符/页码由 tocLink toDOM + CSS 渲染，对齐 MS Word 目录外观）
+    const pageOf = (blockIndex: number) => {
+      const pg = blockPagesRef.current[blockIndex]
+      return pg != null ? String(pg + 1) : ''
     }
-    // 4) 插入新目录（标题 + 可点击条目）
     const title = schema.nodes.paragraph.create(
       { style: 'Table of Contents' },
-      schema.text(t('doc.autoTocTitle'), [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])
+      schema.text(t('doc.tocTitle'), [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])
     )
     const nodes: any[] = [title]
     numbered.forEach((h) => {
-      const indent = ' '.repeat(Math.max(0, h.level - 1))
+      const indent = '\u3000'.repeat(Math.max(0, h.level - 1))
       const label = `${h.num}  ${h.text}`
-      const link = schema.nodes.tocLink.create({ target: h.id, label: indent + label })
+      const link = schema.nodes.tocLink.create({ target: h.id, label: indent + label, page: pageOf(h.blockIndex), level: h.level })
       nodes.push(schema.nodes.paragraph.create({ style: 'TOC Entry' }, link))
     })
-    // 关键修复：旧实现硬插 pos=0，若文档以非段落块（如分页符）开头会抛错导致整个生成失败。
-    // 改为插到第一个顶层块之前的安全位置。
-    let insertAt = 0
-    const first = tr.doc.firstChild
-    if (first) insertAt = 0 // 文档起始即为第一个顶层块之前
-    let pos = insertAt
-    nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
+    // 4) 计算插入位置：
+    //    a) 文档已有目录 → 原地替换（“更新目录”不搬家，对齐 MS Word 更新域行为）
+    //    b) 无目录 → 插到光标处（光标在空段落则替换该段；否则插到当前顶层块之后）
+    let replaceFrom = -1, replaceTo = -1
+    const blocks: { node: any; from: number; to: number }[] = []
+    v.state.doc.forEach((node: any, _offset: number, pos: number) => {
+      blocks.push({ node, from: pos, to: pos + node.nodeSize })
+    })
+    for (const b of blocks) {
+      if (isTocRelatedPara(b.node)) { replaceFrom = b.from; replaceTo = b.to; break }
+    }
+    const tr = v.state.tr
+    if (replaceFrom >= 0) {
+      // 扩展到连续目录段末尾（旧目录可能夹空行）
+      for (const b of blocks) {
+        if (b.from >= replaceTo && isTocRelatedPara(b.node)) replaceTo = b.to
+      }
+      tr.replaceWith(replaceFrom, replaceTo, nodes)
+    } else {
+      let insertAt = 0
+      try {
+        const { $from } = v.state.selection
+        if ($from.depth >= 1) {
+          const topFrom = $from.before(1), topTo = $from.after(1)
+          const topNode = v.state.doc.nodeAt(topFrom)
+          if (topNode && topNode.type.name === 'paragraph' && topNode.childCount === 0) {
+            // 空段落：替换它
+            tr.delete(topFrom, topTo)
+            insertAt = topFrom
+          } else {
+            insertAt = topTo
+          }
+        }
+      } catch { insertAt = 0 }
+      let pos = insertAt
+      nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
+    }
     dispatch(tr)
     v.focus()
+    // 5) 插入改变了分页 → 分页引擎回报新页码后自动回填（useEffect[blockPages] 也会触发）
+    requestAnimationFrame(() => updateTocPageNumbers())
+    setTimeout(() => updateTocPageNumbers(), 120)
+    setTimeout(() => updateTocPageNumbers(), 400)
   }
 
   const insertManualToc = () => {
@@ -1521,7 +1745,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const tr = v.state.tr
     const title = schema.nodes.paragraph.create(
       { style: 'Table of Contents' },
-      schema.text(t('doc.manualTocTitle'), [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])
+      schema.text(t('doc.tocTitle'), [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '18px' })])
     )
     const nodes: any[] = [title]
     lines.forEach((line) => {
@@ -1594,6 +1818,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'bulletList': wrapIn(schema.nodes.bullet_list)(v.state, v.dispatch); break
       case 'orderedList': wrapIn(schema.nodes.ordered_list)(v.state, v.dispatch); break
       case 'quote': wrapIn(schema.nodes.blockquote)(v.state, v.dispatch); break
+      // 段落对齐（供悬浮工具栏/右键菜单复用；主 ribbon 直接调 setParaAttr）
+      case 'alignLeft': setParaAttr('align', 'left'); break
+      case 'alignCenter': setParaAttr('align', 'center'); break
+      case 'alignRight': setParaAttr('align', 'right'); break
+      case 'alignJustify': setParaAttr('align', 'justify'); break
       case 'codeBlock': setBlockType(schema.nodes.code_block)(v.state, v.dispatch); break
       case 'undo': undo(v.state, v.dispatch); break
       case 'redo': redo(v.state, v.dispatch); break
@@ -1981,7 +2210,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     }
   }
   const setTextColor = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.textColor, { color })(v.state, v.dispatch); v.focus() }
-  const setHighlight = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.highlight, { color })(v.state, v.dispatch); v.focus() }
+  // 「自动」= 移除字体颜色标记（对齐 MS Word 字体颜色面板的自动项）
+  const clearTextColor = () => {
+    const v = viewRef.current; if (!v) return
+    const { from, to } = v.state.selection
+    const tr = v.state.tr.removeMark(from, to, schema.marks.textColor)
+    v.dispatch(tr); v.focus()
+  }
+  const setHighlight = (color: string) => {
+    const v = viewRef.current; if (!v) return
+    const { from, to } = v.state.selection
+    if (!color) { v.dispatch(v.state.tr.removeMark(from, to, schema.marks.highlight)); v.focus(); return }
+    toggleMark(schema.marks.highlight, { color })(v.state, v.dispatch); v.focus()
+  }
   const handleSearch = () => { const v = viewRef.current; if (!v || !searchQuery) return; doSearch(v, searchQuery, false) }
   const handleReplace = () => { const v = viewRef.current; if (!v) return; doReplace(v, searchQuery, replaceQuery, false) }
   const handleReplaceAll = () => {
@@ -2423,25 +2664,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <button onClick={() => exec('italic')} className={`toolbar-btn ${activeMarks.has('italic') ? 'active' : ''}`} title={t('doc.italic') + ' Ctrl+I'} type="button" style={{ width: 28, height: 26 }}><i>I</i></button>
                 <button onClick={() => exec('underline')} className={`toolbar-btn ${activeMarks.has('underline') ? 'active' : ''}`} title={t('doc.underline') + ' Ctrl+U'} type="button" style={{ width: 28, height: 26 }}><u>U</u></button>
                 <button onClick={() => exec('strikethrough')} className={`toolbar-btn ${activeMarks.has('strikethrough') ? 'active' : ''}`} title={t('doc.strikethrough')} type="button" style={{ width: 28, height: 26 }}><s>S</s></button>
-                <button onClick={() => exec('superscript')} className={`toolbar-btn ${activeMarks.has('superscript') ? 'active' : ''}`} title={t('doc.superscript')} type="button" style={{ width: 28, height: 26 }}>X²</button>
-                <button onClick={() => exec('subscript')} className={`toolbar-btn ${activeMarks.has('subscript') ? 'active' : ''}`} title={t('doc.subscript')} type="button" style={{ width: 28, height: 26 }}>X₂</button>
+                <button onClick={() => exec('superscript')} className={`toolbar-btn ${activeMarks.has('superscript') ? 'active' : ''}`} title={t('doc.superscript')} type="button" style={{ width: 28, height: 26 }}><IconSuperscript /></button>
+                <button onClick={() => exec('subscript')} className={`toolbar-btn ${activeMarks.has('subscript') ? 'active' : ''}`} title={t('doc.subscript')} type="button" style={{ width: 28, height: 26 }}><IconSubscript /></button>
+                {/* 字体颜色：A 图标 + 当前色色条，面板含自动/其他颜色（对齐 MS Word） */}
                 <div className="relative">
-                  <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }} onClick={() => openPanel('color')} />
+                  <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 26 }} onClick={() => openPanel('color')}>
+                    <IconFontColor color={activeColor || '#111111'} />
+                  </button>
                   {showColorPopup && (
                     <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
-                      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>
-                        {COLORS.map(c => <button key={c} onClick={() => { setTextColor(c); closeAllPanels() }} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}
-                      </div>
+                      <ColorGrid colors={COLORS} onPick={c => { setTextColor(c); closeAllPanels() }} onClear={clearTextColor} clearLabel={t('doc.autoColor')} customLabel={t('doc.customColor')} />
                     </div>
                   )}
                 </div>
+                {/* 突出显示（高亮）：荧光笔图标 + 色条 */}
                 <div className="relative">
-                  <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 26, background: 'linear-gradient(180deg, transparent 60%, #fef08a 60%)' }} onClick={() => openPanel('highlight')} />
+                  <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 26 }} onClick={() => openPanel('highlight')}>
+                    <IconHighlight />
+                  </button>
                   {showHighlightPopup && (
                     <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
-                      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(6, 28px)' }}>
-                        {HL_COLORS.map(c => <button key={c} onClick={() => { setHighlight(c); closeAllPanels() }} className="rounded-md transition-transform hover:scale-110" style={{ width: 28, height: 28, background: c, border: '1px solid var(--color-border)' }} type="button" />)}
-                      </div>
+                      <ColorGrid colors={HL_COLORS} onPick={c => { setHighlight(c); closeAllPanels() }} onClear={() => { setHighlight(''); closeAllPanels() }} clearLabel={t('doc.noColor')} />
                     </div>
                   )}
                 </div>
@@ -2457,15 +2700,15 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 <RibbonButton icon="H3" label={t('doc.heading3')} onClick={() => exec('h3')} active={activeMarks.has('heading-3')} />
               </div>
               <div className="flex items-center gap-0.5">
-                <button onClick={() => setParaAttr('align', 'left')} className={`toolbar-btn ${activeAttrs.align === 'left' ? 'active' : ''}`} title={t('doc.alignLeft')} type="button" style={{ width: 28, height: 26 }}>⬅</button>
-                <button onClick={() => setParaAttr('align', 'center')} className={`toolbar-btn ${activeAttrs.align === 'center' ? 'active' : ''}`} title={t('doc.alignCenter')} type="button" style={{ width: 28, height: 26 }}>⬌</button>
-                <button onClick={() => setParaAttr('align', 'right')} className={`toolbar-btn ${activeAttrs.align === 'right' ? 'active' : ''}`} title={t('doc.alignRight')} type="button" style={{ width: 28, height: 26 }}>➡</button>
-                <button onClick={() => setParaAttr('align', 'justify')} className={`toolbar-btn ${activeAttrs.align === 'justify' ? 'active' : ''}`} title={t('doc.alignJustify')} type="button" style={{ width: 28, height: 26 }}>☰</button>
+                <button onClick={() => setParaAttr('align', 'left')} className={`toolbar-btn ${activeAttrs.align === 'left' ? 'active' : ''}`} title={t('doc.alignLeft')} type="button" style={{ width: 28, height: 26 }}><IconAlignLeft /></button>
+                <button onClick={() => setParaAttr('align', 'center')} className={`toolbar-btn ${activeAttrs.align === 'center' ? 'active' : ''}`} title={t('doc.alignCenter')} type="button" style={{ width: 28, height: 26 }}><IconAlignCenter /></button>
+                <button onClick={() => setParaAttr('align', 'right')} className={`toolbar-btn ${activeAttrs.align === 'right' ? 'active' : ''}`} title={t('doc.alignRight')} type="button" style={{ width: 28, height: 26 }}><IconAlignRight /></button>
+                <button onClick={() => setParaAttr('align', 'justify')} className={`toolbar-btn ${activeAttrs.align === 'justify' ? 'active' : ''}`} title={t('doc.alignJustify')} type="button" style={{ width: 28, height: 26 }}><IconAlignJustify /></button>
                 <div className="toolbar-divider" />
-                <button onClick={() => exec('bulletList')} className="toolbar-btn" title={t('doc.bulletList')} type="button" style={{ width: 28, height: 26 }}>•</button>
-                <button onClick={() => exec('orderedList')} className="toolbar-btn" title={t('doc.orderedList')} type="button" style={{ width: 28, height: 26 }}>1.</button>
-                <button onClick={() => setParaAttr('indent', Math.min(8, (activeAttrs.indent || 0) + 1))} className="toolbar-btn" title={t('doc.indentMore')} type="button" style={{ width: 28, height: 26 }}>→|</button>
-                <button onClick={() => setParaAttr('indent', Math.max(0, (activeAttrs.indent || 0) - 1))} className="toolbar-btn" title={t('doc.indentLess')} type="button" style={{ width: 28, height: 26 }}>|←</button>
+                <button onClick={() => exec('bulletList')} className="toolbar-btn" title={t('doc.bulletList')} type="button" style={{ width: 28, height: 26 }}><IconBulletList /></button>
+                <button onClick={() => exec('orderedList')} className="toolbar-btn" title={t('doc.orderedList')} type="button" style={{ width: 28, height: 26 }}><IconNumberList /></button>
+                <button onClick={() => setParaAttr('indent', Math.min(8, (activeAttrs.indent || 0) + 1))} className="toolbar-btn" title={t('doc.indentMore')} type="button" style={{ width: 28, height: 26 }}><IconIndentInc /></button>
+                <button onClick={() => setParaAttr('indent', Math.max(0, (activeAttrs.indent || 0) - 1))} className="toolbar-btn" title={t('doc.indentLess')} type="button" style={{ width: 28, height: 26 }}><IconIndentDec /></button>
               </div>
               <div className="flex items-center gap-1">
                 <RibbonButton icon="⚙" label={t('doc.paraDialog')} onClick={openParaDialog} title={t('doc.paraDialog')} active={showParaDialog} />
@@ -2517,8 +2760,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                     { label: t('doc.spacing.tight'), value: '-0.5px' },
                   ]}
                 />
-                <button onClick={() => changeSpace('before', 6)} className="toolbar-btn" title={t('doc.spaceBefore')} type="button" style={{ width: 28, height: 26 }}>↥</button>
-                <button onClick={() => changeSpace('after', 6)} className="toolbar-btn" title={t('doc.spaceAfter')} type="button" style={{ width: 28, height: 26 }}>↧</button>
+                <button onClick={() => changeSpace('before', 6)} className="toolbar-btn" title={t('doc.spaceBefore')} type="button" style={{ width: 28, height: 26 }}><IconSpaceBefore /></button>
+                <button onClick={() => changeSpace('after', 6)} className="toolbar-btn" title={t('doc.spaceAfter')} type="button" style={{ width: 28, height: 26 }}><IconSpaceAfter /></button>
               </div>
             </div>
           </RibbonGroup>
@@ -2672,7 +2915,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           <RibbonGroup label={t('doc.shading')}>
             <div className="relative">
-              <button className="toolbar-btn" title={t('doc.shading')} type="button" style={{ width: 40, height: 32, background: activeAttrs.shading || 'transparent' }} onClick={() => openPanel('shading')} />
+              <button className="toolbar-btn" title={t('doc.shading')} type="button" style={{ width: 32, height: 28 }} onClick={() => openPanel('shading')}>
+                <IconShading color={activeAttrs.shading || 'var(--color-text-muted)'} />
+              </button>
               {showShadingPopup && (
                 <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', padding: '0.625rem', zIndex: 50 }}>
                   <div className="grid grid-cols-6 gap-1.5">
@@ -2890,9 +3135,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <button onClick={() => deleteRow(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.deleteRow')} type="button">↧✕</button>
           <button onClick={() => deleteColumn(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.deleteColumn')} type="button">↦✕</button>
           <div className="toolbar-divider" />
-          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'left')} className="toolbar-btn" title={t('doc.alignLeft')} type="button">⬅</button>
-          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'center')} className="toolbar-btn" title={t('doc.alignCenter')} type="button">⬌</button>
-          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'right')} className="toolbar-btn" title={t('doc.alignRight')} type="button">➡</button>
+          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'left')} className="toolbar-btn" title={t('doc.alignLeft')} type="button"><IconAlignLeft /></button>
+          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'center')} className="toolbar-btn" title={t('doc.alignCenter')} type="button"><IconAlignCenter /></button>
+          <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'right')} className="toolbar-btn" title={t('doc.alignRight')} type="button"><IconAlignRight /></button>
+          <div className="toolbar-divider" />
+          <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.vAlign') || '垂直对齐'}:</span>
+          <button onClick={() => setCellVAlign(viewRef.current!.state, viewRef.current!.dispatch, 'top')} className={`toolbar-btn ${cellVAlign === 'top' ? 'active' : ''}`} title={t('doc.vAlignTop') || '顶端对齐'} type="button"><IconVAlignTop /></button>
+          <button onClick={() => setCellVAlign(viewRef.current!.state, viewRef.current!.dispatch, 'middle')} className={`toolbar-btn ${cellVAlign === 'middle' ? 'active' : ''}`} title={t('doc.vAlignMiddle') || '垂直居中'} type="button"><IconVAlignMiddle /></button>
+          <button onClick={() => setCellVAlign(viewRef.current!.state, viewRef.current!.dispatch, 'bottom')} className={`toolbar-btn ${cellVAlign === 'bottom' ? 'active' : ''}`} title={t('doc.vAlignBottom') || '底端对齐'} type="button"><IconVAlignBottom /></button>
           <div className="toolbar-divider" />
           <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.tableAlign') || '表格对齐'}:</span>
           <button onClick={() => exec('tableAlignLeft')} className="toolbar-btn" title={t('doc.tableAlignLeft') || '表格左对齐'} type="button">⟸</button>
@@ -2901,40 +3151,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </div>
       )}
 
-      {/* Mini 浮动工具栏 — 边界检测 + click 触发颜色弹出菜单（与主 ribbon 统一） */}
-      {showMiniToolbar && (() => {
-        const TOOLBAR_W = 300, TOOLBAR_H = 40
-        const POPUP_W = 200, POPUP_H = 80
-        const vw = window.innerWidth, vh = window.innerHeight
-        let mx = miniToolbarPos.x, my = miniToolbarPos.y
-        if (mx + TOOLBAR_W > vw - 8) mx = Math.max(8, vw - TOOLBAR_W - 8)
-        if (my < 8) my = 8
-        if (my + TOOLBAR_H + POPUP_H > vh - 8) my = Math.max(8, vh - TOOLBAR_H - POPUP_H - 8)
-        return (
-        <>
-          {showMiniColorPopup && <div className="fixed inset-0 z-40" onClick={() => setShowMiniColorPopup(false)} />}
-          <div className="fixed z-50 flex items-center gap-0.5 px-2 py-1 rounded-lg shadow-xl animate-fade-in" style={{ left: mx, top: my, background: 'var(--color-surface)', border: '1px solid var(--color-border)' }} onMouseDown={e => e.preventDefault()}>
-            <button onClick={() => exec('bold')} className={`toolbar-btn ${activeMarks.has('bold') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><b>B</b></button>
-            <button onClick={() => exec('italic')} className={`toolbar-btn ${activeMarks.has('italic') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><i>I</i></button>
-            <button onClick={() => exec('underline')} className={`toolbar-btn ${activeMarks.has('underline') ? 'active' : ''}`} style={{ width: 28, height: 26 }}><u>U</u></button>
-            <div className="toolbar-divider" />
-            <div className="relative">
-              <button className="toolbar-btn" title={t('doc.color')} type="button" style={{ width: 28, height: 26, borderBottom: `3px solid ${activeColor || '#333'}` }} onClick={() => setShowMiniColorPopup(!showMiniColorPopup)} />
-              {showMiniColorPopup && (
-                <div className="absolute ribbon-popup" style={{ bottom: '100%', left: 0, right: 'auto', top: 'auto', padding: '0.5rem', marginBottom: '4px', zIndex: 51 }}>
-                  <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(6, 20px)' }}>
-                    {COLORS.map(c => <button key={c} onClick={() => { setTextColor(c); setShowMiniColorPopup(false) }} className="rounded transition-transform hover:scale-110" style={{ width: 20, height: 20, background: c, border: '1px solid var(--color-border)' }} type="button" />)}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="toolbar-divider" />
-            <button onClick={() => exec('h1')} className="toolbar-btn" title={t('doc.heading1')} style={{ width: 28, height: 26 }}>H1</button>
-            <button onClick={() => exec('h2')} className="toolbar-btn" title={t('doc.heading2')} style={{ width: 28, height: 26 }}>H2</button>
-          </div>
-        </>
-        )
-      })()}
+      {/* Mini 浮动工具栏 — 实测宽度边界收敛 + 弹出方向自适应 + 补齐 MS Word 高频按钮 */}
+      {showMiniToolbar && (
+        <SelectionMiniToolbar
+          pos={miniToolbarPos}
+          activeMarks={activeMarks}
+          activeColor={activeColor}
+          activeFontSize={activeFontSize}
+          fontSizeOptions={FONT_SIZES.map(s => ({ label: s.name, value: s.value }))}
+          exec={exec}
+          setTextColor={setTextColor}
+          clearColor={clearTextColor}
+          setHighlight={setHighlight}
+          setFontSize={setFontSize}
+          t={t}
+          onClosePopup={() => setShowMiniColorPopup(false)}
+        />
+      )}
 
       {/* 右键菜单 — 边界检测防止越界 */}
       {showContextMenu && (() => {

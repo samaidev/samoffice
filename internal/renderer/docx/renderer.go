@@ -576,7 +576,7 @@ func sectPrXML(ps *core.PageSetup, footers []footRel, pn *core.PageNumberConfig)
 func renderBlock(sb *strings.Builder, b core.Block, images map[string]*embedImage, contentW int) {
         switch v := b.(type) {
         case *core.Paragraph:
-                renderParagraph(sb, v, images)
+                renderParagraph(sb, v, images, contentW)
         case *core.Heading:
                 renderHeading(sb, v)
         case *core.Table:
@@ -751,9 +751,35 @@ func renderTableCell(sb *strings.Builder, c *core.TableCell, widthTwips, span in
                 // 表头底纹（浅蓝灰），与前端表头样式近似
                 sb.WriteString(`<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>`)
         }
+        // 垂直对齐（前端表格工具栏"垂直对齐"按钮）：top|center|bottom
+        if va := strings.TrimSpace(c.VAlign); va != "" {
+                xmlVa := "top"
+                switch va {
+                case "middle", "center":
+                        xmlVa = "center"
+                case "bottom":
+                        xmlVa = "bottom"
+                }
+                fmt.Fprintf(sb, `<w:vAlign w:val="%s"/>`, xmlVa)
+        }
         sb.WriteString("</w:tcPr>")
         if len(c.Blocks) > 0 {
                 for _, blk := range c.Blocks {
+                        // 单元格水平对齐（前端 table_cell.align）：内层段落未显式设置时继承
+                        if c.Align != "" {
+                                if p, ok := blk.(*core.Paragraph); ok && strings.TrimSpace(p.Align) == "" {
+                                        np := *p
+                                        np.Align = c.Align
+                                        renderParagraph(sb, &np, images, widthTwips)
+                                        continue
+                                }
+                                if h, ok := blk.(*core.Heading); ok && strings.TrimSpace(h.Align) == "" {
+                                        nh := *h
+                                        nh.Align = c.Align
+                                        renderBlock(sb, nh, images, widthTwips)
+                                        continue
+                                }
+                        }
                         renderBlock(sb, blk, images, widthTwips)
                 }
         } else if len(c.Inline) > 0 {
@@ -1077,7 +1103,7 @@ func runSpacingXML(props map[string]any) string {
         return fmt.Sprintf(`<w:spacing w:val="%d"/>`, tw)
 }
 
-func renderParagraph(sb *strings.Builder, p *core.Paragraph, images map[string]*embedImage) {
+func renderParagraph(sb *strings.Builder, p *core.Paragraph, images map[string]*embedImage, contentW int) {
         // 公式段落：单个文本且内容为 ⟨formula:...⟩ 时渲染为 OMML 数学公式
         if len(p.Inline) == 1 {
                 if t, ok := p.Inline[0].(*core.Text); ok {
@@ -1090,20 +1116,71 @@ func renderParagraph(sb *strings.Builder, p *core.Paragraph, images map[string]*
                 }
         }
         sb.WriteString("<w:p>")
-        if ppr := paraPr(p.Style, p.Align, p.Props); ppr != "" {
+        if p.Style == "TOC Entry" {
+                // 目录条目（对齐 MS Word）：右对齐点线制表位，页码列右贴边；
+                // 正文中的 \t 由 renderInlineTOC 转为 <w:tab/>，Word 中呈现“标题......页码”标准目录外观。
+                pos := contentW
+                if pos <= 0 {
+                        pos = 9026 // A4 默认正文宽度（twips）兑底
+                }
+                sb.WriteString(`<w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="`)
+                sb.WriteString(fmt.Sprintf("%d", pos))
+                sb.WriteString(`"/></w:tabs></w:pPr>`)
+        } else if ppr := paraPr(p.Style, p.Align, p.Props); ppr != "" {
                 sb.WriteString(ppr)
         }
         // 段落级字符间距：作用于段内所有 run（含超链接内文本）
         runExtra := runSpacingXML(p.Props)
+        isTOC := p.Style == "TOC Entry"
         for _, in := range p.Inline {
                 // InlineImage 处理
                 if iim, ok := in.(*core.InlineImage); ok {
                         renderInlineImage(sb, iim, images)
                         continue
                 }
-                renderInline(sb, in, runExtra)
+                if isTOC {
+                        renderInlineTOC(sb, in, runExtra)
+                } else {
+                        renderInline(sb, in, runExtra)
+                }
         }
         sb.WriteString("</w:p>\n")
+}
+
+// renderInlineTOC 渲染目录条目行内内容：文本里的 \t 转成 <w:tab/> run，
+// 与段落属性中的右对齐点线制表位配合（制表符之前的文本为标题，之后为页码）。
+func renderInlineTOC(sb *strings.Builder, in core.Inline, runExtra string) {
+        switch t := in.(type) {
+        case *core.Text:
+                parts := strings.Split(t.Content, "\t")
+                for i, part := range parts {
+                        if i > 0 {
+                                sb.WriteString(`<w:r><w:tab/></w:r>`)
+                        }
+                        if part == "" {
+                                continue
+                        }
+                        tt := *t
+                        tt.Content = part
+                        renderText(sb, tt, runExtra)
+                }
+                return
+        case core.Text:
+                parts := strings.Split(t.Content, "\t")
+                for i, part := range parts {
+                        if i > 0 {
+                                sb.WriteString(`<w:r><w:tab/></w:r>`)
+                        }
+                        if part == "" {
+                                continue
+                        }
+                        tt := t
+                        tt.Content = part
+                        renderText(sb, tt, runExtra)
+                }
+                return
+        }
+        renderInline(sb, in, runExtra)
 }
 
 func renderHeading(sb *strings.Builder, h *core.Heading) {
