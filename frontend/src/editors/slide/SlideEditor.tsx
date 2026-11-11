@@ -12,6 +12,14 @@ interface Slide {
   animations: AnimItem[]
 }
 
+// 画布逻辑坐标：宽 6464 单位 = 808px（1px = 8 单位），高随页面比例变化。
+// 所有新建形状的坐标必须是“单位”而非 px，否则渲染时 /8 后只剩 1/8 大小。
+const PXU = 8 // units per px
+const DECK_W_169 = 12192000
+const DECK_H_169 = 6858000
+const DECK_W_43 = 9144000
+const DECK_H_43 = 6858000
+
 // 静态常量在组件外定义，避免每次渲染重建 (perf: 首屏性能优化)
 const SHAPE_DEFS = [
   { type: 'rect', icon: '▭' }, { type: 'roundRect', icon: '▢' },
@@ -63,6 +71,8 @@ interface ShapeItem {
   vAlign?: 'top' | 'middle' | 'bottom'
   isFootnote?: boolean
   glowColor?: string; glowRadius?: number
+  link?: string // 超链接 URL（形状点击打开）
+  fontFamily?: string
   paras?: { align?: string; runs: { text?: string; color?: string; fontSize?: number; bold?: boolean; italic?: boolean; underline?: boolean; font?: string }[] }[]
   // 来自文件的形状：不画装饰边框，边框用文件里的 a:ln
   noDecor?: boolean
@@ -97,12 +107,12 @@ const SHAPE_CLIP: Record<string, string> = {
 // 按 808x454 画布等比缩放，完整渲染：背景、形状（含 paras 逐 run 样式、
 // 填充/渐变/边框/裁剪几何）、图片、艺术字。修复打开 PPT 后左侧缩略图
 // 只显示裸文字、没有样式的问题。
-const SlideThumb = memo(function SlideThumb({ slide, width }: { slide: Slide; width: number }) {
+const SlideThumb = memo(function SlideThumb({ slide, width, aspect = 454 / 808 }: { slide: Slide; width: number; aspect?: number }) {
   const K = width / 808
   const isDark = slide.bg === '#1e293b' || slide.bg === '#312e81'
   return (
-    <div style={{ width, height: Math.round(454 * K), overflow: 'hidden', position: 'relative', background: slide.bg, flex: '0 0 auto' }}>
-      <div style={{ width: 808, height: 454, transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative', color: isDark ? '#f1f5f9' : '#0f172a' }}>
+    <div style={{ width, height: Math.round(width * aspect), overflow: 'hidden', position: 'relative', background: slide.bg, flex: '0 0 auto' }}>
+      <div style={{ width: 808, height: Math.round(808 * aspect), transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative', color: isDark ? '#f1f5f9' : '#0f172a' }}>
         {/* 无形状时展示 title/content（新建的版式幻灯片） */}
         {!slide.shapes.length && (
           <div style={{ position: 'absolute', inset: 0, padding: 40, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -125,6 +135,7 @@ const SlideThumb = memo(function SlideThumb({ slide, width }: { slide: Slide; wi
             <div key={i} style={{
               position: 'absolute', left, top, width: w, height: h,
               display: 'flex', flexDirection: 'column',
+              transform: sh.rotation ? `rotate(${sh.rotation}deg)` : undefined,
               alignItems: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
               justifyContent: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
               textAlign: (sh.textAlign || 'left') as any,
@@ -135,12 +146,14 @@ const SlideThumb = memo(function SlideThumb({ slide, width }: { slide: Slide; wi
               backgroundPosition: bg.startsWith('url') ? 'center' : undefined,
               clipPath: sh.type === 'roundRect' ? 'inset(0 round 8px)' : (SHAPE_CLIP[sh.type] || (sh.type === 'ellipse' ? 'ellipse(50% 50% at 50% 50%)' : undefined)),
               borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : undefined,
-              border: sh.noDecor
-                ? (sh.stroke ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}` : 'none')
-                : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none'),
+              border: sh.stroke
+                ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}`
+                : (sh.noDecor ? 'none' : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none')),
               boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
+              filter: sh.glow ? `drop-shadow(0 0 ${Math.min(28, Math.max(4, (sh.glowRadius || 60000) / 5000))}px ${sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8')})` : 'none',
               color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
               fontSize: sh.fontSize ? `${sh.fontSize}px` : '12px',
+              fontFamily: sh.font || undefined,
               fontWeight: sh.fontBold ? 700 : 400,
               lineHeight: sh.lineHeight || 1.2,
               paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined,
@@ -161,13 +174,24 @@ const SlideThumb = memo(function SlideThumb({ slide, width }: { slide: Slide; wi
                   ))}
                 </div>
               )) : (sh.text ? (
-                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block', width: '100%', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none' }}>{sh.text}</span>
+                sh.bullet
+                  ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6, width: '100%' }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
+                  : sh.numbered
+                  ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6, width: '100%' }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
+                  : <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block', width: '100%', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none' }}>{sh.text}</span>
               ) : null)}
             </div>
           )
         })}
         {slide.artTexts.map((at, i) => (
-          <div key={'a' + i} style={{ position: 'absolute', left: at.x / 8, top: at.y / 8, color: at.color, fontWeight: 700, fontSize: at.fontSize, textAlign: 'center', maxWidth: at.w / 8, lineHeight: 1.05 }}>
+          <div key={'a' + i} style={{ position: 'absolute', left: at.x / 8, top: at.y / 8, color: at.color, fontWeight: 700, fontSize: at.fontSize / 2.5, textAlign: 'center', maxWidth: at.w / 8, lineHeight: 1.05,
+            background: at.gradient ? `linear-gradient(135deg, #${at.gradient.split(',')[0]}, #${at.gradient.split(',')[1]})` : undefined,
+            WebkitBackgroundClip: at.gradient ? 'text' : undefined,
+            WebkitTextFillColor: at.gradient ? 'transparent' : undefined,
+            textShadow: at.shadow ? '2px 2px 6px rgba(0,0,0,0.3)' : 'none',
+            filter: at.glow ? `drop-shadow(0 0 6px ${at.color})` : 'none',
+            WebkitTextStroke: at.outline ? `1px #${at.outline}` : 'none',
+            transform: at.rotation ? `rotate(${at.rotation}deg)` : undefined }}>
             {at.text}
           </div>
         ))}
@@ -212,11 +236,10 @@ function MenuItem({ label, icon, onClick, disabled, danger }: any) {
 export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?: SlideData[]; onSlidesChange?: (slides: SlideData[]) => void }) {
   const { t } = useI18n()
 
-  // 将真实 PPTX 解析出的 EMU 形状转换为内部 ShapeItem（画布 808×454 逻辑，x/8 → px）
+  // 将真实 PPTX 解析出的 EMU 形状转换为内部 ShapeItem（等比坐标系：宽 6464 单位，高随页比例）
   const emuShapesToItems = (shapes?: SlideShape[], pageW = 12192000, pageH = 6858000): ShapeItem[] => {
     if (!shapes || !shapes.length) return []
-    const SX = 6464 / pageW // 808px 宽 = 6464 单位 (x/8)
-    const SY = 3632 / pageH // 454px 高 = 3632 单位 (y/4.5)
+    const SX = 6464 / pageW // 808px 宽 = 6464 单位 (x/8)；等比坐标 x/y 同尺度
     // 字号 pt → 画布 px（与几何同比例）
     const ptToPx = (pt: number) => Math.round(pt * 914400 * 808 / (72 * pageW))
     // PPTX prstGeom → 内部形状类型
@@ -244,24 +267,31 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       return {
         type: isPic ? 'rect' : (GEOM_MAP[s.geom || ''] || 'rect'),
         x: (s.x || 0) * SX,
-        y: (s.y || 0) * SY,
+        y: (s.y || 0) * SX,
         w: (s.cx || 0) * SX,
-        h: (s.cy || 0) * SY,
+        h: (s.cy || 0) * SX,
         fill,
         text: isPic ? '' : (s.text || ''),
-        shadow: false,
-        glow: false,
-        gradient: '',
-        rotation: 0,
+        shadow: !!s.shadow,
+        glow: !!s.glow,
+        glowColor: s.glowColor || undefined,
+        gradient: s.gradient || '',
+        rotation: s.rotation || 0,
         fontSize: s.sizePt ? ptToPx(s.sizePt) : undefined,
         fontBold: !!s.bold,
         fontColor: s.color || undefined,
+        font: s.font || undefined,
         textAlign: s.align === 'l' ? 'left' : s.align === 'r' ? 'right' : s.align === 'c' ? 'center' : undefined,
         vAlign: s.vanchor === 't' ? 'top' : s.vanchor === 'b' ? 'bottom' : s.vanchor === 'ctr' ? 'middle' : undefined,
         paras: paras.length ? paras : undefined,
         noDecor: true,
         stroke: s.lineColor || undefined,
         strokeWidth: s.lineWpt || undefined,
+        bullet: !!s.bullet,
+        numbered: !!s.numbered,
+        lineHeight: s.lineHeight && s.lineHeight !== 1 ? s.lineHeight : undefined,
+        indent: s.indent || undefined,
+        link: s.link || undefined,
       }
     })
   }
@@ -285,7 +315,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           content: s.content || (i === 0 ? t('slide.subtitleDefault') : t('slide.contentPlaceholder')),
           bg: s.bg || '#ffffff',
           layout: 'blank', // 文件打开的幻灯片全部内容都在 shapes 里，用 blank 布局避免默认标题/正文输入框与形状层重叠
-          transition: i === 0 ? 'fade' : '',
+          transition: (s as any).transition || (i === 0 ? 'fade' : ''),
           notes: s.notes || '',
           shapes: emuShapesToItems(s.shapes, pageW, pageH),
           artTexts: [],
@@ -300,6 +330,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   })
   const [active, setActive] = useState(0)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
+  // 幻灯片页面尺寸（EMU）——设计选项卡的宽屏/标准/自定义真实生效
+  const [deckW, setDeckW] = useState(() => {
+    const first = (initialSlides && initialSlides[0]) as any
+    return first?.pageW && first.pageW > 0 ? Number(first.pageW) : DECK_W_169
+  })
+  const [deckH, setDeckH] = useState(() => {
+    const first = (initialSlides && initialSlides[0]) as any
+    return first?.pageH && first.pageH > 0 ? Number(first.pageH) : DECK_H_169
+  })
   const [zoom, setZoom] = useState(100)
   const [autoPlay, setAutoPlay] = useState(false)
   const [autoPlaySec, setAutoPlaySec] = useState(5)
@@ -309,19 +348,21 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const [showAnimPanel, setShowAnimPanel] = useState(false)
   const [pendingSound, setPendingSound] = useState<string>('none')
   const [showArtPanel, setShowArtPanel] = useState(false)
+  const [showChartPanel, setShowChartPanel] = useState(false)
   // 二级颜色弹出菜单 — 统一 click 触发，避免 hover 残留导致重叠
   const [showColorPopup, setShowColorPopup] = useState(false)
   const [showInsertSlide, setShowInsertSlide] = useState(false)
   // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
-  type PanelName = 'shape' | 'anim' | 'art' | 'color'
+  type PanelName = 'shape' | 'anim' | 'art' | 'color' | 'chart'
   const openPanel = (which: PanelName) => {
     setShowShapePanel(which === 'shape' ? !showShapePanel : false)
     setShowAnimPanel(which === 'anim' ? !showAnimPanel : false)
     setShowArtPanel(which === 'art' ? !showArtPanel : false)
     setShowColorPopup(which === 'color' ? !showColorPopup : false)
+    setShowChartPanel(which === 'chart' ? !showChartPanel : false)
   }
-  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false); setShowColorPopup(false); setShowInsertSlide(false) }
-  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel || showColorPopup || showInsertSlide
+  const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false); setShowColorPopup(false); setShowInsertSlide(false); setShowChartPanel(false) }
+  const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel || showColorPopup || showInsertSlide || showChartPanel
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
   const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
@@ -414,15 +455,17 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const switchSlide = (i: number) => { if (i === active) return; setActive(i) }
   const current = slides[active] || slides[0]
   const isDark = current.bg === '#1e293b' || current.bg === '#312e81'
+  // 画布像素高度：宽 808 固定，高随页面比例（等比坐标系）
+  const canvasH = Math.round(808 * (deckH / deckW))
 
   // 把内部 Slide[]（px 坐标）转换为可保存的 SlideData[]（EMU 坐标），供 App 保存 pptx
   const slidesToData = useMemo(() => {
-    const PAGE_W = 12192000
-    const PAGE_H = 6858000
-    const SX = PAGE_W / 6464 // EMU per px (x/8 → 6464 单位 = 808px)
-    const SY = PAGE_H / 3632 // EMU per px (y/4.5 → 3632 单位 = 454px)
+    // 等比坐标：x/y 同尺度（units = EMU·6464/deckW），与 emuShapesToItems 互逆
+    const PAGE_W = deckW
+    const PAGE_H = deckH
+    const SX = PAGE_W / 6464
     const toEMUx = (px: number) => Math.round(px * SX)
-    const toEMUy = (py: number) => Math.round(py * SY)
+    const toEMUy = (py: number) => Math.round(py * SX)
     return (src: Slide[]): SlideData[] => src.map((s) => {
       const shapes: SlideShape[] = []
       for (const sh of s.shapes) {
@@ -442,12 +485,23 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           fill: isPic ? undefined : (sh.fill || ''),
           text: sh.text,
           color: sh.fontColor,
+          font: sh.font,
           // 画布 px → 磅（与加载时的 ptToPx 互逆），修复以前直接把 px 当磅写回的问题
           sizePt: sh.fontSize ? Math.round(sh.fontSize * 72 * PAGE_W / (914400 * 808)) : undefined,
           bold: sh.fontBold,
           align: sh.textAlign === 'left' ? 'l' : sh.textAlign === 'right' ? 'r' : sh.textAlign === 'center' ? 'c' : 'l',
           vanchor: sh.vAlign === 'top' ? 't' : sh.vAlign === 'bottom' ? 'b' : 'ctr',
           img,
+          gradient: sh.gradient || undefined,
+          shadow: sh.shadow || undefined,
+          glow: sh.glow || undefined,
+          glowColor: sh.glowColor || undefined,
+          rotation: sh.rotation || undefined,
+          bullet: sh.bullet || undefined,
+          numbered: sh.numbered || undefined,
+          lineHeight: sh.lineHeight || undefined,
+          indent: sh.indent || undefined,
+          link: sh.link || undefined,
           paras: sh.paras && sh.paras.length ? sh.paras.map(p => ({
             align: p.align,
             runs: (p.runs || []).map(r => ({
@@ -486,20 +540,21 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         notes: s.notes,
         bg: s.bg,
         shapes,
+        transition: s.transition || undefined,
         pageW: PAGE_W,
         pageH: PAGE_H,
       }
     })
-  }, [])
+  }, [deckW, deckH])
 
   // 幻灯片变化时回传给 App（用于保存）
   useEffect(() => {
     onSlidesChange?.(slidesToData(slides))
   }, [slides, onSlidesChange, slidesToData])
 
-  // 形状操作
+  // 形状操作（坐标均为画布逻辑单位：1px = PXU 单位）
   const addShape = (type: string) => {
-    const newShape: ShapeItem = { type, x: 200 + Math.random()*100, y: 200 + Math.random()*100, w: 200, h: 120, fill: '#4f46e5', text: '', shadow: false, glow: false, gradient: '', rotation: 0 }
+    const newShape: ShapeItem = { type, x: (200 + Math.random()*100) * PXU, y: (200 + Math.random()*60) * PXU, w: 200 * PXU, h: 120 * PXU, fill: '#4f46e5', text: '', shadow: false, glow: false, gradient: '', rotation: 0 }
     updateActive({ shapes: [...current.shapes, newShape] })
     setShowShapePanel(false)
   }
@@ -550,7 +605,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     const text = prompt(t('slide.prompt.wordArt'), 'SamOffice')
     if (!text) return
     const newArt: ArtTextItem = {
-      text, x: 100, y: 100, w: 400, h: 80,
+      text, x: 100 * PXU, y: 100 * PXU, w: 400 * PXU, h: 80 * PXU,
       fontSize: 36, color: preset.color, gradient: preset.gradient || '',
       shadow: preset.shadow || false, glow: preset.glow || false, outline: preset.outline || '', rotation: 0,
     }
@@ -558,6 +613,70 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     setShowArtPanel(false)
   }
   const removeArtText = (idx: number) => { updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
+
+  // 图表插入：根据数据在离屏 canvas 上绘制柱状图/折线图/饼图，作为图片形状插入（可保存到 pptx）
+  const CHART_PALETTE = ['#4f46e5', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6']
+  const insertChart = (chartType: 'bar' | 'line' | 'pie', dataStr: string) => {
+    const nums = dataStr.split(/[,，\s]+/).map(s => parseFloat(s.trim())).filter(n => !isNaN(n) && isFinite(n))
+    if (!nums.length) { alert(t('slide.chartBadData') || '请输入逗号分隔的数字，如：12,28,40'); return }
+    const W = 420, H = 260
+    const cv = document.createElement('canvas')
+    cv.width = W; cv.height = H
+    const ctx = cv.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H)
+    const maxV = Math.max(...nums, 0.0001)
+    const pad = 34
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#475569'
+    if (chartType === 'pie') {
+      const total = nums.reduce((a, b) => a + b, 0) || 1
+      const cx = W / 2, cy = H / 2, r = Math.min(W, H) / 2 - pad
+      let ang = -Math.PI / 2
+      nums.forEach((v, i) => {
+        const a2 = ang + (v / total) * Math.PI * 2
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, ang, a2); ctx.closePath()
+        ctx.fillStyle = CHART_PALETTE[i % CHART_PALETTE.length]; ctx.fill()
+        const mid = (ang + a2) / 2
+        ctx.fillStyle = '#334155'; ctx.textAlign = 'center'
+        ctx.fillText(`${Math.round((v / total) * 100)}%`, cx + Math.cos(mid) * (r * 0.65), cy + Math.sin(mid) * (r * 0.65) + 4)
+        ang = a2
+      })
+    } else {
+      const iw = W - pad * 2, ih = H - pad * 1.6
+      // 网格线
+      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1
+      for (let g = 0; g <= 4; g++) {
+        const y = pad * 0.6 + (ih * g) / 4
+        ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - pad, y); ctx.stroke()
+        ctx.textAlign = 'right'; ctx.fillText(String(Math.round(maxV * (1 - g / 4))), pad - 6, y + 4)
+      }
+      const bw = iw / nums.length
+      nums.forEach((v, i) => {
+        const x = pad + bw * i
+        const hgt = (v / maxV) * ih
+        ctx.fillStyle = CHART_PALETTE[i % CHART_PALETTE.length]
+        if (chartType === 'bar') {
+          ctx.fillRect(x + bw * 0.18, pad * 0.6 + ih - hgt, bw * 0.64, hgt)
+        } else {
+          const cx2 = x + bw / 2, cy2 = pad * 0.6 + ih - hgt
+          if (i > 0) {
+            const pv = nums[i - 1]
+            const px2 = pad + bw * (i - 1) + bw / 2, py2 = pad * 0.6 + ih - (pv / maxV) * ih
+            ctx.strokeStyle = '#4f46e5'; ctx.lineWidth = 2.5
+            ctx.beginPath(); ctx.moveTo(px2, py2); ctx.lineTo(cx2, cy2); ctx.stroke()
+          }
+          ctx.beginPath(); ctx.arc(cx2, cy2, 4, 0, Math.PI * 2); ctx.fill()
+        }
+      })
+    }
+    const url = cv.toDataURL('image/png')
+    const newShape: ShapeItem = {
+      type: 'rect', x: (200 + Math.random() * 60) * PXU, y: (120 + Math.random() * 60) * PXU,
+      w: W * PXU, h: H * PXU, fill: `url(${url})`, text: '', shadow: true, glow: false, gradient: '', rotation: 0,
+    }
+    updateActive({ shapes: [...current.shapes, newShape] })
+    setShowChartPanel(false)
+  }
   const updateArtText = (idx: number, patch: Partial<ArtTextItem>, record = true) => {
     const newArts = current.artTexts.map((a, i) => i === idx ? { ...a, ...patch } : a)
     updateActive({ artTexts: newArts }, record)
@@ -677,8 +796,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     } catch { /* 忽略音频错误 */ }
   }
 
-  // 动画操作
+  // 动画操作（目标：优先当前选中元素，其次最后一个形状；无形状时提示）
   const addAnimation = (effect: string, category: string) => {
+    if (!current.shapes.length) { alert(t('slide.pleaseSelect') || '请先插入并选中元素'); setShowAnimPanel(false); return }
     const targetIdx = selectedEl?.type === 'shape' ? selectedEl.index : current.shapes.length - 1
     const target = `shape_${targetIdx}`
     const newAnim: AnimItem = { target, effect, category, delay: current.animations.length * 300, sound: pendingSound }
@@ -690,13 +810,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   // 放映控制
   const [presentAnimStep, setPresentAnimStep] = useState(0)
   const startPresent = () => { setPresenting(true); setPresentSlide(active); setPresentAnimStep(0) }
-  const entranceAnimOf = (slide: Slide) => slide.animations.filter(a => a.category === 'entrance')
+  // 动画按添加顺序逐步触发（入场→强调→退出的自然顺序）
   const nextPresent = () => {
-    const ent = entranceAnimOf(presentingSlide)
-    if (presentAnimStep < ent.length) {
+    const seq = presentingSlide.animations
+    if (presentAnimStep < seq.length) {
       const step = presentAnimStep
       setPresentAnimStep(step + 1)
-      playSound(ent[step]?.sound)
+      playSound(seq[step]?.sound)
     } else if (presentSlide < slides.length - 1) {
       setPresentSlide(presentSlide + 1); setPresentAnimStep(0)
     } else {
@@ -704,6 +824,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     }
   }
   const prevPresent = () => { if (presentAnimStep > 0) setPresentAnimStep(0); else if (presentSlide > 0) { setPresentSlide(presentSlide - 1); setPresentAnimStep(0) } }
+
+  // 自动放映：按设定间隔驱动动画/翻页（修复“自动播放”只是摆设的问题）
+  useEffect(() => {
+    if (!presenting || !autoPlay) return
+    const timer = window.setInterval(() => nextPresent(), Math.max(1, autoPlaySec) * 1000)
+    return () => window.clearInterval(timer)
+  }, [presenting, autoPlay, autoPlaySec, presentSlide, presentAnimStep, slides.length])
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('slide.ribbon.home') }, { id: 'insert', label: t('slide.ribbon.insert') }, { id: 'design', label: t('slide.ribbon.design') },
@@ -945,7 +1072,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 const reader = new FileReader()
                 reader.onload = () => {
                   const newShape: ShapeItem = {
-                    type: 'rect', x: 200, y: 150, w: 240, h: 180,
+                    type: 'rect', x: 200 * PXU, y: 150 * PXU, w: 240 * PXU, h: 180 * PXU,
                     fill: `url(${reader.result})`,
                     text: '', shadow: false, glow: false, gradient: '', rotation: 0,
                   }
@@ -955,7 +1082,21 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               }
               input.click()
             }} />
-            <RibbonButton icon="📊" label={t('slide.chart')} onClick={() => alert(t('slide.chart'))} />
+            <RibbonButton icon="📊" label={t('slide.chart')} onClick={() => openPanel('chart')} title={t('slide.chart')} />
+            {showChartPanel && (
+              <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, width: 240, padding: '0.6rem' }}>
+                <div className="text-[10px] font-bold uppercase mb-1" style={{ color: 'var(--color-text-muted)' }}>{t('slide.chartData')}</div>
+                <input id="sam-chart-data" type="text" defaultValue="12,28,40,65" className="w-full text-xs rounded-md px-2 py-1 mb-2 ribbon-input" style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }} />
+                <div className="grid grid-cols-3 gap-1">
+                  {(['bar', 'line', 'pie'] as const).map(ct => (
+                    <button key={ct} onClick={() => insertChart(ct, (document.getElementById('sam-chart-data') as HTMLInputElement)?.value || '')}
+                      className="px-2 py-1.5 text-xs rounded-md transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>
+                      {ct === 'bar' ? '📊' : ct === 'line' ? '📈' : '🥧'} {ct === 'bar' ? t('slide.chartBar') : ct === 'line' ? t('slide.chartLine') : t('slide.chartPie')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <RibbonButton icon="🎬" label={t('slide.video')} onClick={() => {
               const input = document.createElement('input')
               input.type = 'file'
@@ -966,7 +1107,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 const reader = new FileReader()
                 reader.onload = () => {
                   recordHistory()
-                  updateActive({ shapes: [...current.shapes, { type: 'rect', x: 160, y: 120, w: 480, h: 270, fill: '', text: '', shadow: false, glow: false, gradient: '', rotation: 0, media: { type: 'video', src: String(reader.result) } } as ShapeItem] })
+                  updateActive({ shapes: [...current.shapes, { type: 'rect', x: 160 * PXU, y: 120 * PXU, w: 480 * PXU, h: 270 * PXU, fill: '', text: '', shadow: false, glow: false, gradient: '', rotation: 0, media: { type: 'video', src: String(reader.result) } } as ShapeItem] })
                 }
                 reader.readAsDataURL(file)
               }
@@ -982,7 +1123,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 const reader = new FileReader()
                 reader.onload = () => {
                   recordHistory()
-                  updateActive({ shapes: [...current.shapes, { type: 'rect', x: 280, y: 200, w: 240, h: 48, fill: '#1f2937', text: file.name, shadow: false, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 11, media: { type: 'audio', src: String(reader.result) } } as ShapeItem] })
+                  updateActive({ shapes: [...current.shapes, { type: 'rect', x: 280 * PXU, y: 200 * PXU, w: 240 * PXU, h: 48 * PXU, fill: '#1f2937', text: file.name, shadow: false, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 11, media: { type: 'audio', src: String(reader.result) } } as ShapeItem] })
                 }
                 reader.readAsDataURL(file)
               }
@@ -992,17 +1133,21 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           <RibbonGroup label={t('slide.flowchart')}>
             <RibbonButton icon="🔀" label={t('slide.flowchart')} onClick={() => {
               const newShapes: ShapeItem[] = [
-                { type: 'roundRect', x: 20, y: 200, w: 150, h: 60, fill: '#4f46e5', text: t('slide.flow.start'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
-                { type: 'rect', x: 220, y: 200, w: 150, h: 60, fill: '#10b981', text: t('slide.flow.process'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
-                { type: 'diamond', x: 420, y: 200, w: 150, h: 60, fill: '#f59e0b', text: t('slide.flow.decision'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
-                { type: 'roundRect', x: 620, y: 200, w: 160, h: 60, fill: '#ef4444', text: t('slide.flow.end'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'roundRect', x: 20 * PXU, y: 200 * PXU, w: 150 * PXU, h: 60 * PXU, fill: '#4f46e5', text: t('slide.flow.start'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'rect', x: 220 * PXU, y: 200 * PXU, w: 150 * PXU, h: 60 * PXU, fill: '#10b981', text: t('slide.flow.process'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'diamond', x: 420 * PXU, y: 200 * PXU, w: 150 * PXU, h: 60 * PXU, fill: '#f59e0b', text: t('slide.flow.decision'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
+                { type: 'roundRect', x: 620 * PXU, y: 200 * PXU, w: 160 * PXU, h: 60 * PXU, fill: '#ef4444', text: t('slide.flow.end'), shadow: true, glow: false, gradient: '', rotation: 0, fontColor: '#ffffff', fontSize: 12, textAlign: 'center' },
               ]
               updateActive({ shapes: [...current.shapes, ...newShapes] })
             }} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.link')}>
-            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => { const url = prompt('URL:'); if (url) window.open(url, '_blank') }} />
-            <RibbonButton icon="⚓" label={t('slide.bookmark')} onClick={() => alert(t('slide.bookmark'))} />
+            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => {
+              if (!selectedEl || selectedEl.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择一个元素'); return }
+              const url = prompt('URL:', current.shapes[selectedEl.index]?.link || 'https://')
+              if (!url) return
+              updateShape(selectedEl.index, { link: url })
+            }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.link)} title={t('slide.hyperlinkTitle') || '为选中元素添加超链接'} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.text')}>
             <RibbonButton icon="📝" label={t('slide.footnote')} onClick={() => {
@@ -1015,7 +1160,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               if (idx >= 0) {
                 updateShape(idx, { text: txt })
               } else {
-                updateActive({ shapes: [...shapes, { type: 'rect', x: 16, y: 432, w: 776, h: 16, fill: '', text: txt, fontSize: 10, fontBold: false, fontColor: '#64748b', textAlign: 'left', isFootnote: true } as ShapeItem] })
+                updateActive({ shapes: [...shapes, { type: 'rect', x: 16 * PXU, y: (canvasH - 22) * PXU, w: 776 * PXU, h: 16 * PXU, fill: '', text: txt, fontSize: 10, fontBold: false, fontColor: '#64748b', textAlign: 'left', isFootnote: true } as ShapeItem] })
               }
             }} active={!!current.notes} />
           </RibbonGroup>
@@ -1077,15 +1222,40 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           </RibbonGroup>
           {/* MS Office 风格幻灯片大小 */}
           <RibbonGroup label={t('slide.slideSize')}>
-            <RibbonButton icon="📺" label={t('slide.widescreen')} onClick={() => alert(t('slide.widescreen'))} active={true} title={t('slide.widescreenTitle')} />
-            <RibbonButton icon="🖥" label={t('slide.standard')} onClick={() => alert(t('slide.standard'))} title={t('slide.standardTitle')} />
-            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={() => { const w = prompt(t('slide.customSize') + ' width:', '960'); const h = prompt('height:', '540'); if (w && h) alert(t('slide.customSize') + ': ' + w + 'x' + h) }} title={t('slide.customSizeTitle')} />
+            <RibbonButton icon="📺" label={t('slide.widescreen')} onClick={() => { recordHistory(); setDeckW(DECK_W_169); setDeckH(DECK_H_169) }} active={deckW === DECK_W_169 && deckH === DECK_H_169} title={t('slide.widescreenTitle')} />
+            <RibbonButton icon="🖥" label={t('slide.standard')} onClick={() => { recordHistory(); setDeckW(DECK_W_43); setDeckH(DECK_H_43) }} active={deckW === DECK_W_43 && deckH === DECK_H_43} title={t('slide.standardTitle')} />
+            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={() => {
+              const wpx = prompt(t('slide.customSize') + ' (px, 96dpi):', String(Math.round(deckW / 9525)))
+              if (!wpx) return
+              const hpx = prompt('height (px):', String(Math.round(deckH / 9525)))
+              if (!hpx) return
+              const w = Math.round(parseFloat(wpx) * 9525), h = Math.round(parseFloat(hpx) * 9525)
+              if (!w || !h || w < 10 || h < 10) { alert('Invalid size'); return }
+              recordHistory(); setDeckW(w); setDeckH(h)
+            }} title={t('slide.customSizeTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.shapeStyle')}>
-            <RibbonButton icon="🌈" label={t('slide.gradient')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { gradient: '6366f1,818cf8' }) }} />
-            <RibbonButton icon="💫" label={t('slide.glow')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { glow: !current.shapes[current.shapes.length-1].glow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].glow} />
-            <RibbonButton icon="🌑" label={t('slide.shadow')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { shadow: !current.shapes[current.shapes.length-1].shadow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].shadow} />
-            <RibbonButton icon="🔄" label={t('slide.rotate')} onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { rotation: (current.shapes[current.shapes.length-1].rotation + 15) % 360 }) }} />
+            {/* 效果按钮作用于当前选中元素（未选时提示），不再默默作用于最后一个形状 */}
+            <RibbonButton icon="🌈" label={t('slide.gradient')} onClick={() => {
+              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              const sh = current.shapes[selectedEl.index]
+              updateShape(selectedEl.index, { gradient: sh.gradient ? '' : '6366f1,818cf8' })
+            }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.gradient)} />
+            <RibbonButton icon="💫" label={t('slide.glow')} onClick={() => {
+              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              const sh = current.shapes[selectedEl.index]
+              updateShape(selectedEl.index, { glow: !sh.glow, glowColor: sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8') })
+            }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.glow)} />
+            <RibbonButton icon="🌑" label={t('slide.shadow')} onClick={() => {
+              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              const sh = current.shapes[selectedEl.index]
+              updateShape(selectedEl.index, { shadow: !sh.shadow })
+            }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.shadow)} />
+            <RibbonButton icon="🔄" label={t('slide.rotate')} onClick={() => {
+              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              const sh = current.shapes[selectedEl.index]
+              updateShape(selectedEl.index, { rotation: ((sh.rotation || 0) + 15) % 360 })
+            }} />
           </RibbonGroup>
         </>)}
 
@@ -1134,44 +1304,44 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           {/* 现代组件 */}
           <RibbonGroup label="Components">
             <RibbonButton icon="📊" label="KPI Card" onClick={() => {
-              const x = 200 + current.shapes.length * 50
+              const x = (200 + current.shapes.length * 50) * PXU
               updateActive({
                 shapes: [...current.shapes,
-                  { type: 'roundRect', x, y: 200, w: 300, h: 180, fill: '#1A2540', stroke: '#334155', strokeWidth: 2, text: '10x', fontSize: 28, fontBold: true, fontColor: '#818CF8', font: 'Space Grotesk', shadow: true, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
-                  { type: 'rect', x: x + 30, y: 230, w: 60, h: 8, fill: '#6366F1', stroke: '', strokeWidth: 0, text: '', fontSize: 0, fontBold: false, fontColor: '', font: '', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
-                  { type: 'rect', x, y: 310, w: 300, h: 30, fill: '', stroke: '', strokeWidth: 0, text: 'PERF GAIN', fontSize: 10, fontBold: true, fontColor: '#94A3B8', font: 'Inter', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'roundRect', x, y: 200 * PXU, w: 300 * PXU, h: 180 * PXU, fill: '#1A2540', stroke: '#334155', strokeWidth: 2, text: '10x', fontSize: 28, fontBold: true, fontColor: '#818CF8', font: 'Space Grotesk', shadow: true, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'rect', x: x + 30 * PXU, y: 230 * PXU, w: 60 * PXU, h: 8 * PXU, fill: '#6366F1', stroke: '', strokeWidth: 0, text: '', fontSize: 0, fontBold: false, fontColor: '', font: '', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'rect', x, y: 310 * PXU, w: 300 * PXU, h: 30 * PXU, fill: '', stroke: '', strokeWidth: 0, text: 'PERF GAIN', fontSize: 10, fontBold: true, fontColor: '#94A3B8', font: 'Inter', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
                 ]
               })
             }} />
             <RibbonButton icon="💡" label="Glass Card" onClick={() => {
-              const x = 200 + current.shapes.length * 30
+              const x = (200 + current.shapes.length * 30) * PXU
               updateActive({
                 shapes: [...current.shapes,
-                  { type: 'roundRect', x, y: 200, w: 350, h: 200, fill: '#1A2540', stroke: '#334155', strokeWidth: 2, text: 'Glass Card', fontSize: 16, fontBold: true, fontColor: '#F8FAFC', font: 'Space Grotesk', shadow: true, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'roundRect', x, y: 200 * PXU, w: 350 * PXU, h: 200 * PXU, fill: '#1A2540', stroke: '#334155', strokeWidth: 2, text: 'Glass Card', fontSize: 16, fontBold: true, fontColor: '#F8FAFC', font: 'Space Grotesk', shadow: true, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
                 ]
               })
             }} />
             <RibbonButton icon="📝" label="Code Block" onClick={() => {
-              const x = 200 + current.shapes.length * 30
+              const x = (200 + current.shapes.length * 30) * PXU
               updateActive({
                 shapes: [...current.shapes,
-                  { type: 'roundRect', x, y: 200, w: 400, h: 150, fill: '#0B1120', stroke: '#1e293b', strokeWidth: 2, text: 'fmt.Println("Hello")', fontSize: 12, fontBold: false, fontColor: '#86EFAC', font: 'Consolas', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'roundRect', x, y: 200 * PXU, w: 400 * PXU, h: 150 * PXU, fill: '#0B1120', stroke: '#1e293b', strokeWidth: 2, text: 'fmt.Println("Hello")', fontSize: 12, fontBold: false, fontColor: '#86EFAC', font: 'Consolas', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
                 ]
               })
             }} />
             <RibbonButton icon="🏷️" label="Pill" onClick={() => {
-              const x = 200 + current.shapes.length * 30
+              const x = (200 + current.shapes.length * 30) * PXU
               updateActive({
                 shapes: [...current.shapes,
-                  { type: 'roundRect', x, y: 200, w: 120, h: 30, fill: '#6366F1', stroke: '', strokeWidth: 0, text: 'NEW', fontSize: 9, fontBold: true, fontColor: '#FFFFFF', font: 'Inter', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
+                  { type: 'roundRect', x, y: 200 * PXU, w: 120 * PXU, h: 30 * PXU, fill: '#6366F1', stroke: '', strokeWidth: 0, text: 'NEW', fontSize: 9, fontBold: true, fontColor: '#FFFFFF', font: 'Inter', shadow: false, glow: false, glowColor: '', glowRadius: 0, gradient: '', rotation: 0 },
                 ]
               })
             }} />
             <RibbonButton icon="✨" label="Glow Text" onClick={() => {
-              const x = 200 + current.shapes.length * 30
+              const x = (200 + current.shapes.length * 30) * PXU
               updateActive({
                 shapes: [...current.shapes,
-                  { type: 'rect', x, y: 200, w: 400, h: 60, fill: '', stroke: '', strokeWidth: 0, text: 'Glow Title', fontSize: 28, fontBold: true, fontColor: '#F8FAFC', font: 'Space Grotesk', shadow: false, glow: true, glowColor: '#6366F1', glowRadius: 60000, gradient: '', rotation: 0 },
+                  { type: 'rect', x, y: 200 * PXU, w: 400 * PXU, h: 60 * PXU, fill: '', stroke: '', strokeWidth: 0, text: 'Glow Title', fontSize: 28, fontBold: true, fontColor: '#F8FAFC', font: 'Space Grotesk', shadow: false, glow: true, glowColor: '#6366F1', glowRadius: 60000, gradient: '', rotation: 0 },
                 ]
               })
             }} />
@@ -1179,8 +1349,16 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
           {/* 玻璃质感 */}
           <RibbonGroup label="Effects">
-            <RibbonButton icon="🔮" label="Glass" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { glow: !current.shapes[current.shapes.length-1].glow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].glow} />
-            <RibbonButton icon="🌗" label="Shadow" onClick={() => { if (current.shapes.length > 0) updateShape(current.shapes.length - 1, { shadow: !current.shapes[current.shapes.length-1].shadow }) }} active={current.shapes.length > 0 && current.shapes[current.shapes.length-1].shadow} />
+            <RibbonButton icon="🔮" label="Glass" onClick={() => {
+              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              const sh = current.shapes[selectedEl.index]
+              updateShape(selectedEl.index, { glow: !sh.glow, glowColor: sh.glowColor || '#94a3b8' })
+            }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.glow)} />
+            <RibbonButton icon="🌗" label="Shadow" onClick={() => {
+              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              const sh = current.shapes[selectedEl.index]
+              updateShape(selectedEl.index, { shadow: !sh.shadow })
+            }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.shadow)} />
           </RibbonGroup>
         </>)}
 
@@ -1302,7 +1480,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           const K = 0.106
 
           // 单张幻灯片缩略图（复用 SlideThumb，与主画布/左侧面板一致的真实渲染）
-          const SlideMini = ({ slide }: { slide: Slide }) => <SlideThumb slide={slide} width={808 * K} />
+          const aspect = deckH / deckW
+          const SlideMini = ({ slide }: { slide: Slide }) => <SlideThumb slide={slide} width={808 * K} aspect={aspect} />
 
           if (showNotes) {
             return (
@@ -1336,7 +1515,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   <div className="flex flex-wrap justify-center" style={{ gap: 6, gridTemplateColumns: `repeat(${cols}, auto)` }}>
                     {paper.map((s, i) => <SlideMini key={i} slide={s} />)}
                     {Array.from({ length: per - paper.length }).map((_, k) => (
-                      <div key={'e' + k} style={{ width: 808 * K, height: 454 * K, flex: '0 0 auto' }} />
+                      <div key={'e' + k} style={{ width: 808 * K, height: (808 * aspect) * K, flex: '0 0 auto' }} />
                     ))}
                   </div>
                   <div style={{ textAlign: 'center', fontSize: 9, color: '#6b7280', marginTop: 4 }}>- {pi + 1} -</div>
@@ -1361,7 +1540,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 style={{ borderColor: i === active ? 'var(--color-primary)' : 'var(--color-border)', background: 'var(--color-surface)' }}>
                 {/* 真实迷你画布：完整渲染形状/文字样式/图片，修复缩略图只剩裸文字 */}
                 <div className="rounded overflow-hidden relative" style={{ background: s.bg }}>
-                  <SlideThumb slide={s} width={thumbWidth} />
+                  <SlideThumb slide={s} width={thumbWidth} aspect={deckH / deckW} />
                   {s.animations.length > 0 && (
                     <div className="absolute top-0.5 right-0.5 text-[8px] px-1 rounded" style={{ background: 'rgba(0,0,0,0.35)', color: '#fff' }}>✨{s.animations.length}</div>
                   )}
@@ -1377,10 +1556,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           </div>
         </div>
 
-        {/* 中间画布 */}
+        {/* 中间画布（高度随页面比例：宽 808 固定，高 = 808·pageH/pageW） */}
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
           <div className="bg-white shadow-xl rounded-lg animate-fade-in relative overflow-hidden"
-            style={{ width: 808, height: 454, background: current.bg, boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', transform: `scale(${zoom / 100})`, transformOrigin: 'center', flexShrink: 0 }}>
+            style={{ width: 808, height: canvasH, background: current.bg, boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', transform: `scale(${zoom / 100})`, transformOrigin: 'center', flexShrink: 0 }}>
             <div className="absolute inset-0 flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={() => setSelectedEl(null)}>
               {/* 文字内容 */}
               {current.layout === 'title' && (
@@ -1395,6 +1574,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   <div className="w-12 h-1 rounded mb-4" style={{ background: 'var(--color-primary)' }}></div>
                   <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none leading-relaxed relative z-10" style={{ color: isDark ? '#cbd5e1' : '#334155' }} placeholder={t('slide.placeholder.content')} />
                 </>
+              )}
+              {current.layout === 'section' && (
+                <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10 px-10">
+                  <div className="w-14 h-1.5 rounded mb-5" style={{ background: 'var(--color-primary)' }} />
+                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} className="text-3xl sm:text-4xl font-bold text-center outline-none bg-transparent w-full" style={{ color: isDark ? '#f1f5f9' : '#0f172a' }} placeholder={t('slide.placeholder.title')} />
+                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} className="text-sm sm:text-base text-center mt-4 outline-none bg-transparent w-full" style={{ color: isDark ? '#cbd5e1' : '#64748b' }} placeholder={t('slide.placeholder.subtitle')} />
+                </div>
               )}
               {current.layout === 'blank' && !current.shapes.length && (
                 <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder={t('slide.placeholder.blank')} />
@@ -1432,12 +1618,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                              sh.type === 'callout' ? 'polygon(0 0, 100% 0, 100% 70%, 60% 70%, 50% 100%, 40% 70%, 0 70%)' :
                              undefined,
                     boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
-                    filter: sh.glow ? `drop-shadow(0 0 8px ${sh.fill})` : 'none',
-                    border: sh.noDecor
-                      ? (sh.stroke ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}` : 'none')
-                      : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none'),
+                    filter: sh.glow ? `drop-shadow(0 0 ${Math.min(28, Math.max(4, (sh.glowRadius || 60000) / 5000))}px ${sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8')})` : 'none',
+                    border: sh.stroke
+                      ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}`
+                      : (sh.noDecor ? 'none' : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none')),
                     color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
                     fontSize: sh.fontSize ? `${sh.fontSize}px` : '12px',
+                    fontFamily: sh.font || undefined,
                     fontWeight: sh.fontBold ? 700 : 400,
                     textAlign: sh.textAlign || 'center',
                     lineHeight: sh.lineHeight || 1.2,
@@ -1476,6 +1663,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                         ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                         : sh.text}
                     </span>)}
+                    {sh.link && (
+                      <a href={sh.link} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                        title={sh.link}
+                        className="absolute bottom-0.5 right-1 text-[10px] no-underline"
+                        style={{ pointerEvents: 'auto', color: '#60a5fa' }}>🔗</a>
+                    )}
                   </div>
                   <button onClick={() => removeShape(i)} className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-rose-500 text-white text-xs opacity-0 group-hover:opacity-100 flex items-center justify-center">×</button>
                   {selectedEl?.type === 'shape' && selectedEl?.index === i && <>
@@ -1552,37 +1745,63 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         </div>
       )}
 
-      {/* 全屏放映模式 */}
+      {/* 全屏放映模式 — 动画序列（入场→强调→退出）逐击触发，完整渲染形状样式 */}
       {presenting && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: '#000' }} onClick={nextPresent}>
-          <div style={{ transform: `scale(${Math.min(window.innerWidth / 808, window.innerHeight / 454)})`, transformOrigin: 'center' }}>
-          <div key={presentSlide} className={`relative overflow-hidden sl-trans-${presentingSlide.transition || 'none'}`} style={{ width: 808, height: 454, background: presentingSlide.bg }}>
+          <div style={{ transform: `scale(${Math.min(window.innerWidth / 808, window.innerHeight / canvasH)})`, transformOrigin: 'center' }}>
+          <div key={presentSlide} className={`relative overflow-hidden sl-trans-${presentingSlide.transition || 'none'}`} style={{ width: 808, height: canvasH, background: presentingSlide.bg }}>
             <div className="absolute inset-0 flex flex-col justify-center items-center p-12 text-center">
               <h1 className="text-5xl font-bold mb-6" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{presentingSlide.title}</h1>
               {presentingSlide.content && <p className="text-xl" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#cbd5e1' : '#64748b' }}>{presentingSlide.content}</p>}
               {presentingSlide.shapes.map((sh, i) => {
-                const ent = entranceAnimOf(presentingSlide)
-                const entIdx = ent.findIndex(a => a.target === `shape_${i}`)
-                const revealed = entIdx === -1 || entIdx < presentAnimStep
-                const justRevealed = entIdx === presentAnimStep - 1
-                const effect = entIdx >= 0 ? ent[entIdx].effect : ''
-                const animClass = justRevealed ? `sl-anim-${effect}` : ''
+                // 动画序列：按 animations 数组顺序逐步触发；入场未到隐藏，强调播放一次，退出后消失
+                const seq = presentingSlide.animations
+                const idxOf = (a: AnimItem) => seq.indexOf(a)
+                const myEnt = seq.filter(a => a.category === 'entrance' && a.target === `shape_${i}`)
+                const myEmph = seq.filter(a => a.category === 'emphasis' && a.target === `shape_${i}`)
+                const myExit = seq.filter(a => a.category === 'exit' && a.target === `shape_${i}`)
+                const revealed = myEnt.length === 0 || myEnt.every(a => idxOf(a) < presentAnimStep)
+                const justEnt = myEnt.find(a => idxOf(a) === presentAnimStep - 1)
+                const justEmph = myEmph.find(a => idxOf(a) === presentAnimStep - 1)
+                const exited = myExit.some(a => idxOf(a) < presentAnimStep)
+                const justExit = myExit.find(a => idxOf(a) === presentAnimStep - 1)
+                const animClass = (justEnt && `sl-anim-${justEnt.effect}`) || (justEmph && `sl-anim-${justEmph.effect}`) || (justExit && `sl-anim-exit-${justExit.effect}`) || ''
+                if (exited && !justExit) return null
+                const bg2 = sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill
+                const hasParas = !!(sh.paras && sh.paras.some(p => p.runs && p.runs.length))
                 return (
                 <div key={i} className={`absolute flex flex-col ${animClass}`} style={{
                   left: `${sh.x / 8}px`, top: `${sh.y / 8}px`, width: `${sh.w / 8}px`, height: `${sh.h / 8}px`,
+                  transform: sh.rotation ? `rotate(${sh.rotation}deg)` : undefined,
                   justifyContent: sh.vAlign === 'top' ? 'flex-start' : sh.vAlign === 'bottom' ? 'flex-end' : 'center',
                   opacity: revealed ? undefined : 0,
-                  background: sh.gradient ? `linear-gradient(135deg, #${sh.gradient.split(',')[0]}, #${sh.gradient.split(',')[1]})` : sh.fill,
+                  background: bg2,
+                  backgroundSize: bg2.startsWith('url') ? 'cover' : undefined,
+                  backgroundRepeat: bg2.startsWith('url') ? 'no-repeat' : undefined,
+                  backgroundPosition: bg2.startsWith('url') ? 'center' : undefined,
                   borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : '0',
-                  clipPath: sh.type === 'triangle' ? 'polygon(50% 0, 100% 100%, 0 100%)' : sh.type === 'diamond' ? 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)' : sh.type === 'rightArrow' ? 'polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%)' : sh.type === 'star5' ? 'polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' : undefined,
-                  boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none', color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#fff' : '#1f2937'), fontSize: sh.fontSize ? `${sh.fontSize}px` : '18px', fontWeight: sh.fontBold ? 700 : 400, textAlign: sh.textAlign || 'center', lineHeight: sh.lineHeight || 1.2, paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  clipPath: sh.type === 'roundRect' ? 'inset(0 round 8px)' : (SHAPE_CLIP[sh.type] || (sh.type === 'ellipse' ? 'ellipse(50% 50% at 50% 50%)' : undefined)),
+                  border: sh.stroke ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}` : 'none',
+                  boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
+                  filter: sh.glow ? `drop-shadow(0 0 ${Math.min(28, Math.max(4, (sh.glowRadius || 60000) / 5000))}px ${sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8')})` : 'none',
+                  color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#fff' : '#1f2937'),
+                  fontSize: sh.fontSize ? `${sh.fontSize}px` : '18px',
+                  fontFamily: sh.font || undefined,
+                  fontWeight: sh.fontBold ? 700 : 400,
+                  textAlign: sh.textAlign || 'center', lineHeight: sh.lineHeight || 1.2, paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 }}>{sh.media && sh.media.type === 'video' && (
                   <video src={sh.media.src} controls autoPlay={false} style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
                 )}
                 {sh.media && sh.media.type === 'audio' && (
                   <div className="w-full h-full flex items-center px-2"><audio src={sh.media.src} controls style={{ width: '100%' }} /></div>
                 )}
-                {!sh.media && (sh.bullet
+                {!sh.media && (hasParas ? sh.paras!.map((p, pi) => (
+                  <div key={pi} style={{ width: '100%', textAlign: (p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : p.align === 'l' ? 'left' : undefined) as any }}>
+                    {(p.runs && p.runs.length ? p.runs : [{ text: '' } as any]).map((r, ri) => (
+                      <span key={ri} style={{ color: r.color || undefined, fontSize: r.fontSize ? `${Math.max(8, r.fontSize)}px` : undefined, fontWeight: r.bold ? 700 : undefined, fontStyle: r.italic ? 'italic' : undefined, textDecoration: r.underline ? 'underline' : undefined, fontFamily: r.font || undefined, whiteSpace: 'pre-wrap' }}>{r.text}</span>
+                    ))}
+                  </div>
+                )) : sh.bullet
                   ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                   : sh.numbered
                   ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
@@ -1591,7 +1810,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               })}
               {presentingSlide.artTexts.map((at, i) => (
                 <div key={i} className="absolute" style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '' }}>
-                  <span style={{ fontSize: `${at.fontSize / 2}px`, fontWeight: 700, color: at.color, textShadow: at.shadow ? '2px 2px 6px rgba(0,0,0,0.3)' : 'none' }}>{at.text}</span>
+                  <span style={{ fontSize: `${at.fontSize / 2}px`, fontWeight: 700, color: at.color,
+                    background: at.gradient ? `linear-gradient(135deg, #${at.gradient.split(',')[0]}, #${at.gradient.split(',')[1]})` : undefined,
+                    WebkitBackgroundClip: at.gradient ? 'text' : undefined,
+                    WebkitTextFillColor: at.gradient ? 'transparent' : undefined,
+                    textShadow: at.shadow ? '2px 2px 6px rgba(0,0,0,0.3)' : 'none',
+                    filter: at.glow ? `drop-shadow(0 0 6px ${at.color})` : 'none',
+                    WebkitTextStroke: at.outline ? `1px #${at.outline}` : 'none' }}>{at.text}</span>
                 </div>
               ))}
             </div>

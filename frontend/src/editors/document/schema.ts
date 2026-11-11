@@ -53,6 +53,7 @@ export const schema = new Schema({
         const a = node.attrs
         const s: string[] = []
         if (a.align) s.push(`text-align: ${a.align}`)
+        // 首字下沉：data-dropcap 交给 CSS ::first-letter 渲染（此前属性存在但无任何视觉效果）
         // 行距：优先用对话框的 lineSpacingKind/Value（贴近 MS Word 语义），
         // 其次用工具栏直接设置的 lineHeight（如 '1.5' / '28pt'）。
         if (a.lineSpacingKind) {
@@ -101,6 +102,7 @@ export const schema = new Schema({
         const domAttrs: any = { style: s.join('; ') }
         if (a.pageBreakBefore) domAttrs.class = 'pm-break-before'
         if (a.outlineLevel) domAttrs['data-outline'] = a.outlineLevel
+        if (a.dropCap) { domAttrs['data-dropcap'] = '1'; domAttrs.class = ((domAttrs.class || '') + ' pm-dropcap').trim() }
         return ['p', domAttrs, 0]
       },
       parseDOM: [{
@@ -164,6 +166,7 @@ export const schema = new Schema({
         const a = node.attrs
         const s: string[] = []
         if (a.align) s.push(`text-align: ${a.align}`)
+        // 首字下沉：data-dropcap 交给 CSS ::first-letter 渲染（此前属性存在但无任何视觉效果）
         if (a.lineSpacingKind) {
           const k = a.lineSpacingKind
           if (k === 'single') s.push('line-height: 1')

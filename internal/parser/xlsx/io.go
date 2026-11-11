@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -31,6 +33,11 @@ type cellJSON struct {
 		ColSpan int `json:"colSpan"`
 	} `json:"mergeRange,omitempty"`
 	HiddenBy string `json:"hiddenBy,omitempty"`
+	// Fmt 数字格式 token（"int"/"0.00"/"percent"/"percent2"/"thousands"/
+	// "thousands2"/"date" 或自定义 "0.000" 形式），仅识别的格式才输出。
+	Fmt string `json:"fmt,omitempty"`
+	// Valid 下拉列表验证，逗号分隔字面列表（如 "yes,no,maybe"），无引号无前导 =。
+	Valid string `json:"valid,omitempty"`
 }
 
 type sheetJSON struct {
@@ -81,8 +88,9 @@ func ReadXLSX(path string) (string, error) {
 			continue
 		}
 		for _, m := range merged {
-			sr, sc, _ := excelize.CellNameToCoordinates(m.GetStartAxis())
-			er, ec, _ := excelize.CellNameToCoordinates(m.GetEndAxis())
+			// CellNameToCoordinates 返回 (列, 行)，注意不要颠倒行列
+			sc, sr, _ := excelize.CellNameToCoordinates(m.GetStartAxis())
+			ec, er, _ := excelize.CellNameToCoordinates(m.GetEndAxis())
 			mergeMap[name] = append(mergeMap[name], [2][2]int{{sr, sc}, {er, ec}})
 		}
 	}
@@ -131,7 +139,9 @@ func ReadXLSX(path string) (string, error) {
 			}
 			sj.Cells[key] = cj
 		}
-		// 标记合并区域：左上角写 mergeRange，被覆盖单元格写 hiddenBy
+		// 标记合并区域：左上角写 mergeRange，被覆盖单元格写 hiddenBy。
+		// 注意：左上角单元格可能没有值（空合并区域），此时也必须生成
+		// 带 mergeRange 的 cellJSON，否则保存后合并信息丢失、网格渲染错乱。
 		for _, mm := range mergeMap[name] {
 			r1, c1 := mm[0][0]-1, mm[0][1]-1
 			r2, c2 := mm[1][0]-1, mm[1][1]-1
@@ -142,13 +152,19 @@ func ReadXLSX(path string) (string, error) {
 				c1, c2 = c2, c1
 			}
 			key := fmt.Sprintf("%d-%d", r1, c1)
-			if c, ok := sj.Cells[key]; ok {
-				c.MergeRange = &struct {
-					RowSpan int `json:"rowSpan"`
-					ColSpan int `json:"colSpan"`
-				}{RowSpan: r2 - r1 + 1, ColSpan: c2 - c1 + 1}
-				sj.Cells[key] = c
+			c, ok := sj.Cells[key]
+			if !ok {
+				// 空左上角：补齐背景/边框/数字格式等样式，保证渲染一致
+				c = cellJSON{}
+				if ref, rerr := excelize.CoordinatesToCellName(c1+1, r1+1); rerr == nil {
+					applyCellFormat(f, name, ref, &c)
+				}
 			}
+			c.MergeRange = &struct {
+				RowSpan int `json:"rowSpan"`
+				ColSpan int `json:"colSpan"`
+			}{RowSpan: r2 - r1 + 1, ColSpan: c2 - c1 + 1}
+			sj.Cells[key] = c
 			for rr := r1; rr <= r2; rr++ {
 				for cc := c1; cc <= c2; cc++ {
 					if rr == r1 && cc == c1 {
@@ -166,6 +182,8 @@ func ReadXLSX(path string) (string, error) {
 		}
 		sj.Rows = maxR + 3
 		sj.Cols = maxC + 3
+		// 读取 list 类型数据验证，写入覆盖单元格的 valid 字段
+		applyValidations(f, name, &sj)
 		out.Sheets = append(out.Sheets, sj)
 	}
 
@@ -246,6 +264,14 @@ func applyCellFormat(f *excelize.File, sheet, ref string, cj *cellJSON) {
 			}
 		}
 	}
+	// 数字格式：内置 id 或自定义格式串映射为前端 token（无法识别则不输出）
+	custom := ""
+	if style.CustomNumFmt != nil {
+		custom = *style.CustomNumFmt
+	}
+	if tok := fmtTokenFromNumFmt(style.NumFmt, custom); tok != "" {
+		cj.Fmt = tok
+	}
 }
 
 // WriteXLSX 把前端传来的 JSON 写回 xlsx，完整保留格式与合并。
@@ -321,10 +347,10 @@ func WriteXLSX(path string, jsonStr string) error {
 			} else if cj.Value != "" {
 				f.SetCellValue(sheetName, ref, cj.Value)
 			}
-			// 构建样式签名
+			// 构建样式签名（含数字格式 token）
 			alignMap := map[string]string{"left": "left", "center": "center", "right": "right", "justify": "justify"}
-			styleKey := fmt.Sprintf("%v|%v|%v|%v|%v|%v|%s|%v|%s|%s|%s",
-				cj.Bold, cj.Italic, cj.Under, cj.Strike, cj.Color, cj.Bg, alignMap[cj.Align], cj.FontSize, cj.FontFamily, cj.Border, cj.BorderColor)
+			styleKey := fmt.Sprintf("%v|%v|%v|%v|%v|%v|%s|%v|%s|%s|%s|%s",
+				cj.Bold, cj.Italic, cj.Under, cj.Strike, cj.Color, cj.Bg, alignMap[cj.Align], cj.FontSize, cj.FontFamily, cj.Border, cj.BorderColor, cj.Fmt)
 			sid, ok := styleCache[styleKey]
 			if !ok {
 				sid = newStyle(f, cj)
@@ -351,6 +377,9 @@ func WriteXLSX(path string, jsonStr string) error {
 			endRef, _ := excelize.CoordinatesToCellName(ec+1, er+1)
 			f.MergeCell(sheetName, startRef, endRef)
 		}
+
+		// 数据验证（下拉列表）：valid 字段写为 list 类型 DataValidation
+		writeValidations(f, sheetName, &sj)
 	}
 
 	// 若仍有空的 __tmp__ 残留则删除
@@ -376,6 +405,16 @@ func contains(list []string, s string) bool {
 // newStyle 根据 cellJSON 创建一个 excelize 样式并返回 styleID。
 func newStyle(f *excelize.File, cj cellJSON) int {
 	st := &excelize.Style{}
+	// 数字格式：内置 token 用内置 numFmtId，自定义 "0.0…" 用 CustomNumFmt
+	if cj.Fmt != "" {
+		if id, custom, ok := numFmtFromToken(cj.Fmt); ok {
+			if custom != "" {
+				st.CustomNumFmt = &custom
+			} else {
+				st.NumFmt = id
+			}
+		}
+	}
 	if cj.Bold || cj.Italic || cj.Under || cj.Strike || cj.Color != "" || cj.FontSize > 0 || cj.FontFamily != "" {
 		font := &excelize.Font{}
 		font.Bold = cj.Bold
@@ -452,4 +491,259 @@ func excelizeRGB(c string) string {
 		return ""
 	}
 	return "FF" + strings.ToUpper(c)
+}
+
+// ---- 数字格式（numFmt）映射 ----
+
+// builtinDateNumFmtIDs 是 xlsx 内置的日期/时间格式 numFmtId 集合
+// （14-22 标准日期时间、27-36 与 50-58 东亚语言日期、45-47 时间）。
+var builtinDateNumFmtIDs = map[int]bool{
+	14: true, 15: true, 16: true, 17: true, 18: true, 19: true, 20: true, 21: true, 22: true,
+	27: true, 28: true, 29: true, 30: true, 31: true, 32: true, 33: true, 34: true, 35: true, 36: true,
+	45: true, 46: true, 47: true,
+	50: true, 51: true, 52: true, 53: true, 54: true, 55: true, 56: true, 57: true, 58: true,
+}
+
+// customNumFmtPattern 匹配 "0.0"、"0.00"、"0.000" 等纯小数自定义格式。
+var customNumFmtPattern = regexp.MustCompile(`^0\.0+$`)
+
+// fmtTokenFromNumFmt 把数字格式映射为前端 token：
+// 内置 id：1→int、2→0.00、3→thousands、4→thousands2、9→percent、10→percent2、
+// 日期/时间类→date；自定义格式（numFmts 表，通常 id>=164）仅识别 0.0… 形式。
+// 无法识别时返回空串（cellJSON 不输出 fmt 字段）。
+func fmtTokenFromNumFmt(numFmtID int, customNumFmt string) string {
+	switch numFmtID {
+	case 1:
+		return "int"
+	case 2:
+		return "0.00"
+	case 3:
+		return "thousands"
+	case 4:
+		return "thousands2"
+	case 9:
+		return "percent"
+	case 10:
+		return "percent2"
+	}
+	if builtinDateNumFmtIDs[numFmtID] {
+		return "date"
+	}
+	if customNumFmt != "" && customNumFmtPattern.MatchString(customNumFmt) {
+		return customNumFmt // 直接以 "0.00"/"0.000" 等作为 token
+	}
+	return ""
+}
+
+// numFmtFromToken 把前端 fmt token 映射回 excelize 样式的数字格式：
+// 内置 token 返回内置 numFmtId；"0.0…" 形式的自定义 token 返回 CustomNumFmt 字符串。
+func numFmtFromToken(token string) (builtinID int, custom string, ok bool) {
+	switch token {
+	case "int":
+		return 1, "", true
+	case "0.00":
+		return 2, "", true
+	case "thousands":
+		return 3, "", true
+	case "thousands2":
+		return 4, "", true
+	case "percent":
+		return 9, "", true
+	case "percent2":
+		return 10, "", true
+	case "date":
+		return 14, "", true
+	}
+	if customNumFmtPattern.MatchString(token) {
+		return 0, token, true
+	}
+	return 0, "", false
+}
+
+// ---- 数据验证（下拉列表）----
+
+// applyValidations 读取 sheet 的 list 类型数据验证，把字面列表写入每个覆盖
+// 单元格 cellJSON 的 valid 字段（不带引号、不带前导 =）。
+// 引用单元格区域的列表（如 =$E$1:$E$3）无法还原为字面列表，跳过。
+func applyValidations(f *excelize.File, sheet string, sj *sheetJSON) {
+	dvs, err := f.GetDataValidations(sheet)
+	if err != nil {
+		return
+	}
+	for _, dv := range dvs {
+		if dv == nil || !strings.EqualFold(dv.Type, "list") {
+			continue
+		}
+		list := literalList(dv.Formula1)
+		if list == "" {
+			continue
+		}
+		for _, rc := range expandSqref(dv.Sqref, sj.Rows, sj.Cols) {
+			key := fmt.Sprintf("%d-%d", rc[0], rc[1])
+			c, ok := sj.Cells[key]
+			if !ok {
+				c = cellJSON{}
+			}
+			c.Valid = list
+			sj.Cells[key] = c
+		}
+	}
+}
+
+// literalList 把验证 formula1 规整为字面列表：去掉前导 = 与成对包裹引号。
+// 未加引号且形如单元格区域引用（A1、$A$1:$B$2、Sheet1!$A$1:$A$3）的视为引用
+// 公式而非字面列表，返回空串。
+func literalList(formula1 string) string {
+	s := strings.TrimSpace(formula1)
+	s = strings.TrimPrefix(s, "=")
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+		s = s[1 : len(s)-1]
+	} else if isCellRangeRef(s) {
+		return ""
+	}
+	s = strings.TrimSpace(s)
+	if s == "" || s == `""` {
+		return ""
+	}
+	return s
+}
+
+// cellRangeRefPattern 匹配单元格/区域引用（$A$1、A1:B2、$C$3:$D$4）。
+var cellRangeRefPattern = regexp.MustCompile(`^\$?[A-Za-z]{1,3}\$?[0-9]+(:\$?[A-Za-z]{1,3}\$?[0-9]+)?$`)
+
+// isCellRangeRef 判断 s 是否为单元格区域引用。
+func isCellRangeRef(s string) bool {
+	if strings.Contains(s, "!") { // 跨表引用 Sheet1!$A$1:$A$3
+		return true
+	}
+	return cellRangeRefPattern.MatchString(s)
+}
+
+// expandSqref 把 sqref（如 "A1"、"A1:B3"，可空格分隔多个区域）展开为
+// 0 基 (row, col) 列表。maxRows/maxCols 为网格边界（不含），超出部分直接跳过，
+// 避免整列验证（如 A1:A1048576）展开爆内存。
+func expandSqref(sqref string, maxRows, maxCols int) [][2]int {
+	var out [][2]int
+	for _, part := range strings.Fields(sqref) {
+		bounds := strings.SplitN(part, ":", 2)
+		c1, r1, err := excelize.CellNameToCoordinates(strings.TrimSpace(bounds[0]))
+		if err != nil {
+			continue
+		}
+		r2, c2 := r1, c1
+		if len(bounds) == 2 {
+			if c2, r2, err = excelize.CellNameToCoordinates(strings.TrimSpace(bounds[1])); err != nil {
+				continue
+			}
+		}
+		if r2 < r1 {
+			r1, r2 = r2, r1
+		}
+		if c2 < c1 {
+			c1, c2 = c2, c1
+		}
+		for r := r1; r <= r2; r++ {
+			if r-1 >= maxRows {
+				break
+			}
+			for c := c1; c <= c2; c++ {
+				if c-1 >= maxCols {
+					break
+				}
+				out = append(out, [2]int{r - 1, c - 1})
+			}
+		}
+	}
+	return out
+}
+
+// writeValidations 把 cellJSON 的 valid（逗号分隔列表）写为 list 类型
+// DataValidation：同一列表的单元格按行分组为连续区间，每个区间一条验证；
+// 列表总长超过 Excel 上限 255 字符时跳过（无法完整还原）。
+func writeValidations(f *excelize.File, sheet string, sj *sheetJSON) {
+	byList := map[string][]validCellPos{}
+	lists := []string{}
+	for key, cj := range sj.Cells {
+		if cj.Valid == "" || cj.HiddenBy != "" {
+			continue // 被合并覆盖的单元格不单独挂验证
+		}
+		parts := strings.SplitN(key, "-", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		var r, c int
+		if _, err := fmt.Sscanf(parts[0]+" "+parts[1], "%d %d", &r, &c); err != nil {
+			continue
+		}
+		if _, ok := byList[cj.Valid]; !ok {
+			lists = append(lists, cj.Valid)
+		}
+		byList[cj.Valid] = append(byList[cj.Valid], validCellPos{r, c})
+	}
+	sort.Strings(lists) // 稳定输出顺序
+	for _, list := range lists {
+		cells := byList[list]
+		sort.Slice(cells, func(i, j int) bool {
+			if cells[i].r != cells[j].r {
+				return cells[i].r < cells[j].r
+			}
+			return cells[i].c < cells[j].c
+		})
+		items := splitList(list)
+		joined := strings.Join(items, ",")
+		if len(joined) >= 255 {
+			continue
+		}
+		for _, run := range groupContiguousRuns(cells) {
+			startRef, err1 := excelize.CoordinatesToCellName(run[0].c+1, run[0].r+1)
+			endRef, err2 := excelize.CoordinatesToCellName(run[len(run)-1].c+1, run[len(run)-1].r+1)
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			sqref := startRef
+			if startRef != endRef {
+				sqref = startRef + ":" + endRef
+			}
+			dv := excelize.NewDataValidation(true)
+			dv.SetSqref(sqref)
+			if err := dv.SetDropList(items); err != nil {
+				continue
+			}
+			_ = f.AddDataValidation(sheet, dv)
+		}
+	}
+}
+
+// validCellPos 是带验证单元格的 0 基坐标。
+type validCellPos struct{ r, c int }
+
+// groupContiguousRuns 把已排序的单元格按行、按列连续性分组为若干连续区间
+// （同一行且列号依次 +1 的归为一段）。
+func groupContiguousRuns(cells []validCellPos) [][]validCellPos {
+	var runs [][]validCellPos
+	var cur []validCellPos
+	for _, p := range cells {
+		if len(cur) > 0 && (p.r != cur[len(cur)-1].r || p.c != cur[len(cur)-1].c+1) {
+			runs = append(runs, cur)
+			cur = nil
+		}
+		cur = append(cur, p)
+	}
+	if len(cur) > 0 {
+		runs = append(runs, cur)
+	}
+	return runs
+}
+
+// splitList 把逗号分隔的验证列表拆分为条目（去首尾空白、去空项）。
+func splitList(list string) []string {
+	var items []string
+	for _, s := range strings.Split(list, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			items = append(items, s)
+		}
+	}
+	return items
 }

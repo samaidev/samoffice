@@ -123,6 +123,8 @@ export interface Text {
   size?: string
   color?: string
   highlight?: string
+  // 字符间距（如 "1px" / "0.5em"），Go 写器输出 w:spacing
+  letterSpacing?: string
 }
 
 export interface Hyperlink {

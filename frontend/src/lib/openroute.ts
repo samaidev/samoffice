@@ -49,6 +49,16 @@ export interface SlideShape {
   ph?: string // 占位符类型
   lineColor?: string // 形状边框色（a:ln）
   lineWpt?: number // 边框宽（磅）
+  gradient?: string // 渐变 "RRGGBB,RRGGBB"
+  shadow?: boolean // 外阴影
+  glow?: boolean // 发光
+  glowColor?: string // 发光色
+  rotation?: number // 旋转角度（度）
+  bullet?: boolean // 项目符号
+  numbered?: boolean // 编号列表
+  lineHeight?: number // 行距倍数
+  indent?: number // 缩进层级
+  link?: string // 超链接 URL
   paras?: SlidePara[] // 逐段逐 run 完整样式
 }
 
@@ -58,6 +68,7 @@ export interface SlideData {
   notes?: string
   bg?: string
   shapes?: SlideShape[]
+  transition?: string // 切换效果：fade/push/wipe/cover/cut/zoom/morph
   pageW?: number // 页面宽度 EMU
   pageH?: number // 页面高度 EMU
 }
@@ -163,6 +174,16 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
             ph: typeof s.ph === 'string' ? s.ph : undefined,
             lineColor: typeof s.lineColor === 'string' ? s.lineColor : undefined,
             lineWpt: typeof s.lineWpt === 'number' ? s.lineWpt : undefined,
+            gradient: typeof s.gradient === 'string' ? s.gradient : undefined,
+            shadow: !!s.shadow,
+            glow: !!s.glow,
+            glowColor: typeof s.glowColor === 'string' ? s.glowColor : undefined,
+            rotation: typeof s.rotation === 'number' ? s.rotation : undefined,
+            bullet: !!s.bullet,
+            numbered: !!s.numbered,
+            lineHeight: typeof s.lineHeight === 'number' ? s.lineHeight : undefined,
+            indent: typeof s.indent === 'number' ? s.indent : undefined,
+            link: typeof s.link === 'string' ? s.link : undefined,
             paras: Array.isArray(s.paras)
               ? s.paras.map((p: any) => ({
                   align: typeof p?.align === 'string' ? p.align : undefined,
@@ -187,6 +208,7 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
         notes: typeof d.notes === 'string' ? d.notes : '',
         bg: typeof d.bg === 'string' ? d.bg : undefined,
         shapes,
+        transition: typeof d.transition === 'string' ? d.transition : undefined,
         pageW: typeof d.pageW === 'number' ? d.pageW : undefined,
         pageH: typeof d.pageH === 'number' ? d.pageH : undefined,
       })

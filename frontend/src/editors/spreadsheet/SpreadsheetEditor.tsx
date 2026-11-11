@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
 import { PrintDialog } from '../../components/PrintDialog'
 
@@ -9,6 +9,10 @@ interface Cell {
   italic?: boolean; under?: boolean; strike?: boolean
   fontSize?: number; fontFamily?: string
   format?: 'percent' | 'decimal' | 'general'
+  // fmt：数字格式 token（与后端 io.go 约定）：percent/percent2/0.00/thousands/thousands2/int/date
+  fmt?: string
+  // valid：数据验证下拉列表（逗号分隔），打开 xlsx 时由后端读入，保存时写回
+  valid?: string
   border?: 'thin' | 'medium' | 'thick' | 'none'
   borderColor?: string
   // 合并单元格：mergeRange = { rowSpan, colSpan } 表示此单元格是合并区域的左上角
@@ -360,7 +364,6 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }, [sheetData, sheets, rows, cols])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
-  const [frozen, setFrozen] = useState(false)
   const [showChartPanel, setShowChartPanel] = useState(false)
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showFuncPanel, setShowFuncPanel] = useState(false)
@@ -388,6 +391,22 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [showGrid, setShowGrid] = useState(true)
   const [showHeadings, setShowHeadings] = useState(true)
   const [showFormulaBar, setShowFormulaBar] = useState(true)
+  // 冻结窗格：冻结到当前活动单元格上方/左侧（真实 sticky 实现）
+  const [freezeAt, setFreezeAt] = useState<{ r: number; c: number } | null>(null)
+  const frozen = freezeAt !== null
+  // 行分组（组/取消组）：折叠区间行
+  const [rowGroups, setRowGroups] = useState<{ start: number; end: number; collapsed: boolean }[]>([])
+  // 筛选：仅隐藏不匹配的行（非破坏性）
+  const [filterRows, setFilterRows] = useState<Set<number> | null>(null)
+  // 自定义视图（localStorage 命名视图：缩放/网格线/标题/公式栏/冻结）
+  const [customViewNames, setCustomViewNames] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sam-xlsx-views') || '[]') } catch { return [] }
+  })
+  // 工作簿视图：normal / pageBreak / pageLayout（真实叠加页分隔参考线）
+  const [viewMode, setViewMode] = useState<'normal' | 'pageBreak' | 'pageLayout'>('normal')
+  // 最近一次条件格式 / 导入动作，供“重新应用 / 刷新”重放
+  const lastCondRef = useRef<null | (() => void)>(null)
+  const lastImportRef = useRef<null | (() => void)>(null)
 
   // Escape 关闭所有弹出面板
   useEffect(() => {
@@ -471,6 +490,21 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return String.fromCharCode(65 + Math.floor(c / 26) - 1) + String.fromCharCode(65 + (c % 26))
   }
   const getCell = (r: number, c: number): Cell => data[`${r}-${c}`] || { value: '' }
+  // 数字格式化显示（只影响显示，不改存储值；与后端 xlsx fmt token 对应）
+  const fmtDisplay = (cell: Cell): string => {
+    const v = cell.value ?? ''
+    if (!cell.fmt || v === '' || isNaN(Number(v))) return v
+    const n = Number(v)
+    switch (cell.fmt) {
+      case 'percent': return (n * 100).toFixed(0) + '%'
+      case 'percent2': return (n * 100).toFixed(2) + '%'
+      case '0.00': return n.toFixed(2)
+      case 'thousands': return n.toLocaleString('en-US')
+      case 'thousands2': return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      case 'int': return String(Math.round(n))
+      default: return v
+    }
+  }
   const setCell = (r: number, c: number, value: string) => {
     pushHistory()
     setData(d => {
@@ -650,6 +684,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     const colSpan = Math.abs(c2 - c1) + 1
     const topR = Math.min(r1, r2), topC = Math.min(c1, c2)
     if (rowSpan === 1 && colSpan === 1) return  // 单个单元格无需合并
+    pushHistory()
     setData(d => {
       const newData = { ...d }
       // 设置左上角单元格的 mergeRange
@@ -668,6 +703,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   // 拆分当前合并单元格
   const splitCell = (r: number, c: number) => {
+    pushHistory()
     setData(d => {
       const newData = { ...d }
       const cell = newData[`${r}-${c}`]
@@ -820,20 +856,155 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const removeChart = (id: number) => setCharts(cs => cs.filter(c => c.id !== id))
   const [charts, setCharts] = useState<{ id: number; type: string; data: number[]; labels: string[]; title: string }[]>([])
   const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheetData(sd => ({ ...sd, [activeId]: data, [id]: {} })); setData({}); setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
+
+  // === 数据验证：选中区域应用下拉列表；带验证的单元格渲染下拉框，保存时写回 xlsx ===
+  const applyValidation = () => {
+    const list = validList.trim()
+    if (!list) { alert(tf('sheet.validationNeed', '请输入逗号分隔的选项')); return }
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++)
+        for (let c = c1; c <= c2; c++) {
+          const k = `${r}-${c}`
+          nd[k] = { ...(nd[k] || { value: '' }), valid: list }
+        }
+      return nd
+    })
+    setShowValidPanel(false)
+  }
+  const clearValidation = () => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++)
+        for (let c = c1; c <= c2; c++) {
+          const k = `${r}-${c}`
+          if (nd[k]?.valid) nd[k] = { ...nd[k], valid: undefined }
+        }
+      return nd
+    })
+    setShowValidPanel(false)
+  }
+
+  // === 行分组：把选中的行折叠/展开（左侧行号带 -/+ 切换） ===
+  const groupRows = () => {
+    const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+    if (r1 === r2) { alert(tf('sheet.groupNeedRange', '请先选中多行')); return }
+    setRowGroups(g => [...g.filter(gr => gr.end < r1 || gr.start > r2), { start: r1, end: r2, collapsed: false }])
+  }
+  const ungroupRows = () => {
+    const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+    setRowGroups(g => g.filter(gr => gr.end < r1 || gr.start > r2))
+  }
+  const collapsedRows = new Set<number>()
+  for (const gr of rowGroups) if (gr.collapsed) for (let r = gr.start + 1; r <= gr.end; r++) collapsedRows.add(r)
+  const groupStartOf = (r: number) => rowGroups.find(gr => gr.start === r)
+
+  // === 预测：对活动列做线性回归（最小二乘），向后续写 5 行趋势值 ===
+  const forecastTrend = () => {
+    const pts: { x: number; y: number }[] = []
+    for (let r = 0; r < rows; r++) {
+      const v = parseFloat(getCell(r, active.c).value)
+      if (!isNaN(v) && isFinite(v)) pts.push({ x: r, y: v })
+    }
+    if (pts.length < 2) { alert(tf('sheet.forecastNeed', '该列至少需要两个数值')); return }
+    const n = pts.length
+    let sx = 0, sy = 0, sxy = 0, sxx = 0
+    pts.forEach(p => { sx += p.x; sy += p.y; sxy += p.x * p.y; sxx += p.x * p.x })
+    const denom = n * sxx - sx * sx
+    if (denom === 0) { alert(tf('sheet.forecastNeed', '该列至少需要两个数值')); return }
+    const slope = (n * sxy - sx * sy) / denom
+    const intercept = (sy - slope * sx) / n
+    pushHistory()
+    const nd = { ...data }
+    const lastX = Math.max(...pts.map(p => p.x))
+    let added = 0
+    for (let r = lastX + 1; r < rows && added < 5; r++, added++) {
+      const k = `${r}-${active.c}`
+      const cell = nd[k] || { value: '' }
+      nd[k] = { ...cell, value: String(Math.round((intercept + slope * r) * 100) / 100) }
+    }
+    if (added === 0) {
+      // 表格到底了：扩充行数后再写
+      const extra = 5
+      for (let i = 1; i <= extra; i++) {
+        const r = lastX + i
+        const k = `${r}-${active.c}`
+        nd[k] = { value: String(Math.round((intercept + slope * r) * 100) / 100) }
+      }
+      setRows(rows + extra)
+    }
+    setData(nd)
+  }
   const switchSheet = (id: number) => { setSheetData(sd => ({ ...sd, [activeId]: data })); setData(sheetData[id] || {}); setSheets(s => s.map(x => ({ ...x, active: x.id === id }))); setPast([]); setFuture([]) }
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
   const activeSheet = sheets.find(s => s.active) || sheets[0]
 
-  // 排序
-  const sortByCol = (asc: boolean) => {
-    const colData: { r: number; val: string }[] = []
-    for (let r = 1; r < rows; r++) { colData.push({ r, val: getCell(r, active.c).value }) }
-    colData.sort((a, b) => asc ? a.val.localeCompare(b.val) : b.val.localeCompare(a.val))
-    const newData: Record<string, Cell> = {}
-    colData.forEach((item, idx) => {
-      for (let c = 0; c < cols; c++) { const v = getCell(item.r, c).value; if (v) newData[`${idx + 1}-${c}`] = { value: v } }
+  // 排序：保留整行单元格对象（样式/公式/格式），数值感知，一次历史记录
+  const sortRangeByCol = (asc: boolean, col: number, headerRow: boolean) => {
+    pushHistory()
+    setData(d => {
+      const start = headerRow ? 1 : 0
+      const idx: number[] = []
+      for (let r = start; r < rows; r++) idx.push(r)
+      const numeric = idx.every(r => { const v = (d[`${r}-${col}`]?.value ?? '').trim(); return v === '' || !isNaN(Number(v)) })
+      idx.sort((a, b) => {
+        const va = (d[`${a}-${col}`]?.value ?? '').trim()
+        const vb = (d[`${b}-${col}`]?.value ?? '').trim()
+        let cmp: number
+        if (numeric) cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0)
+        else cmp = va.localeCompare(vb, 'zh-Hans-CN')
+        return asc ? cmp : -cmp
+      })
+      const nd: Record<string, Cell> = { ...d }
+      idx.forEach((srcRow, i) => {
+        const dstRow = start + i
+        if (srcRow === dstRow) return
+        for (let c = 0; c < cols; c++) {
+          const k = `${srcRow}-${c}`
+          if (d[k]) nd[`${dstRow}-${c}`] = d[k]
+          else delete nd[`${dstRow}-${c}`]
+        }
+      })
+      return nd
     })
-    setData(newData)
+  }
+  // 兼容旧调用（升序，跳过首行）
+  const sortByCol = (asc: boolean) => sortRangeByCol(asc, active.c, true)
+
+  // === 条件格式：对活动列应用，一次历史记录；记录最近一次操作供“重新应用” ===
+  const applyCond = (kind: 'aboveAvg' | 'belowAvg' | 'top10' | 'dataBar' | 'colorScale') => {
+    const vals: { r: number; v: number }[] = []
+    for (let r = 0; r < rows; r++) {
+      const v = parseFloat(getCell(r, active.c).value)
+      if (!isNaN(v) && isFinite(v)) vals.push({ r, v })
+    }
+    if (!vals.length) { alert(tf('sheet.noData', '该列没有数值')); return }
+    lastCondRef.current = () => applyCond(kind)
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const mark = (r: number, bg: string) => { const k = `${r}-${active.c}`; nd[k] = { ...(nd[k] || { value: '' }), bg } }
+      if (kind === 'aboveAvg' || kind === 'belowAvg') {
+        const avg = vals.reduce((a, b) => a + b.v, 0) / vals.length
+        vals.forEach(({ r, v }) => { if (kind === 'aboveAvg' ? v > avg : v < avg) mark(r, kind === 'aboveAvg' ? '#dcfce7' : '#fef3c7') })
+      } else if (kind === 'top10') {
+        [...vals].sort((a, b) => b.v - a.v).slice(0, 10).forEach(({ r }) => mark(r, '#dbeafe'))
+      } else {
+        const max = Math.max(...vals.map(x => x.v)), min = Math.min(...vals.map(x => x.v))
+        vals.forEach(({ r, v }) => {
+          const pct = max > min ? (v - min) / (max - min) : 0.5
+          mark(r, kind === 'dataBar' ? `rgba(59,130,246,${pct * 0.6 + 0.1})` : (pct < 0.5 ? `rgba(239,68,68,${1 - pct * 2})` : `rgba(34,197,94,${pct * 2 - 1})`))
+        })
+      }
+      return nd
+    })
+    setShowCondPanel(false)
   }
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
@@ -903,9 +1074,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.alignment')}>
-            <RibbonButton icon="⬅" label={t('sheet.alignLeft')} onClick={() => setCellFmt(active.r, active.c, { align: 'left' })} active={getCell(active.r, active.c).align === 'left'} />
-            <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => setCellFmt(active.r, active.c, { align: 'center' })} active={getCell(active.r, active.c).align === 'center'} />
-            <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => setCellFmt(active.r, active.c, { align: 'right' })} active={getCell(active.r, active.c).align === 'right'} />
+            {/* 对齐作用于整个选区（修复只对单个活动单元格生效的问题） */}
+            <RibbonButton icon="⬅" label={t('sheet.alignLeft')} onClick={() => setCellFmtRange({ align: 'left' })} active={getCell(active.r, active.c).align === 'left'} />
+            <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => setCellFmtRange({ align: 'center' })} active={getCell(active.r, active.c).align === 'center'} />
+            <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => setCellFmtRange({ align: 'right' })} active={getCell(active.r, active.c).align === 'right'} />
           </RibbonGroup>
           <RibbonGroup label={tf('sheet.merge', '合并')}>
             <RibbonButton icon="⊟" label={tf('sheet.mergeCenter', '合并居中')} onClick={() => {
@@ -923,8 +1095,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <RibbonButton icon="⊞" label={tf('sheet.split', '拆分')} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={tf('sheet.splitTitle', '拆分单元格')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.number')}>
-            <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) setCellFmt(active.r, active.c, { value: `${parseFloat(v) * 100}%`, format: 'percent' }) }} />
-            <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => { const v = getCell(active.r, active.c).value; const n = parseFloat(v); if (!isNaN(n)) setCellFmt(active.r, active.c, { value: n.toFixed(2), format: 'decimal' }) }} />
+            {/* 数字格式：只改格式不改值（修复旧的破坏性改值：值×100 加 % / 丢精度） */}
+            <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => setCellFmtRange({ fmt: getCell(active.r, active.c).fmt === 'percent' ? undefined : 'percent' })} active={getCell(active.r, active.c).fmt === 'percent'} title="0%" />
+            <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => setCellFmtRange({ fmt: getCell(active.r, active.c).fmt === '0.00' ? undefined : '0.00' })} active={getCell(active.r, active.c).fmt === '0.00'} title="0.00" />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.cellOps')}>
             <RibbonButton icon="↧+" label={t('sheet.addRow')} onClick={() => setRows(r => r + 1)} />
@@ -965,7 +1138,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   <div className="grid grid-cols-4 gap-2">
                     {[{i:'▭',n:t('doc.shape.rect')},{i:'▢',n:t('doc.shape.rounded')},{i:'⬭',n:t('doc.shape.ellipse')},{i:'△',n:t('doc.shape.triangle')},
                      {i:'◇',n:t('doc.shape.diamond')},{i:'→',n:t('doc.shape.arrow')},{i:'★',n:t('doc.shape.star')},{i:'♥',n:t('doc.shape.heart')}].map(s => (
-                      <button key={s.n} onClick={() => { setCell(active.r, active.c, s.i); setShowShapePanel(false) }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
+                      <button key={s.n} onClick={() => { const cur = getCell(active.r, active.c).value; if (cur) { alert(tf('sheet.cellNotEmpty', '当前单元格已有数据，请先选中空单元格')); return } setCell(active.r, active.c, s.i); setShowShapePanel(false) }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 56 }}>
                         <span style={{ fontSize: '20px' }}>{s.i}</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{s.n}</span>
                       </button>
@@ -1007,16 +1180,34 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         </>)}
         {ribbonTab === 'data' && (<>
           <RibbonGroup label={t('sheet.sortFilter')}>
-            <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => sortByCol(true)} />
-            <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => sortByCol(false)} />
-            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => { const v = prompt(t('sheet.filter') + ':'); if (v !== null) { const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { for (let c = 0; c < cols; c++) { const cell = getCell(r, c); if (cell.value && cell.value.includes(v)) { newData[`${r}-${c}`] = { ...cell, bg: '#fef3c7' } } else { newData[`${r}-${c}`] = cell } } } setData(newData) } }} />
+            <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => sortRangeByCol(true, active.c, true)} title={tf('sheet.sortAscTitle', '按当前列升序（保留样式）')} />
+            <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => sortRangeByCol(false, active.c, true)} title={tf('sheet.sortDescTitle', '按当前列降序（保留样式）')} />
+            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => {
+              // 非破坏性筛选：只隐藏不匹配的行，不改任何单元格内容/颜色，可一键清除
+              const v = prompt(tf('sheet.filterPrompt', '输入筛选关键词：'))
+              if (v === null) return
+              if (v === '') { setFilterRows(null); return }
+              const hit = new Set<number>()
+              for (let r = 0; r < rows; r++) if ((getCell(r, active.c).value || '').includes(v)) hit.add(r)
+              if (!hit.size) { alert(tf('sheet.filterNoMatch', '无匹配行')); return }
+              setFilterRows(hit)
+            }} active={!!filterRows} title={t('sheet.filterTitle')} />
             {/* MS Office 风格排序对话框 */}
             <RibbonButton icon="⇅" label={t('sheet.customSort')} onClick={() => {
-              const col = prompt(t('sheet.customSortPrompt'), colName(active.c))
-              if (col) sortByCol(true)
+              const col = prompt(tf('sheet.customSortPrompt2', '输入排序列（如 A）：'), colName(active.c))
+              if (!col) return
+              const m = col.trim().toUpperCase().match(/^([A-Z]+)$/)
+              if (!m) { alert(tf('sheet.customSortBad', '请输入列字母，如 A 或 AB')); return }
+              let ci = 0
+              for (const ch of m[1]) ci = ci * 26 + (ch.charCodeAt(0) - 64)
+              ci -= 1
+              if (ci < 0 || ci >= cols) { alert(tf('sheet.customSortBad', '列超出范围')); return }
+              const dir = prompt(tf('sheet.customSortDir', '输入排序方向：1=升序，0=降序'), '1')
+              if (dir === null) return
+              sortRangeByCol(dir.trim() !== '0', ci, true)
             }} title={t('sheet.customSortTitle')} />
-            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => { const newData: Record<string, Cell> = {}; for (const k of Object.keys(data)) { newData[k] = { ...data[k], bg: undefined } } setData(newData) }} title={t('sheet.clearFilterTitle')} />
-            <RibbonButton icon="🔂" label={t('sheet.reapply')} onClick={() => alert(t('sheet.reapply'))} title={t('sheet.reapplyTitle')} />
+            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => setFilterRows(null)} disabled={!filterRows} title={t('sheet.clearFilterTitle')} />
+            <RibbonButton icon="🔂" label={t('sheet.reapply')} onClick={() => { if (lastCondRef.current) lastCondRef.current(); else alert(tf('sheet.reapplyNone', '还没有可重放的条件格式')) }} title={t('sheet.reapplyTitle')} />
           </RibbonGroup>
           {/* MS Office 风格数据工具 */}
           <RibbonGroup label={t('sheet.dataTools')}>
@@ -1026,16 +1217,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
                   <div className="text-[10px] font-bold mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('sheet.dropdownOptions')}</div>
                   <input type="text" placeholder={t('sheet.dropdownPlaceholder')} value={validList} onChange={e => setValidList(e.target.value)} className="text-xs mb-2" style={{ width: 200 }} />
-                  <button onClick={() => { setShowValidPanel(false); alert(t('sheet.validationSet', { list: validList })) }} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>
+                  <button onClick={applyValidation} className="btn btn-primary btn-sm w-full">{t('sheet.apply')}</button>
+                  <button onClick={clearValidation} className="btn btn-sm w-full mt-1" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }}>{tf('sheet.validClear', '清除选区验证')}</button>
                 </div>
               )}
             </div>
-            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) { const parts = v.split(/[\s,;\t]+/); parts.forEach((p, i) => setCell(active.r, active.c + i, p)) } }} title={t('sheet.textToColumnsTitle')} />
-            <RibbonButton icon="🔗" label={t('sheet.removeDup')} onClick={() => { const seen = new Set<string>(); const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const v = getCell(r, active.c).value; if (v) { if (seen.has(v)) continue; seen.add(v) } for (let c = 0; c < cols; c++) { const cell = getCell(r, c); if (cell.value) newData[`${r}-${c}`] = cell } } setData(newData) }} title={t('sheet.removeDupTitle')} />
-            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={() => { const v = prompt(t('sheet.whatIf') + ' (e.g. =100*2):'); if (v && v.startsWith('=')) { try { const expr = v.slice(1).replace(/([A-Z]+)(\d+)/g, (_, col, row) => { const c = col.charCodeAt(0) - 65; const r = parseInt(row) - 1; return String(parseFloat(getCell(r, c).value) || 0) }); setCell(active.r, active.c, String(Function('return ' + expr)())) } catch { alert('Error') } } }} title={t('sheet.whatIfTitle')} />
-            <RibbonButton icon="🔮" label={t('sheet.forecast')} onClick={() => alert(t('sheet.forecast'))} title={t('sheet.forecastTitle')} />
-            <RibbonButton icon="📊" label={t('sheet.group')} onClick={() => alert(t('sheet.group'))} title={t('sheet.groupTitle')} />
-            <RibbonButton icon="⊟" label={t("sheet.ungroup")} onClick={() => alert(t('sheet.ungroup'))} title={t('sheet.ungroupTitle')} />
+            <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) { pushHistory(); const parts = v.split(/[\s,;\t]+/); const nd = { ...data }; parts.forEach((p, i) => { const k = `${active.r}-${active.c + i}`; nd[k] = { ...(nd[k] || { value: '' }), value: p } }); setData(nd) } }} title={t('sheet.textToColumnsTitle')} />
+            <RibbonButton icon="🔗" label={t('sheet.removeDup')} onClick={() => { pushHistory(); const seen = new Set<string>(); const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const v = getCell(r, active.c).value; if (v) { if (seen.has(v)) continue; seen.add(v) } for (let c = 0; c < cols; c++) { const cell = getCell(r, c); if (cell.value) newData[`${r}-${c}`] = cell } } setData(newData) }} title={t('sheet.removeDupTitle')} />
+            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={() => { const v = prompt(tf('sheet.whatIfPrompt', '输入公式（如 =SUM(A1:A5)*2）：'), '='); if (v && v.startsWith('=')) { setCell(active.r, active.c, String(evalFormula(v, data))) } }} title={t('sheet.whatIfTitle')} />
+            <RibbonButton icon="🔮" label={t('sheet.forecast')} onClick={forecastTrend} title={tf('sheet.forecastTitle2', '按活动列线性趋势续写 5 行')} />
+            <RibbonButton icon="📊" label={t('sheet.group')} onClick={groupRows} active={rowGroups.length > 0} title={tf('sheet.groupTitle2', '将选中行创建为可折叠分组')} />
+            <RibbonButton icon="⊟" label={t("sheet.ungroup")} onClick={ungroupRows} disabled={!rowGroups.length} title={t('sheet.ungroupTitle')} />
           </RibbonGroup>
           {/* MS Office 风格获取和转换数据 */}
           <RibbonGroup label={t('sheet.getTransform')}>
@@ -1064,11 +1256,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               <RibbonButton icon="🎨" label={t('sheet.conditionalFormat')} onClick={() => openPanel('cond')} />
               {showCondPanel && (
                 <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160, zIndex: 50 }}>
-                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v > avg) ? { ...cell, bg: '#dcfce7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
-                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } if (vals.length) { const avg = vals.reduce((a,b)=>a+b,0)/vals.length; const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const cell = getCell(r, active.c); const v = parseFloat(cell.value); newData[`${r}-${active.c}`] = (!isNaN(v) && v < avg) ? { ...cell, bg: '#fef3c7' } : cell } setData(newData) } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
-                  <button onClick={() => { const vals: {r:number;v:number}[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push({r,v}) } vals.sort((a,b)=>b.v-a.v).slice(0,10).forEach(x => setCellFmt(x.r, active.c, { bg: '#dbeafe' })); setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>
-                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } const max = Math.max(...vals), min = Math.min(...vals); for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { const pct = max > min ? (v - min) / (max - min) : 0.5; setCellFmt(r, active.c, { bg: `rgba(59,130,246,${pct * 0.6 + 0.1})` }) } } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.dataBar')}</button>
-                  <button onClick={() => { const vals: number[] = []; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) vals.push(v) } const max = Math.max(...vals), min = Math.min(...vals); for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { const pct = max > min ? (v - min) / (max - min) : 0.5; setCellFmt(r, active.c, { bg: pct < 0.5 ? `rgba(239,68,68,${1 - pct*2})` : `rgba(34,197,94,${pct*2-1})` }) } } setShowCondPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.colorScale')}</button>
+                  <button onClick={() => applyCond('aboveAvg')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.aboveAvg')}</button>
+                  <button onClick={() => applyCond('belowAvg')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.belowAvg')}</button>
+                  <button onClick={() => applyCond('top10')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.top10')}</button>
+                  <button onClick={() => applyCond('dataBar')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.dataBar')}</button>
+                  <button onClick={() => applyCond('colorScale')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.colorScale')}</button>
                 </div>
               )}
             </div>
@@ -1083,10 +1275,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </RibbonGroup>
           {/* MS Office 风格窗口 */}
           <RibbonGroup label={t('sheet.window')}>
-            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => setFrozen(!frozen)} active={frozen} title={t('sheet.freezeTitle')} />
-            <RibbonButton icon="↔️" label={t('sheet.split')} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={t('sheet.splitTitle')} />
+            {/* 冻结窗格：以当前活动单元格为界，上方行 + 左侧列真实冻结（sticky） */}
+            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => { setFreezeAt(frozen ? null : { r: active.r, c: active.c }); }} active={frozen} title={tf('sheet.freezeTitle2', '冻结到当前单元格上方/左侧')} />
             <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('sheet.newWindowTitle')} />
-            <RibbonButton icon="▦" label={t("sheet.arrange")} onClick={() => alert(t('sheet.arrange'))} title={t('sheet.arrangeTitle')} />
           </RibbonGroup>
           {/* MS Office 风格显示 */}
           <RibbonGroup label={t('sheet.show')}>
@@ -1096,10 +1287,25 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </RibbonGroup>
           {/* MS Office 风格工作簿视图 */}
           <RibbonGroup label={t('sheet.workbookViews')}>
-            <RibbonButton icon="📄" label={t('sheet.normal')} onClick={() => {}} active={true} title={t('sheet.normalTitle')} />
-            <RibbonButton icon="🖨" label={t('sheet.pageBreakPreview')} onClick={() => alert(t('sheet.pageBreakPreview'))} title={t('sheet.pageBreakTitle')} />
-            <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => alert(t('sheet.pageLayout'))} title={t('sheet.pageLayoutTitle')} />
-            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => alert(t('sheet.customViews'))} title={t('sheet.customViewsTitle')} />
+            <RibbonButton icon="📄" label={t('sheet.normal')} onClick={() => { setViewMode('normal'); setZoom(100) }} active={viewMode === 'normal'} title={t('sheet.normalTitle')} />
+            <RibbonButton icon="🖨" label={t('sheet.pageBreakPreview')} onClick={() => setViewMode(viewMode === 'pageBreak' ? 'normal' : 'pageBreak')} active={viewMode === 'pageBreak'} title={tf('sheet.pageBreakTitle2', '显示分页参考线（虚线为打印分页位置）')} />
+            <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => setViewMode(viewMode === 'pageLayout' ? 'normal' : 'pageLayout')} active={viewMode === 'pageLayout'} title={tf('sheet.pageLayoutTitle2', '页面布局视图（页边距参考线）')} />
+            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => {
+              // 自定义视图：把当前视图状态存为命名视图，可随时恢复
+              const name = prompt(tf('sheet.viewSavePrompt', '输入视图名称保存当前视图（已有：' + (customViewNames.join(', ') || '无') + '）：'))
+              if (!name) return
+              const views = JSON.parse(localStorage.getItem('sam-xlsx-views') || '{}')
+              views[name] = { zoom, showGrid, showHeadings, showFormulaBar, freezeAt, viewMode }
+              localStorage.setItem('sam-xlsx-views', JSON.stringify(views))
+              const names = Object.keys(views)
+              setCustomViewNames(names)
+              const load = prompt(tf('sheet.viewLoadPrompt', '输入要恢复的视图名称（留空取消）：'), name)
+              if (load && views[load]) {
+                const v = views[load]
+                setZoom(v.zoom); setShowGrid(v.showGrid); setShowHeadings(v.showHeadings); setShowFormulaBar(v.showFormulaBar)
+                setFreezeAt(v.freezeAt || null); setViewMode(v.viewMode || 'normal')
+              }
+            }} active={customViewNames.length > 0} title={t('sheet.customViewsTitle')} />
           </RibbonGroup>
           {/* MS Office 风格打印 */}
           <RibbonGroup label={t('print.title')}>
@@ -1194,8 +1400,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       </div>
       )}
 
-      {/* 表格主体 */}
-      <div className="flex-1 overflow-auto p-2 sm:p-3" style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%` }}>
+      {/* 表格主体（工作簿视图：分页参考线 / 页边距参考线叠加显示） */}
+      <div className="flex-1 overflow-auto p-2 sm:p-3 relative" style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
+        ...(viewMode === 'pageBreak' ? {
+          backgroundImage: 'repeating-linear-gradient(to right, transparent 0, transparent calc(7 * 80px - 1px), #f59e0b calc(7 * 80px - 1px), #f59e0b calc(7 * 80px), transparent calc(7 * 80px)), repeating-linear-gradient(to bottom, transparent 0, transparent calc(46 * 28px - 1px), #f59e0b calc(46 * 28px - 1px), #f59e0b calc(46 * 28px), transparent calc(46 * 28px))',
+          backgroundRepeat: 'no-repeat',
+        } : viewMode === 'pageLayout' ? {
+          backgroundImage: 'linear-gradient(to right, transparent 48px, rgba(99,102,241,0.25) 48px, rgba(99,102,241,0.25) calc(100% - 48px), transparent calc(100% - 48px))',
+        } : {}) }}>
+        {viewMode !== 'normal' && (
+          <div className="sticky top-0 left-0 z-40 inline-block px-2 py-0.5 text-[10px] rounded" style={{ background: 'rgba(245,158,11,0.9)', color: '#fff' }}>
+            {viewMode === 'pageBreak' ? t('sheet.pageBreakPreview') : t('sheet.pageLayout')}
+          </div>
+        )}
         <table className="border-collapse text-sm" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {showHeadings && (
           <thead>
@@ -1211,12 +1428,27 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </thead>
           )}
           <tbody>
-            {Array.from({ length: rows }).map((_, r) => (
+            {Array.from({ length: rows }).map((_, r) => {
+              // 分组折叠的行 / 筛选掉的行不渲染（非破坏性）
+              if (collapsedRows.has(r)) return null
+              if (filterRows && !filterRows.has(r)) return null
+              const gr = groupStartOf(r)
+              const isFrozenRow = frozen && r < freezeAt!.r
+              const frozenTop = 32 + r * 28 // 表头 h-8(32px) + 每行 h-7(28px)
+              return (
               <tr key={r}>
                 {showHeadings && (
-                <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none`}
-                  style={{ background: selection.mode === 'row' && selection.r1 === r ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}
-                  onClick={() => selectRow(r)} title={tf('sheet.selectRow', '选择整行')}>{r + 1}</td>
+                <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow ? 'sticky z-30' : ''}`}
+                  style={{ background: selection.mode === 'row' && selection.r1 === r ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined }}
+                  onClick={() => selectRow(r)} title={tf('sheet.selectRow', '选择整行')}>
+                  {gr && (
+                    <button onClick={e => { e.stopPropagation(); setRowGroups(g => g.map(x => x === gr ? { ...x, collapsed: !x.collapsed } : x)) }}
+                      className="w-4 h-4 mr-0.5 rounded-sm text-[9px] leading-none inline-flex items-center justify-center"
+                      style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)' }}
+                      title={gr.collapsed ? tf('sheet.expandGroup', '展开分组') : tf('sheet.collapseGroup', '折叠分组')}>{gr.collapsed ? '+' : '−'}</button>
+                  )}
+                  {r + 1}{gr && <span className="ml-0.5 text-[8px] opacity-60">▎</span>}
+                </td>
                 )}
                 {Array.from({ length: cols }).map((_, c) => {
                   const cell = getCell(r, c)
@@ -1226,14 +1458,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   const mergeRange = cell.mergeRange
                   const sel = inSelection(r, c)
                   const bw = cell.border === 'thick' ? '3px' : cell.border === 'medium' ? '2px' : cell.border === 'thin' ? '1px' : undefined
+                  const isFrozenCell = frozen && (c < freezeAt!.c)
+                  const gridOff = !showGrid
                   return (
-                    <td key={c} className="border p-0 relative" rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
+                    <td key={c} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
                       background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (cell.bg || '#ffffff'),
-                      borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || '#000') : 'var(--color-border)',
+                      borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)'),
                       borderWidth: bw,
                       minWidth: '80px',
+                      left: isFrozenCell ? (c === 0 ? 48 : 48 + c * 80) : undefined,
                     }}
                       onMouseDown={() => { selectCell(r, c); setDragging(true) }}
                       onMouseEnter={() => { if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c)) }}
@@ -1251,16 +1486,26 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                           return <img src={v.slice(5)} alt="" className="w-full h-full object-contain pointer-events-none" />
                         }
                         const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
-                        return <input type="text" value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
+                        const common = { color: cell.color || '#1f2937', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' as const : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }
+                        if (cell.valid) {
+                          // 数据验证下拉：打开文件时读入 / 面板设置，保存时写回 xlsx
+                          const opts = cell.valid.split(',').map(x => x.trim()).filter(Boolean)
+                          return <select value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} className="w-full h-7 px-1 outline-none bg-transparent" style={common as any}>
+                            {!opts.includes(v) && <option value={v}>{v || ' '}</option>}
+                            {opts.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        }
+                        return <input type="text" value={isActive ? v : fmtDisplay(cell)} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
                           if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); selectCell(Math.min(rows - 1, r + 1), c) }
                           else if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
-                        }} className="w-full h-7 px-2 outline-none bg-transparent" style={{ color: cell.color || '#1f2937', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }} />
+                        }} className="w-full h-7 px-2 outline-none bg-transparent" style={common as any} />
                       })()}
                     </td>
                   )
                 })}
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>

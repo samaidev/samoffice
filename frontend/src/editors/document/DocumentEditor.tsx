@@ -743,7 +743,40 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [pwMm, phMm] = PAGE_SIZES_MM[pageSize] || PAGE_SIZES_MM.A4
   const pageWidthPx = mmToPx(orientation === 'landscape' ? phMm : pwMm)
   const pageHeightPx = mmToPx(orientation === 'landscape' ? pwMm : phMm)
+  // 页面设置持久化：UDM.pageSetup（twips），保存/加载随文档走（此前纸张/页边距/分栏刷新即丢）
+  const pageSetupRef = useRef<any>(null)
+  pageSetupRef.current = {
+    widthTwips: Math.round((orientation === 'landscape' ? phMm : pwMm) * 1440 / 25.4),
+    heightTwips: Math.round((orientation === 'landscape' ? pwMm : phMm) * 1440 / 25.4),
+    orientation,
+    marginTop: Math.round(docMargins.top * 15),
+    marginRight: Math.round(docMargins.right * 15),
+    marginBottom: Math.round(docMargins.bottom * 15),
+    marginLeft: Math.round(docMargins.left * 15),
+    cols: docColumns,
+  }
+  // 打开文档时应用已保存的页面设置
+  useEffect(() => {
+    const ps = (document as any)?.pageSetup
+    if (!ps || typeof ps !== 'object') return
+    try {
+      if (ps.orientation === 'landscape' || ps.orientation === 'portrait') setOrientation(ps.orientation)
+      const wTw = Number(ps.widthTwips) || 0, hTw = Number(ps.heightTwips) || 0
+      if (wTw > 0 && hTw > 0) {
+        const mmW = (ps.orientation === 'landscape' ? hTw : wTw) * 25.4 / 1440
+        const mmH = (ps.orientation === 'landscape' ? wTw : hTw) * 25.4 / 1440
+        const names = Object.keys(PAGE_SIZES_MM) as (keyof typeof PAGE_SIZES_MM)[]
+        const hit = names.find(n => Math.abs(PAGE_SIZES_MM[n][0] - mmW) < 3 && Math.abs(PAGE_SIZES_MM[n][1] - mmH) < 3)
+        if (hit) setPageSize(hit as any)
+      }
+      const m = (px: any) => (Number(px) > 0 ? Math.round(Number(px) / 15) : undefined)
+      const mt = m(ps.marginTop), mr = m(ps.marginRight), mb = m(ps.marginBottom), ml = m(ps.marginLeft)
+      if (mt || mr || mb || ml) setDocMargins({ top: mt ?? 96, bottom: mb ?? 96, left: ml ?? 120, right: mr ?? 120 })
+      if (Number(ps.cols) > 0) setDocColumns(Number(ps.cols))
+    } catch { /* 忽略损坏的 pageSetup */ }
+  }, [document])
   const [docLineNumbers, setDocLineNumbers] = useState(false)
+  const [pmBlockCount, setPmBlockCount] = useState(1)
 
   // ===== 页面视图（Word 式独立纸页 + 页间留白 + 内容自动顺次流到下一页）=====
   const [pageCount, setPageCount] = useState(1)
@@ -1104,11 +1137,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           // 直接回流会把原文档标题冲掉——保存后文件标题变成 Untitled。透传原 meta。
           const curMeta = (documentRef.current as any)?.meta
           if (curMeta) (udm as any).meta = curMeta
+          // 透传页面设置（纸张/方向/页边距/分栏），Go 写器据此输出 sectPr
+          ;(udm as any).pageSetup = pageSetupRef.current
           lastEmittedRef.current = udm
           onChangeRef.current(udm)
         }
         if (onSpellCheckRef.current) onSpellCheckRef.current(ns.doc.textContent)
         updateActiveState(ns)
+        if (ns.doc.childCount !== pmBlockCount) setPmBlockCount(ns.doc.childCount)
         try { setFootnotes(extractFootnotes(ns.doc)) } catch (e) { /* ignore */ }
         try { setComments(extractComments(ns.doc)) } catch (e) { /* ignore */ }
         const ss = getSearchState(view); if (ss) { setMatchCount(ss.matches.length); setActiveMatch(ss.activeIndex) }
@@ -1588,7 +1624,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         const { state, dispatch } = v
         const { from, to } = state.selection
         const tr = state.tr
-        const markNames = ['bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'code', 'fontSize', 'fontFamily', 'fontColor', 'highlight', 'comment_mark', 'charSpacing']
+        // 修复：schema 中的颜色 mark 名是 textColor（此前写成 fontColor，颜色永远清不掉）
+        const markNames = ['bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'code', 'fontSize', 'fontFamily', 'textColor', 'highlight', 'charSpacing', 'link', 'wordArt']
         markNames.forEach((n) => { const m = (state.schema.marks as any)[n]; if (m) tr.removeMark(from, to, m) })
         dispatch(tr); v.focus(); break
       }
@@ -2833,7 +2870,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           {/* 窗口 */}
           <RibbonGroup label={t('doc.window')}>
             <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('doc.newWindowTitle')} />
-            <RibbonButton icon="↔️" label={t('doc.windowSplit')} onClick={() => setSplitWindowPersist(!splitWindow)} active={splitWindow} title={t('doc.windowSplitTitle')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
         </>)}
@@ -3135,7 +3171,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 userSelect: 'none',
                 zIndex: 2,
               }}>
-              {docLineNumbers && Array.from({ length: 30 }, (_, i) => (
+              {docLineNumbers && Array.from({ length: Math.max(pmBlockCount, 1) }, (_, i) => (
                 <div key={i} style={{ minHeight: '1.8em' }}>{i + 1}</div>
               ))}
             </div>

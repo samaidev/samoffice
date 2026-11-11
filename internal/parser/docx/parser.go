@@ -121,7 +121,106 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
                 doc.PageNumber = pn
         }
 
+        // 解析 sectPr 的纸张/方向/页边距/分栏，持久化到 UDM.pageSetup，
+        // 否则打开横向/自定义纸张的文档再保存会退回默认 A4 纵向。
+        if ps := parsePageSetup(docFile); ps != nil {
+                doc.PageSetup = ps
+        }
+
         return doc, warnings, nil
+}
+
+// parsePageSetup 从 document.xml 的 sectPr 提取 w:pgSz / w:pgMar / w:cols。
+func parsePageSetup(docFile *zip.File) *core.PageSetup {
+        if docFile == nil {
+                return nil
+        }
+        rc, err := docFile.Open()
+        if err != nil {
+                return nil
+        }
+        defer rc.Close()
+        dec := xml.NewDecoder(rc)
+        dec.Strict = false
+        ps := &core.PageSetup{}
+        inSectPr := false
+        depth := 0
+        for {
+                tok, err := dec.Token()
+                if err != nil {
+                        break
+                }
+                switch t := tok.(type) {
+                case xml.StartElement:
+                        if t.Name.Local == "sectPr" {
+                                // 文档可能有多个 sectPr（分节符）；以最后一个（全局）为准
+                                ps = &core.PageSetup{}
+                                inSectPr = true
+                                depth = 0
+                                continue
+                        }
+                        if !inSectPr {
+                                continue
+                        }
+                        depth++
+                        switch t.Name.Local {
+                        case "pgSz":
+                                for _, a := range t.Attr {
+                                        switch a.Name.Local {
+                                        case "w":
+                                                ps.WidthTwips = atoiSafe(a.Value)
+                                        case "h":
+                                                ps.HeightTwips = atoiSafe(a.Value)
+                                        case "orient":
+                                                ps.Orientation = a.Value
+                                        }
+                                }
+                        case "pgMar":
+                                for _, a := range t.Attr {
+                                        switch a.Name.Local {
+                                        case "top":
+                                                ps.MarginTop = atoiSafe(a.Value)
+                                        case "right":
+                                                ps.MarginRight = atoiSafe(a.Value)
+                                        case "bottom":
+                                                ps.MarginBottom = atoiSafe(a.Value)
+                                        case "left":
+                                                ps.MarginLeft = atoiSafe(a.Value)
+                                        }
+                                }
+                        case "cols":
+                                for _, a := range t.Attr {
+                                        if a.Name.Local == "num" {
+                                                ps.Cols = atoiSafe(a.Value)
+                                        }
+                                }
+                        }
+                case xml.EndElement:
+                        if t.Name.Local == "sectPr" {
+                                inSectPr = false
+                                depth = 0
+                                continue
+                        }
+                        if inSectPr && depth > 0 {
+                                depth--
+                        }
+                }
+        }
+        if ps.WidthTwips == 0 && ps.HeightTwips == 0 {
+                return nil
+        }
+        return ps
+}
+
+func atoiSafe(s string) int {
+        n := 0
+        for _, ch := range s {
+                if ch < '0' || ch > '9' {
+                        return n
+                }
+                n = n*10 + int(ch-'0')
+        }
+        return n
 }
 
 // parseDocumentXML 宽松解析 document.xml，提取块级内容

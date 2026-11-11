@@ -10,14 +10,29 @@ import "encoding/json"
 //  2. 双向：UDM 可序列化为 JSON，前后端共用
 //  3. 可扩展：Block/Inline 用 interface，新增类型不破坏旧代码
 type Document struct {
-	Meta       Meta             `json:"meta"`
-	Blocks     []Block          `json:"blocks"`
-	Comments   []Comment        `json:"comments,omitempty"`
-	Styles     []StyleDef       `json:"styles,omitempty"`
+	Meta       Meta              `json:"meta"`
+	Blocks     []Block           `json:"blocks"`
+	Comments   []Comment         `json:"comments,omitempty"`
+	Styles     []StyleDef        `json:"styles,omitempty"`
 	PageNumber *PageNumberConfig `json:"pageNumber,omitempty"`
+	PageSetup  *PageSetup        `json:"pageSetup,omitempty"`
 	Protect    *DocumentProtect  `json:"protect,omitempty"`
-	Warnings   []Warning        `json:"warnings,omitempty"`
-	Raw        map[string]any   `json:"raw,omitempty"`
+	Warnings   []Warning         `json:"warnings,omitempty"`
+	Raw        map[string]any    `json:"raw,omitempty"`
+}
+
+// PageSetup 描述页面尺寸/方向/页边距/分栏（单位均为 twips，1pt=20twips）。
+// 前端保存时随 UDM 一并下发；docx 导出时写入 sectPr 的 pgSz/pgMar/cols。
+// 缺省时导出器保持 A4（11906×16838）+ 1440 页边距的既有行为。
+type PageSetup struct {
+	WidthTwips   int    `json:"widthTwips,omitempty"`
+	HeightTwips  int    `json:"heightTwips,omitempty"`
+	Orientation  string `json:"orientation,omitempty"` // "landscape" | ""（纵向）
+	MarginTop    int    `json:"marginTop,omitempty"`
+	MarginRight  int    `json:"marginRight,omitempty"`
+	MarginBottom int    `json:"marginBottom,omitempty"`
+	MarginLeft   int    `json:"marginLeft,omitempty"`
+	Cols         int    `json:"cols,omitempty"` // >1 时多栏排版
 }
 
 // DocumentProtect 描述文档保护（密码锁定）配置。
@@ -49,7 +64,7 @@ type PageBreak struct {
 	StartNumber int  `json:"startNumber,omitempty"`
 }
 
-func (PageBreak) isBlock()         {}
+func (PageBreak) isBlock()          {}
 func (PageBreak) BlockType() string { return "pageBreak" }
 
 // FootnoteRef 正文中的脚注引用标记（上标编号，如 [1]）。
@@ -76,7 +91,7 @@ type FootnoteSection struct {
 	Items []FootnoteItem `json:"items"`
 }
 
-func (FootnoteSection) isBlock()         {}
+func (FootnoteSection) isBlock()          {}
 func (FootnoteSection) BlockType() string { return "footnote_section" }
 
 type Meta struct {
@@ -90,10 +105,10 @@ type Meta struct {
 }
 
 type Comment struct {
-	ID      string  `json:"id"`
-	Author  string  `json:"author"`
-	Content string  `json:"content"`
-	Anchor  string  `json:"anchor,omitempty"`
+	ID      string `json:"id"`
+	Author  string `json:"author"`
+	Content string `json:"content"`
+	Anchor  string `json:"anchor,omitempty"`
 }
 
 type StyleDef struct {
@@ -131,29 +146,29 @@ type Paragraph struct {
 	Props  map[string]any `json:"props,omitempty"`
 }
 
-func (Paragraph) isBlock()        {}
+func (Paragraph) isBlock()          {}
 func (Paragraph) BlockType() string { return "paragraph" }
 
 type Heading struct {
-	Level  int             `json:"level"`
-	Inline []Inline        `json:"inline"`
-	Style  string          `json:"style,omitempty"`
-	Align  string          `json:"align,omitempty"` // left | center | right | justify
-	Props  map[string]any  `json:"props,omitempty"`
+	Level  int            `json:"level"`
+	Inline []Inline       `json:"inline"`
+	Style  string         `json:"style,omitempty"`
+	Align  string         `json:"align,omitempty"` // left | center | right | justify
+	Props  map[string]any `json:"props,omitempty"`
 }
 
-func (Heading) isBlock()        {}
+func (Heading) isBlock()          {}
 func (Heading) BlockType() string { return "heading" }
 
 type BulletList struct {
-	Items  [][]Block `json:"items"`
-	Ordered bool     `json:"ordered"`
-	Start  int       `json:"start,omitempty"` // 列表起始序号；用于被正文隔开的同列表项续号
-	Style  string    `json:"style,omitempty"` // "references"：参考文献列表 [n]；否则为 CSS list-style-type（如 decimal/cjk-ideographic）
-	Ilfo   int       `json:"-"`               // 内部：所属 Word 列表 id，用于跨段落续号判断
+	Items   [][]Block `json:"items"`
+	Ordered bool      `json:"ordered"`
+	Start   int       `json:"start,omitempty"` // 列表起始序号；用于被正文隔开的同列表项续号
+	Style   string    `json:"style,omitempty"` // "references"：参考文献列表 [n]；否则为 CSS list-style-type（如 decimal/cjk-ideographic）
+	Ilfo    int       `json:"-"`               // 内部：所属 Word 列表 id，用于跨段落续号判断
 }
 
-func (BulletList) isBlock()        {}
+func (BulletList) isBlock()          {}
 func (BulletList) BlockType() string { return "bulletList" }
 
 type Table struct {
@@ -164,7 +179,7 @@ type Table struct {
 	Border float64 `json:"border,omitempty"`
 }
 
-func (Table) isBlock()        {}
+func (Table) isBlock()          {}
 func (Table) BlockType() string { return "table" }
 
 type TableCell struct {
@@ -188,7 +203,7 @@ type Image struct {
 	Align   string   `json:"align,omitempty"`
 }
 
-func (Image) isBlock()        {}
+func (Image) isBlock()          {}
 func (Image) BlockType() string { return "image" }
 
 type CodeBlock struct {
@@ -196,7 +211,7 @@ type CodeBlock struct {
 	Code     string `json:"code"`
 }
 
-func (CodeBlock) isBlock()        {}
+func (CodeBlock) isBlock()          {}
 func (CodeBlock) BlockType() string { return "codeBlock" }
 
 // Math 数学公式块（LaTeX）。导出 docx 时转为 OMML（m:oMath）。
@@ -205,16 +220,16 @@ type Math struct {
 	Inline  bool   `json:"inline,omitempty"`
 }
 
-func (Math) isBlock()        {}
+func (Math) isBlock()          {}
 func (Math) BlockType() string { return "math" }
 
 // Textbox 文本框/形状块。包含内部块（标题、段落、图片等），以及几何与
 // 样式属性：边框宽度 borderW(pt)、线型 lineStyle(solid|dash|dot|dashDot)、
 // 边框色 borderColor(#RRGGBB)、填充色 bgColor(#RRGGBB，空=无填充)、
 // 形状 shape(rect|roundRect|ellipse|triangle|diamond|rightArrow|star5|heart)、
-// 宽度 width(px，0=auto)、绕排 float(''|left|right)。
+// 宽度 width(px，0=auto)、绕排 float(”|left|right)。
 type Textbox struct {
-	Type        string  `json:"type"`          // 固定 "textbox"，用于 JSON 反序列化判别
+	Type        string  `json:"type"`             // 固定 "textbox"，用于 JSON 反序列化判别
 	Blocks      []Block `json:"inline,omitempty"` // 前端发送 "inline" 键，值为 blocks 数组
 	W           float64 `json:"w,omitempty"`
 	H           float64 `json:"h,omitempty"`
@@ -231,7 +246,7 @@ type Textbox struct {
 	Rotation    float64 `json:"rotation,omitempty"`
 }
 
-func (Textbox) isBlock()        {}
+func (Textbox) isBlock()          {}
 func (Textbox) BlockType() string { return "textbox" }
 
 // Textbox 自定义反序列化：处理 Blocks 接口字段（前端以 "inline" 键发送 blocks 数组）
@@ -279,7 +294,7 @@ type RawBlock struct {
 	Data map[string]any `json:"data"`
 }
 
-func (RawBlock) isBlock()        {}
+func (RawBlock) isBlock()          {}
 func (RawBlock) BlockType() string { return "raw" }
 
 // === 行内实现 ===
@@ -294,15 +309,21 @@ type Text struct {
 	// 文档内联样式（由 docx 解析器填充，前端 ProseMirror fontFamily mark 消费）
 	Font string `json:"font,omitempty"` // 字体名，如 "宋体"/"Calibri"
 	// 电子表格单元格样式（由 xlsx 解析器填充，前端表格视图消费）
-	Color      string  `json:"color,omitempty"`    // 字体颜色，#RRGGBB
-	Align      string  `json:"align,omitempty"`    // left | center | right
-	Bg         string  `json:"bg,omitempty"`       // 单元格填充色，#RRGGBB
-	FontSize   float64 `json:"fontSize,omitempty"` // 字号（磅）
+	Color      string  `json:"color,omitempty"`      // 字体颜色，#RRGGBB
+	Align      string  `json:"align,omitempty"`      // left | center | right
+	Bg         string  `json:"bg,omitempty"`         // 单元格填充色，#RRGGBB
+	FontSize   float64 `json:"fontSize,omitempty"`   // 字号（磅）
 	FontFamily string  `json:"fontFamily,omitempty"` // 字体名（xlsx 单元格）
-	Highlight  string  `json:"highlight,omitempty"` // 高亮色，#RRGGBB
+	Highlight  string  `json:"highlight,omitempty"`  // 高亮色，#RRGGBB
+	// 上下标（前端 ProseMirror superscript/subscript mark；convert.ts 以
+	// superscript/subscript 布尔字段随文本下发，docx 导出为 w:vertAlign）
+	Superscript bool `json:"superscript,omitempty"`
+	Subscript   bool `json:"subscript,omitempty"`
+	// 字符间距，如 "1px"/"0.5em"/"2pt"；docx 导出为 w:spacing（twips）
+	LetterSpacing string `json:"letterSpacing,omitempty"`
 }
 
-func (Text) isInline()         {}
+func (Text) isInline()          {}
 func (Text) InlineType() string { return "text" }
 
 // Track 修订追踪行内：保存文档时保留 insert/delete 修订状态。
@@ -310,21 +331,21 @@ type Track struct {
 	Track  string `json:"track"` // "insert" | "delete"
 	Author string `json:"author,omitempty"`
 	// 与 Text 相同的格式字段
-	Content   string  `json:"content"`
-	Bold      bool    `json:"bold,omitempty"`
-	Italic    bool    `json:"italic,omitempty"`
-	Under     bool    `json:"under,omitempty"`
-	Strike    bool    `json:"strike,omitempty"`
-	Style     string  `json:"style,omitempty"`
-	Font      string  `json:"font,omitempty"`
-	Color     string  `json:"color,omitempty"`
-	Highlight string  `json:"highlight,omitempty"`
-	FontSize  float64 `json:"fontSize,omitempty"`
-	Superscript bool `json:"superscript,omitempty"`
-	Subscript   bool `json:"subscript,omitempty"`
+	Content     string  `json:"content"`
+	Bold        bool    `json:"bold,omitempty"`
+	Italic      bool    `json:"italic,omitempty"`
+	Under       bool    `json:"under,omitempty"`
+	Strike      bool    `json:"strike,omitempty"`
+	Style       string  `json:"style,omitempty"`
+	Font        string  `json:"font,omitempty"`
+	Color       string  `json:"color,omitempty"`
+	Highlight   string  `json:"highlight,omitempty"`
+	FontSize    float64 `json:"fontSize,omitempty"`
+	Superscript bool    `json:"superscript,omitempty"`
+	Subscript   bool    `json:"subscript,omitempty"`
 }
 
-func (Track) isInline()         {}
+func (Track) isInline()          {}
 func (Track) InlineType() string { return "track" }
 
 type Hyperlink struct {
@@ -332,7 +353,7 @@ type Hyperlink struct {
 	Text []Inline `json:"text"`
 }
 
-func (Hyperlink) isInline()         {}
+func (Hyperlink) isInline()          {}
 func (Hyperlink) InlineType() string { return "hyperlink" }
 
 type InlineImage struct {
@@ -341,7 +362,7 @@ type InlineImage struct {
 	Height float64 `json:"height,omitempty"`
 }
 
-func (InlineImage) isInline()         {}
+func (InlineImage) isInline()          {}
 func (InlineImage) InlineType() string { return "image" }
 
 type RawInline struct {
@@ -349,5 +370,5 @@ type RawInline struct {
 	Data map[string]any `json:"data"`
 }
 
-func (RawInline) isInline()         {}
+func (RawInline) isInline()          {}
 func (RawInline) InlineType() string { return "raw" }

@@ -257,7 +257,11 @@ function pmToBlock(node: Node): Block | null {
       return { inline: [], style: 'quote', align: '' }
     }
     case 'image':
-      return { src: node.attrs.src, alt: node.attrs.alt || '', width: 0, height: 0 }
+      // 保留尺寸/浮动/对齐（此前硬编码 0，导致保存后重开变成默认 400x300）
+      return { src: node.attrs.src, alt: node.attrs.alt || '', width: Number(node.attrs.width) || 0, height: Number(node.attrs.height) || 0, float: node.attrs.float || '', align: node.attrs.align || '' } as any
+    case 'horizontal_rule':
+      // 水平线：用底边框段落表示（写器 paraBorderXML 渲染为 w:pBdr，加载后样式保留）
+      return { inline: [], style: '', align: '', props: { border: 'bottom' } } as any
     case 'page_break':
       return { restart: !!node.attrs.restart, startNumber: Number(node.attrs.startNumber) || 1 }
     case 'math':
@@ -287,14 +291,23 @@ function pmToBlock(node: Node): Block | null {
       return { type: 'footnote_section', items } as any
     }
     case 'table': {
+      // 单元格内容是 block+（段落），必须逐块序列化；此前误用 pmToInline
+      // 导致单元格文字全部丢失（inline: []），保存重开后表格变成空表。
       const rows = node.children.map((row: any) =>
-        row.children.map((cell: any) => ({
-          inline: cell.childCount > 0 ? pmToInline(cell) : [],
-          colSpan: (cell.attrs.colSpan as number) || 1,
-          rowSpan: (cell.attrs.rowSpan as number) || 1,
-          align: (cell.attrs.align as string) || '',
-          isHeader: !!cell.attrs.isHeader,
-        })),
+        row.children.map((cell: any) => {
+          const blocks: Block[] = []
+          cell.forEach((cc: Node) => {
+            const b = pmToBlock(cc)
+            if (b) blocks.push(b)
+          })
+          return {
+            blocks: blocks.length ? blocks : [{ inline: [] }],
+            colSpan: (cell.attrs.colspan as number) || 1,
+            rowSpan: (cell.attrs.rowspan as number) || 1,
+            align: (cell.attrs.align as string) || '',
+            isHeader: !!cell.attrs.isHeader,
+          }
+        }),
       )
       return { rows }
     }
@@ -309,6 +322,12 @@ function pmToInline(node: Node): Inline[] {
     if (!child.isText) {
       if (child.type.name === 'tocLink') {
         if (child.attrs.label) result.push({ content: child.attrs.label } as any)
+      } else if (child.type.name === 'footnote') {
+        // 脚注引用：内联原子节点必须序列化，否则保存后正文中的 [n] 标记消失
+        result.push({ type: 'footnote', num: Number(child.attrs.num) || 1, content: child.attrs.content || '' } as any)
+      } else if (child.type.name === 'inlineImage') {
+        // 内联图片：保留 src 与尺寸
+        result.push({ src: child.attrs.src, width: Number(child.attrs.width) || 0, height: Number(child.attrs.height) || 0 } as any)
       }
       return
     }
@@ -356,11 +375,12 @@ function pmToInline(node: Node): Inline[] {
     const sizeMark = marks.find((m) => m.type.name === 'fontSize')
     const colorMark = marks.find((m) => m.type.name === 'textColor')
     const hlMark = marks.find((m) => m.type.name === 'highlight')
+    const charSpacingMark = marks.find((m) => m.type.name === 'charSpacing')
     const link = marks.find((m) => m.type.name === 'link')
     if (link) {
       result.push({
         url: link.attrs.href,
-        text: [{ content: text, bold, italic, under, strike, style: code ? 'code' : '' }]
+        text: [{ content: text, bold, italic, under, strike, style: code ? 'code' : '', letterSpacing: charSpacingMark?.attrs.value }]
       })
     } else {
       result.push({
@@ -372,6 +392,7 @@ function pmToInline(node: Node): Inline[] {
         fontSize: sizeMark ? Math.max(0.5, Math.round(parseFloat(sizeMark.attrs.size) * 72 / 96 * 2) / 2) : undefined,
         color: colorMark?.attrs.color,
         highlight: hlMark?.attrs.color,
+        letterSpacing: charSpacingMark?.attrs.value,
       } as any)
     }
   })

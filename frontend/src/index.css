@@ -880,6 +880,20 @@ table td, table th {
 .sl-anim-wipe { animation: slWipe 0.6s var(--ease-out) both }
 .sl-anim-bounce { animation: slBounce 0.6s var(--ease-spring) both }
 
+/* 强调动画（pulse/spin）— 放映中单次播放 */
+.sl-anim-pulse { animation: slPulse 0.9s var(--ease-out) 1 }
+.sl-anim-spin { animation: slSpin 0.8s var(--ease-out) 1 }
+@keyframes slPulse { 0% { transform: scale(1) } 40% { transform: scale(1.12) } 100% { transform: scale(1) } }
+@keyframes slSpin { 0% { transform: rotate(0deg) } 100% { transform: rotate(360deg) } }
+
+/* 退出动画（fade/fly/zoom）— 放映中单次播放后移除 */
+.sl-anim-exit-fade { animation: slExitFade 0.45s var(--ease-out) both }
+.sl-anim-exit-fly { animation: slExitFly 0.45s var(--ease-out) both }
+.sl-anim-exit-zoom { animation: slExitZoom 0.4s var(--ease-out) both }
+@keyframes slExitFade { from { opacity: 1 } to { opacity: 0 } }
+@keyframes slExitFly { from { opacity: 1; transform: translateY(0) } to { opacity: 0; transform: translateY(80%) } }
+@keyframes slExitZoom { from { opacity: 1; transform: scale(1) } to { opacity: 0; transform: scale(0.6) } }
+
 /* 幻灯片切换效果（放映整页切换） */
 .sl-trans-none { animation: none }
 .sl-trans-fade { animation: slFade 0.6s var(--ease-out) both }
@@ -1633,4 +1647,15 @@ img[data-float="center"] { display: block; margin: 0 auto; }
   background: rgba(0, 0, 0, 0.4);
   padding: 4px 12px;
   border-radius: 20px;
+}
+
+/* 首字下沉（“布局→首字下沉”按钮的视觉效果，作用于段落首字符） */
+.ProseMirror p.pm-dropcap::first-letter {
+  float: left;
+  font-size: 3.2em;
+  line-height: 0.85;
+  padding-right: 6px;
+  padding-top: 4px;
+  font-weight: 600;
+  color: var(--color-primary, #4f46e5);
 }

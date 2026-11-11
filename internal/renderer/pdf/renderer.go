@@ -4,9 +4,9 @@ package pdf
 
 import (
 	"bytes"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
-	"embed"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -32,9 +32,9 @@ var fontMonoFS embed.FS
 
 const (
 	// 已内嵌（可靠）的字体
-	fontSerif = "NotoSerifSC"  // 内嵌文件族 id
-	fontSans  = "LiberationSans"  // 内嵌文件族 id
-	fontMono  = "LiberationMono"  // 内嵌文件族 id
+	fontSerif = "NotoSerifSC"    // 内嵌文件族 id
+	fontSans  = "LiberationSans" // 内嵌文件族 id
+	fontMono  = "LiberationMono" // 内嵌文件族 id
 	// 运行时注册的字体族（宋/楷/黑/仿宋/ Times New Roman）
 	fontSong = "Song"
 	fontKai  = "Kai"
@@ -133,10 +133,10 @@ func (r *Renderer) Supported() []string { return []string{".pdf"} }
 
 // Render 将 UDM 渲染为 PDF 字节流
 func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
-        pdf := gopdf.GoPdf{}
-        pdf.Start(gopdf.Config{
-                PageSize: *gopdf.PageSizeA4,
-        })
+	pdf := gopdf.GoPdf{}
+	pdf.Start(gopdf.Config{
+		PageSize: *gopdf.PageSizeA4,
+	})
 
 	// 统一构建字体簿（内嵌 + 系统 CJK）
 	fb := newFontBook(&pdf)
@@ -145,131 +145,131 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
 		return nil, fmt.Errorf("set font: %w", err)
 	}
 
-        pdf.SetMargins(marginLeft, marginTop, marginRight, marginBottom)
-        pdf.AddPage()
-        y := marginTop
+	pdf.SetMargins(marginLeft, marginTop, marginRight, marginBottom)
+	pdf.AddPage()
+	y := marginTop
 
-        // floatZone 记录当前页的浮动图片避让区（左/右环绕时后续文字在其旁排版）。
-        // 浮动图片不跨页，换页即清空，避免坐标错乱。
-        var fz struct {
-                active  bool
-                side    string // left | right
-                x0, x1  float64
-                yBottom float64
-        }
+	// floatZone 记录当前页的浮动图片避让区（左/右环绕时后续文字在其旁排版）。
+	// 浮动图片不跨页，换页即清空，避免坐标错乱。
+	var fz struct {
+		active  bool
+		side    string // left | right
+		x0, x1  float64
+		yBottom float64
+	}
 
-        for _, b := range doc.Blocks {
-                if y > pageHeight-marginBottom {
-                        pdf.AddPage()
-                        y = marginTop
-                        fz = struct {
-                                active  bool
-                                side    string
-                                x0, x1  float64
-                                yBottom float64
-                        }{}
-                }
-                if _, ok := b.(*core.PageBreak); ok {
-                        pdf.AddPage()
-                        y = marginTop
-                        fz = struct {
-                                active  bool
-                                side    string
-                                x0, x1  float64
-                                yBottom float64
-                        }{}
-                        continue
-                }
-                // 浮动图片（左/右环绕）：画在页边，文字在剩余宽度内环绕，y 不前进
-                if im, ok := b.(*core.Image); ok && (im.Float == "left" || im.Float == "right") {
-                        iw := im.Width
-                        if iw == 0 {
-                                iw = 200
-                        }
-                        ih := im.Height
-                        if ih == 0 {
-                                ih = 100
-                        }
-                        var ix float64
-                        if im.Float == "left" {
-                                ix = marginLeft
-                        } else {
-                                ix = pageWidth - marginRight - iw
-                        }
-                        _, _, _ = drawImageAt(&pdf, im, ix, y)
-                        fz.active = true
-                        fz.side = im.Float
-                        gap := 8.0
-                        if im.Float == "left" {
-                                fz.x0 = ix + iw + gap
-                                fz.x1 = pageWidth - marginRight
-                        } else {
-                                fz.x0 = marginLeft
-                                fz.x1 = ix - gap
-                        }
-                        fz.yBottom = math.Min(y+ih+gap, pageHeight-marginBottom)
-                        continue
-                }
-                // 计算当前块可用水平范围（受浮动图片避让区约束）
-                bx0, bx1 := marginLeft, pageWidth-marginRight
-                if fz.active {
-                        if y < fz.yBottom {
-                                bx0, bx1 = fz.x0, fz.x1
-                        } else {
-                                fz.active = false
-                        }
-                }
-                _, y = renderBlock(fb, &pdf, b, bx0, bx1, y)
-        }
+	for _, b := range doc.Blocks {
+		if y > pageHeight-marginBottom {
+			pdf.AddPage()
+			y = marginTop
+			fz = struct {
+				active  bool
+				side    string
+				x0, x1  float64
+				yBottom float64
+			}{}
+		}
+		if _, ok := b.(*core.PageBreak); ok {
+			pdf.AddPage()
+			y = marginTop
+			fz = struct {
+				active  bool
+				side    string
+				x0, x1  float64
+				yBottom float64
+			}{}
+			continue
+		}
+		// 浮动图片（左/右环绕）：画在页边，文字在剩余宽度内环绕，y 不前进
+		if im, ok := b.(*core.Image); ok && (im.Float == "left" || im.Float == "right") {
+			iw := im.Width
+			if iw == 0 {
+				iw = 200
+			}
+			ih := im.Height
+			if ih == 0 {
+				ih = 100
+			}
+			var ix float64
+			if im.Float == "left" {
+				ix = marginLeft
+			} else {
+				ix = pageWidth - marginRight - iw
+			}
+			_, _, _ = drawImageAt(&pdf, im, ix, y)
+			fz.active = true
+			fz.side = im.Float
+			gap := 8.0
+			if im.Float == "left" {
+				fz.x0 = ix + iw + gap
+				fz.x1 = pageWidth - marginRight
+			} else {
+				fz.x0 = marginLeft
+				fz.x1 = ix - gap
+			}
+			fz.yBottom = math.Min(y+ih+gap, pageHeight-marginBottom)
+			continue
+		}
+		// 计算当前块可用水平范围（受浮动图片避让区约束）
+		bx0, bx1 := marginLeft, pageWidth-marginRight
+		if fz.active {
+			if y < fz.yBottom {
+				bx0, bx1 = fz.x0, fz.x1
+			} else {
+				fz.active = false
+			}
+		}
+		_, y = renderBlock(fb, &pdf, b, bx0, bx1, y)
+	}
 
-        // 文档全部画出后，逐页绘制页脚页码
-        if doc.PageNumber != nil && doc.PageNumber.Enabled {
-                // gopdf 不暴露总页数；渲染结束已知实际页数，回写每页页脚。
-                total := pdf.GetNumberOfPages()
-                if total < 1 {
-                        total = 1
-                }
-                for pg := 1; pg <= total; pg++ {
-                        pdf.SetPage(pg)
-                        renderFooter(&pdf, doc.PageNumber, pg, total)
-                }
-        }
+	// 文档全部画出后，逐页绘制页脚页码
+	if doc.PageNumber != nil && doc.PageNumber.Enabled {
+		// gopdf 不暴露总页数；渲染结束已知实际页数，回写每页页脚。
+		total := pdf.GetNumberOfPages()
+		if total < 1 {
+			total = 1
+		}
+		for pg := 1; pg <= total; pg++ {
+			pdf.SetPage(pg)
+			renderFooter(&pdf, doc.PageNumber, pg, total)
+		}
+	}
 
-        var buf bytes.Buffer
-        if err := pdf.Write(&buf); err != nil {
-                return nil, fmt.Errorf("write pdf: %w", err)
-        }
-        return buf.Bytes(), nil
+	var buf bytes.Buffer
+	if err := pdf.Write(&buf); err != nil {
+		return nil, fmt.Errorf("write pdf: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // renderFooter 在当前页底部绘制页码（参考 {n}=当前页，{total}=总页数）。
 func renderFooter(pdf *gopdf.GoPdf, pn *core.PageNumberConfig, cur, total int) {
-        fb := newFontBook(pdf)
-        fb.set(fontSong, 10)
-        var txt string
-        if pn.Format != "" {
-                txt = strings.ReplaceAll(pn.Format, "{n}", fmt.Sprintf("%d", cur))
-                if total > 0 {
-                        txt = strings.ReplaceAll(txt, "{total}", fmt.Sprintf("%d", total))
-                } else {
-                        txt = strings.ReplaceAll(txt, "{total}", "-")
-                }
-        } else {
-                txt = fmt.Sprintf("%d", cur)
-        }
-        w, _ := pdf.MeasureTextWidth(txt)
-        y := pageHeight - marginBottom + 18
-        var x float64
-        switch pn.Align {
-        case "right":
-                x = pageWidth - marginRight - w
-        case "left":
-                x = marginLeft
-        default: // center
-                x = (pageWidth - w) / 2
-        }
-        pdf.SetXY(x, y)
-        pdf.Text(txt)
+	fb := newFontBook(pdf)
+	fb.set(fontSong, 10)
+	var txt string
+	if pn.Format != "" {
+		txt = strings.ReplaceAll(pn.Format, "{n}", fmt.Sprintf("%d", cur))
+		if total > 0 {
+			txt = strings.ReplaceAll(txt, "{total}", fmt.Sprintf("%d", total))
+		} else {
+			txt = strings.ReplaceAll(txt, "{total}", "-")
+		}
+	} else {
+		txt = fmt.Sprintf("%d", cur)
+	}
+	w, _ := pdf.MeasureTextWidth(txt)
+	y := pageHeight - marginBottom + 18
+	var x float64
+	switch pn.Align {
+	case "right":
+		x = pageWidth - marginRight - w
+	case "left":
+		x = marginLeft
+	default: // center
+		x = (pageWidth - w) / 2
+	}
+	pdf.SetXY(x, y)
+	pdf.Text(txt)
 }
 
 func renderBlock(fb *fontBook, pdf *gopdf.GoPdf, b core.Block, x0, x1, y float64) (float64, float64) {
@@ -304,7 +304,7 @@ func renderBlock(fb *fontBook, pdf *gopdf.GoPdf, b core.Block, x0, x1, y float64
 	case *core.RawBlock:
 		return renderRawBlock(fb, pdf, v, x0, y)
 	}
-        return x0, y
+	return x0, y
 }
 
 // slideShape 是 PPT 幻灯片形状的本地定义（与 parser/pptx 的 shapeDef 字段一致，
@@ -505,24 +505,23 @@ func renderTextbox(fb *fontBook, pdf *gopdf.GoPdf, tb *core.Textbox, x, y float6
 	return x, y + boxH + 8
 }
 
-
 type runStyle struct {
-	text     string
-	family   string
-	bold     bool
-	italic   bool
-	under    bool
-	strike   bool
-	size     float64
-	color    string
-	bg       string // 单元格/文本背景填充色 #RRGGBB
-	align    string // 单元格对齐 left|center|right
+	text      string
+	family    string
+	bold      bool
+	italic    bool
+	under     bool
+	strike    bool
+	size      float64
+	color     string
+	bg        string // 单元格/文本背景填充色 #RRGGBB
+	align     string // 单元格对齐 left|center|right
 	highlight string // 文本高亮色 #RRGGBB
-	super    bool   // 上标（脚注引用）
+	super     bool   // 上标（脚注引用）
 	inlineImg string // 行内图片 data URL
-	imgW     float64
-	imgH     float64
-	footRef  int // 脚注编号（>0 表示脚注引用）
+	imgW      float64
+	imgH      float64
+	footRef   int // 脚注编号（>0 表示脚注引用）
 }
 
 // collectRuns 把 Inline 列表拆成带格式片段
@@ -610,7 +609,7 @@ type wrappedLine struct {
 
 // frag 记录某个 run 在折行时所落入的子串范围（rune 索引）。
 type frag struct {
-	r   runStyle
+	r    runStyle
 	s, e int
 }
 
@@ -872,6 +871,7 @@ func propIsTrue(props map[string]any, key string) bool {
 // 参考 LibreOffice 的行距算法（porlay.cxx / itrform2.cxx）：
 //   - 比例字符串（如 "1.5"、"2"、"1.15"）：行高 = 字体单倍基准 × 比例
 //   - 固定/至少值（如 "18pt"）：行高 = 该 pt 值（单倍基准取字号本身，含内部 leading）
+//
 // 单倍基准采用 size × 1.2，与 LibreOffice 由字体 ascent/descent 推导的单倍行高相近。
 func parseLineHeight(spec string, size float64) (float64, bool) {
 	spec = strings.TrimSpace(spec)
@@ -911,18 +911,19 @@ func paragraphKeep(p *core.Paragraph) bool {
 
 // decideWholeParagraphMove 参考 LibreOffice widorp.cxx 的 widow/orphan 分页算法，
 // 决定段落是否应整体下移到下一页（而非在本页拆分）。
-//   avail      : 当前页剩余可用高度（页底 - 当前 y）
-//   lineH      : 行高
-//   n          : 段落行数（measureRuns 测得）
-//   spaceAfter : 段后距
-//   keep       : 段落要求整体保留（keepLines/keepWithNext）
-//   pageBody   : 单页正文区高度（pageHeight - marginBottom - marginTop）
+//
+//	avail      : 当前页剩余可用高度（页底 - 当前 y）
+//	lineH      : 行高
+//	n          : 段落行数（measureRuns 测得）
+//	spaceAfter : 段后距
+//	keep       : 段落要求整体保留（keepLines/keepWithNext）
+//	pageBody   : 单页正文区高度（pageHeight - marginBottom - marginTop）
 //
 // 规则（与 LibreOffice 一致）：
-//   1. Keep：整段放不下本页且整段能放进一页 -> 下移。
-//   2. 整段都放不下本页且整段能放进一页 -> 下移（避免在本页只留一两行再拆）。
-//   3. Orphan：段首在本页剩余不足 orphans(默认2) 行 -> 整段下移，避免段首孤行。
-//   4. 已在页顶（avail 接近整页）则不强行下移，留给主循环处理。
+//  1. Keep：整段放不下本页且整段能放进一页 -> 下移。
+//  2. 整段都放不下本页且整段能放进一页 -> 下移（避免在本页只留一两行再拆）。
+//  3. Orphan：段首在本页剩余不足 orphans(默认2) 行 -> 整段下移，避免段首孤行。
+//  4. 已在页顶（avail 接近整页）则不强行下移，留给主循环处理。
 func decideWholeParagraphMove(avail, lineH float64, n int, spaceAfter float64, keep bool, pageBody float64) bool {
 	if n <= 0 {
 		return false
@@ -1104,22 +1105,22 @@ func renderCodeBlock(pdf *gopdf.GoPdf, c *core.CodeBlock, x, y, x1 float64) (flo
 	if x1 <= 0 {
 		x1 = pageWidth - marginLeft - marginRight
 	}
-        pdf.SetY(y)
-        pdf.SetX(x)
-        lines := strings.Split(c.Code, "\n")
-        boxH := float64(len(lines))*14 + 10
-        // 灰色背景
-        pdf.SetFillColor(240, 240, 240)
-        _ = pdf.Rectangle(x, y, x1, y+boxH, "F", 0, 0)
-        pdf.SetY(y + 5)
-        pdf.SetX(x + 5)
+	pdf.SetY(y)
+	pdf.SetX(x)
+	lines := strings.Split(c.Code, "\n")
+	boxH := float64(len(lines))*14 + 10
+	// 灰色背景
+	pdf.SetFillColor(240, 240, 240)
+	_ = pdf.Rectangle(x, y, x1, y+boxH, "F", 0, 0)
+	pdf.SetY(y + 5)
+	pdf.SetX(x + 5)
 
-        for _, line := range lines {
-                pdf.Cell(nil, line)
-                pdf.SetY(pdf.GetY() + 14)
-                pdf.SetX(x + 5)
-        }
-        return x, pdf.GetY() + 5
+	for _, line := range lines {
+		pdf.Cell(nil, line)
+		pdf.SetY(pdf.GetY() + 14)
+		pdf.SetX(x + 5)
+	}
+	return x, pdf.GetY() + 5
 }
 
 // drawImageAt 在 (x, y) 处绘制图片，返回图片实际宽高（按 im.Width/Height 或默认 200x100）。
@@ -1487,16 +1488,14 @@ func rowSpanHeight(t *core.Table, ri, cols int, cellSize float64) float64 {
 
 // registerFont 注册单个字体到 gopdf
 func registerFont(pdf *gopdf.GoPdf, family string, fs embed.FS, path string) error {
-        data, err := fs.ReadFile(path)
-        if err != nil {
-                return fmt.Errorf("read font %s: %w", family, err)
-        }
-        if err := pdf.AddTTFFontData(family, data); err != nil {
-                return fmt.Errorf("add font %s: %w", family, err)
-        }
-        return nil
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read font %s: %w", family, err)
+	}
+	if err := pdf.AddTTFFontData(family, data); err != nil {
+		return fmt.Errorf("add font %s: %w", family, err)
+	}
+	return nil
 }
 
-
 // selectFont 已废弃：字体名解析统一由 fontBook.resolve 处理
-

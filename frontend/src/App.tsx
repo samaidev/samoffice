@@ -996,6 +996,10 @@ ${t('sample.md.more')}
         showToast(t('app.noSlides'))
         return
       }
+      // 页面尺寸取自快照（SlideEditor 会随“设计→幻灯片大小”同步）
+      const snap0 = snaps[0] as any
+      const pageW = snap0?.pageW && snap0.pageW > 0 ? Number(snap0.pageW) : 12192000
+      const pageH = snap0?.pageH && snap0.pageH > 0 ? Number(snap0.pageH) : 6858000
       const hasRealPath = /^[A-Za-z]:[\\/]/.test(filePath) && /\.pptx?$/i.test(filePath)
       let target = filePath
       if (opts.forceDialog || !hasRealPath) {
@@ -1007,7 +1011,7 @@ ${t('sample.md.more')}
       }
       setLoading(true)
       try {
-        await backend.writePPTX(target, JSON.stringify({ pageW: 12192000, pageH: 6858000, slides: snaps }))
+        await backend.writePPTX(target, JSON.stringify({ pageW, pageH, slides: snaps }))
         syncActivePath(target)
         const name = target.split(/[\\/]/).pop() || target
         showToast(t('app.saved', { name }))
