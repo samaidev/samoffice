@@ -922,6 +922,88 @@ const dict: Record<string, { en: string; zh: string }> = {
   'flow.complete': { en: 'Complete?', zh: '是否完成' },
   'flow.end': { en: 'End', zh: '结束' },
   'flow.output': { en: 'Output Result', zh: '输出结果' },
+
+  // === [app-new-file] ===
+  'app.newGroup': { en: 'New', zh: '新建' },
+  'app.newDocument': { en: 'Word Document', zh: 'Word 文档' },
+  'app.newSpreadsheet': { en: 'Excel Workbook', zh: 'Excel 表格' },
+  'app.newSlide': { en: 'PPT Presentation', zh: 'PPT 演示' },
+  'app.newMarkdown': { en: 'Markdown', zh: 'Markdown 笔记' },
+
+  // === [word-agent additions below] ===
+
+  // === [excel-agent additions below] ===
+  // Excel 编辑器：撤销/重做
+  'sheet.history': { en: 'History', zh: '历史' },
+  'sheet.undo': { en: 'Undo', zh: '撤销' },
+  'sheet.undoTitle': { en: 'Undo (Ctrl+Z)', zh: '撤销上一步 (Ctrl+Z)' },
+  'sheet.redo': { en: 'Redo', zh: '重做' },
+  'sheet.redoTitle': { en: 'Redo (Ctrl+Y)', zh: '重做 (Ctrl+Y)' },
+  // Excel 编辑器：字体与格式
+  'sheet.fontFamily': { en: 'Font', zh: '字体' },
+  'sheet.fontDefault': { en: 'Default Font', zh: '默认字体' },
+  'sheet.fontSize': { en: 'Font Size', zh: '字号' },
+  'sheet.sizeDefault': { en: 'Size', zh: '字号' },
+  'sheet.clearFormat': { en: 'Clear Format', zh: '清除格式' },
+  'sheet.clearFormatTitle': { en: 'Clear formatting in selection (keep content)', zh: '清除选区格式（保留内容）' },
+  // Excel 编辑器：对齐与换行
+  'sheet.valignTop': { en: 'Top', zh: '顶对齐' },
+  'sheet.valignMiddle': { en: 'Middle', zh: '垂直居中' },
+  'sheet.valignBottom': { en: 'Bottom', zh: '底对齐' },
+  'sheet.wrapText': { en: 'Wrap', zh: '换行' },
+  'sheet.wrapTextTitle': { en: 'Wrap Text', zh: '自动换行' },
+  // Excel 编辑器：数字格式与求和
+  'sheet.numFmt': { en: 'Number Format', zh: '数字格式' },
+  'sheet.fmtGeneral': { en: 'General', zh: '常规' },
+  'sheet.fmtInt': { en: 'Integer', zh: '整数' },
+  'sheet.fmtThousands': { en: 'Thousands', zh: '千分位' },
+  'sheet.fmtThousands2': { en: 'Thousands .00', zh: '千分位2' },
+  'sheet.fmtPercent2': { en: 'Percent .00', zh: '百分比2' },
+  'sheet.fmtCurrency': { en: 'Currency', zh: '货币' },
+  'sheet.fmtDate': { en: 'Date', zh: '日期' },
+  'sheet.autoSum': { en: 'Σ Sum', zh: '求和' },
+  'sheet.autoSumTitle': { en: 'Insert =SUM formula for the range above or the selection', zh: '对上方连续数字区域或选区写入 =SUM 公式' },
+  // Excel 编辑器：行列操作
+  'sheet.insertRow': { en: 'Insert Row', zh: '插入行' },
+  'sheet.insertRowAt': { en: 'Insert row above current', zh: '在当前行上方插入' },
+  'sheet.deleteRow': { en: 'Delete Row', zh: '删除行' },
+  'sheet.deleteRowAt': { en: 'Delete current row', zh: '删除当前行' },
+  'sheet.insertCol': { en: 'Insert Col', zh: '插入列' },
+  'sheet.insertColAt': { en: 'Insert column left of current', zh: '在当前列左侧插入' },
+  'sheet.deleteCol': { en: 'Delete Col', zh: '删除列' },
+  'sheet.deleteColAt': { en: 'Delete current column', zh: '删除当前列' },
+  'sheet.resizeCol': { en: 'Drag to resize column', zh: '拖拽调整列宽' },
+  // Excel 编辑器：图片与刷新
+  'sheet.imageTitle': { en: 'Insert floating image (anchored to active cell)', zh: '插入浮动图片（锚定当前单元格）' },
+  'sheet.imageSelectedHint': { en: 'Click to select, press Delete to remove', zh: '点击选中，Delete 删除' },
+  'sheet.refreshRecalc': { en: 'Recalculate all formulas', zh: '重新计算全部公式' },
+  // Excel 编辑器：排序与查找替换
+  'sheet.sortMergeWarn': { en: 'The sort range contains merged cells. They will be unmerged before sorting. Continue?', zh: '排序区域内含合并单元格，将先拆分合并再排序，是否继续？' },
+  'sheet.findPlaceholder': { en: 'Find what', zh: '查找内容' },
+  'sheet.findMatches': { en: 'match(es)', zh: '个匹配' },
+  'sheet.replacePlaceholder': { en: 'Replace with', zh: '替换为' },
+  'sheet.replaceAll': { en: 'Replace All', zh: '全部替换' },
+  'sheet.findClose': { en: 'Close', zh: '关闭' },
+  // Excel 编辑器：右键菜单补充
+  'sheet.clearContent': { en: 'Clear Contents', zh: '清除内容' },
+  'sheet.rowHeight': { en: 'Row Height', zh: '行高' },
+  'sheet.rowHeightPrompt': { en: 'Row height in px (28 = default):', zh: '输入行高(px，28 为默认)：' },
+  'sheet.colWidth': { en: 'Column Width', zh: '列宽' },
+  'sheet.colWidthPrompt': { en: 'Column width in px (80 = default):', zh: '输入列宽(px，80 为默认)：' },
+  // Excel 编辑器：工作表管理
+  'sheet.renamePrompt': { en: 'Rename sheet:', zh: '重命名工作表：' },
+  'sheet.renameHint': { en: 'Double-click to rename', zh: '双击重命名' },
+  'sheet.deleteSheet': { en: 'Delete current sheet', zh: '删除当前工作表' },
+  'sheet.deleteSheetConfirm': { en: 'Delete sheet "{name}"?', zh: '确定删除工作表「{name}」吗？' },
+  'sheet.lastSheetWarn': { en: 'At least one sheet is required', zh: '至少需要保留一个工作表' },
+
+  'slide.arrange': { en: 'Arrange', zh: '排列' },
+  'slide.group': { en: 'Group', zh: '组合' },
+  'slide.ungroup': { en: 'Ungroup', zh: '取消组合' },
+  'slide.groupNeed2': { en: 'Select at least two shapes to group', zh: '请先选中至少两个形状再组合' },
+  'slide.ungroupNeed': { en: 'Select a shape inside a group to ungroup', zh: '请选中组内形状后再取消组合' },
+
+  // === [ppt-agent additions below] ===
 }
 
 interface I18nContextType {

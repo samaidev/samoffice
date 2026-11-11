@@ -76,7 +76,11 @@ interface ShapeItem {
   paras?: { align?: string; runs: { text?: string; color?: string; fontSize?: number; bold?: boolean; italic?: boolean; underline?: boolean; font?: string }[] }[]
   // 来自文件的形状：不画装饰边框，边框用文件里的 a:ln
   noDecor?: boolean
+  groupId?: string // 所属组合 ID（同组成员整组选中/拖动，写回时包为 p:grpSp）
 }
+
+// 选中项：形状或艺术字 + 数组下标（多选集合 selectedEls 的成员）
+type SelEl = { type: 'shape' | 'art'; index: number }
 
 interface ArtTextItem {
   text: string; x: number; y: number; w: number; h: number
@@ -234,7 +238,7 @@ function MenuItem({ label, icon, onClick, disabled, danger }: any) {
 }
 
 export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?: SlideData[]; onSlidesChange?: (slides: SlideData[]) => void }) {
-  const { t } = useI18n()
+  const { t, tf } = useI18n()
 
   // 将真实 PPTX 解析出的 EMU 形状转换为内部 ShapeItem（等比坐标系：宽 6464 单位，高随页比例）
   const emuShapesToItems = (shapes?: SlideShape[], pageW = 12192000, pageH = 6858000): ShapeItem[] => {
@@ -292,6 +296,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         lineHeight: s.lineHeight && s.lineHeight !== 1 ? s.lineHeight : undefined,
         indent: s.indent || undefined,
         link: s.link || undefined,
+        groupId: s.groupId || undefined,
       }
     })
   }
@@ -364,8 +369,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const closeAllPanels = () => { setShowShapePanel(false); setShowAnimPanel(false); setShowArtPanel(false); setShowColorPopup(false); setShowInsertSlide(false); setShowChartPanel(false) }
   const anyPanelOpen = showShapePanel || showAnimPanel || showArtPanel || showColorPopup || showInsertSlide || showChartPanel
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
-  const [selectedEl, setSelectedEl] = useState<{ type: 'shape' | 'art'; index: number } | null>(null)
-  const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate' } | null>(null)
+  // 多选权威集合：selectedEls 为全部选中成员，selectedEl 恒为主选（集合最后一个），
+  // 供字体/颜色等只认单选的面板沿用。单选入口 setSelectedEl 同步清空多选集合。
+  const [selectedEl, _setSelectedElRaw] = useState<SelEl | null>(null)
+  const [selectedEls, setSelectedEls] = useState<SelEl[]>([])
+  const setSelectedEl = (sel: SelEl | null) => {
+    _setSelectedElRaw(sel)
+    setSelectedEls(sel ? [sel] : [])
+  }
+  const [dragInfo, setDragInfo] = useState<{ startX: number; startY: number; origX: number; origY: number; mode: 'move' | 'resize' | 'rotate'; items?: { type: 'shape' | 'art'; index: number; x: number; y: number }[] } | null>(null)
   // 右键上下文菜单 + 剪切板（对标 MS PPT 元素右键菜单）
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'shape' | 'art'; index: number } | null>(null)
   const clipboardRef = useRef<{ type: 'shape' | 'art'; data: ShapeItem | ArtTextItem } | null>(null)
@@ -502,6 +514,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           lineHeight: sh.lineHeight || undefined,
           indent: sh.indent || undefined,
           link: sh.link || undefined,
+          groupId: sh.groupId || undefined,
           paras: sh.paras && sh.paras.length ? sh.paras.map(p => ({
             align: p.align,
             runs: (p.runs || []).map(r => ({
@@ -558,7 +571,52 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     updateActive({ shapes: [...current.shapes, newShape] })
     setShowShapePanel(false)
   }
-  const removeShape = (idx: number) => { updateActive({ shapes: current.shapes.filter((_, i) => i !== idx) }) }
+  // 动画引用清理：删除形状/艺术字后，指向被删下标的条目移除，
+  // 其余按最新下标重映射（shape_N / art_N → 新 N）
+  const remapAnimsAfterDelete = (anims: AnimItem[], delShapes: Set<number>, delArts: Set<number>): AnimItem[] => {
+    const shiftIdx = (idx: number, del: Set<number>) => {
+      let ni = idx
+      for (const d of del) {
+        if (d === idx) return -1
+        if (d < idx) ni--
+      }
+      return ni
+    }
+    const out: AnimItem[] = []
+    for (const a of anims) {
+      const ms = /^shape_(\d+)$/.exec(a.target)
+      if (ms) {
+        const ni = shiftIdx(parseInt(ms[1], 10), delShapes)
+        if (ni >= 0) out.push({ ...a, target: `shape_${ni}` })
+        continue
+      }
+      const ma = /^art_(\d+)$/.exec(a.target)
+      if (ma) {
+        const ni = shiftIdx(parseInt(ma[1], 10), delArts)
+        if (ni >= 0) out.push({ ...a, target: `art_${ni}` })
+        continue
+      }
+      out.push(a)
+    }
+    return out
+  }
+  // 删除元素后修正选中集合：被删成员移出，同类型下标 > idx 的左移；主选若被删则取集合末尾
+  const adjustSelectionAfterRemoval = (type: 'shape' | 'art', idx: number) => {
+    const remap = (els: SelEl[]) => els
+      .filter(e => !(e.type === type && e.index === idx))
+      .map(e => e.type === type && e.index > idx ? { ...e, index: e.index - 1 } : e)
+    const base = selectedEls.length ? selectedEls : (selectedEl ? [selectedEl] : [])
+    const next = remap(base)
+    setSelectedEls(next)
+    _setSelectedElRaw(next.length ? next[next.length - 1] : null)
+  }
+  const removeShape = (idx: number) => {
+    updateActive({
+      shapes: current.shapes.filter((_, i) => i !== idx),
+      animations: remapAnimsAfterDelete(current.animations, new Set([idx]), new Set()),
+    })
+    adjustSelectionAfterRemoval('shape', idx)
+  }
   const updateShape = (idx: number, patch: Partial<ShapeItem>, record = true) => {
     const newShapes = current.shapes.map((s, i) => i === idx ? { ...s, ...patch } : s)
     updateActive({ shapes: newShapes }, record)
@@ -612,7 +670,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     updateActive({ artTexts: [...current.artTexts, newArt] })
     setShowArtPanel(false)
   }
-  const removeArtText = (idx: number) => { updateActive({ artTexts: current.artTexts.filter((_, i) => i !== idx) }) }
+  const removeArtText = (idx: number) => {
+    updateActive({
+      artTexts: current.artTexts.filter((_, i) => i !== idx),
+      animations: remapAnimsAfterDelete(current.animations, new Set(), new Set([idx])),
+    })
+    adjustSelectionAfterRemoval('art', idx)
+  }
 
   // 图表插入：根据数据在离屏 canvas 上绘制柱状图/折线图/饼图，作为图片形状插入（可保存到 pptx）
   const CHART_PALETTE = ['#4f46e5', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6']
@@ -701,6 +765,96 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     else if (to === 'backward') arts.splice(Math.max(idx - 1, 0), 0, item)
     updateActive({ artTexts: arts })
   }
+
+  // ---------- 多选 / 组合 ----------
+  const sameSel = (a: SelEl, b: SelEl) => a.type === b.type && a.index === b.index
+  // 组内全部成员（形状）的选择项
+  const groupShapeSels = (gid: string): SelEl[] =>
+    current.shapes.map((_, i) => ({ type: 'shape' as const, index: i }))
+      .filter(sel => current.shapes[sel.index]?.groupId === gid)
+  // 统一选择入口：shift 点击切换成员（组员按整组切换），普通点击整组/单成员选中；
+  // 主选恒为集合最后一个。返回新的选中集合（供拖拽 items 捕获）。
+  const pickSelection = (members: SelEl[], primary: SelEl, shift?: boolean): SelEl[] => {
+    if (shift) {
+      const allIn = members.every(m => selectedEls.some(c => sameSel(c, m)))
+      const next = allIn
+        ? selectedEls.filter(c => !members.some(m => sameSel(m, c)))
+        : [...selectedEls, ...members.filter(m => !selectedEls.some(c => sameSel(c, m)))]
+      setSelectedEls(next)
+      _setSelectedElRaw(next.length ? next[next.length - 1] : null)
+      return next
+    }
+    const already = members.every(m => selectedEls.some(c => sameSel(c, m)))
+    if (already && selectedEls.length > 1) {
+      // 已在多选中：保留集合，仅把主选切到点击成员并移到末尾
+      const next = [...selectedEls.filter(c => !sameSel(c, primary)), primary]
+      setSelectedEls(next)
+      _setSelectedElRaw(primary)
+      return next
+    }
+    setSelectedEls(members)
+    _setSelectedElRaw(primary)
+    return members
+  }
+  // 拖拽前捕获所有选中成员的原始坐标（绝对定位，避免闭包陈旧）
+  const dragItemsOf = (sels: SelEl[]) => sels.map(s => ({
+    type: s.type,
+    index: s.index,
+    x: s.type === 'shape' ? (current.shapes[s.index]?.x || 0) : (current.artTexts[s.index]?.x || 0),
+    y: s.type === 'shape' ? (current.shapes[s.index]?.y || 0) : (current.artTexts[s.index]?.y || 0),
+  }))
+  // 拖拽移动：对所有选中成员应用同一位移（内部坐标单位，1px=8 单位）
+  const applyMoveDelta = (items: { type: 'shape' | 'art'; index: number; x: number; y: number }[], dxu: number, dyu: number) => {
+    setSlides(s => s.map((sl, si) => {
+      if (si !== active) return sl
+      return {
+        ...sl,
+        shapes: sl.shapes.map((sp, i) => {
+          const it = items.find(v => v.type === 'shape' && v.index === i)
+          return it ? { ...sp, x: Math.max(0, it.x + dxu), y: Math.max(0, it.y + dyu) } : sp
+        }),
+        artTexts: sl.artTexts.map((a, i) => {
+          const it = items.find(v => v.type === 'art' && v.index === i)
+          return it ? { ...a, x: Math.max(0, it.x + dxu), y: Math.max(0, it.y + dyu) } : a
+        }),
+      }
+    }))
+  }
+  // 删除全部选中（Delete/Backspace）；动画引用随删除重映射（见 remapAnimsAfterDelete）
+  const deleteSelection = () => {
+    const els = selectedEls.length ? selectedEls : (selectedEl ? [selectedEl] : [])
+    if (!els.length) return
+    recordHistory()
+    const delShapes = new Set(els.filter(e => e.type === 'shape').map(e => e.index))
+    const delArts = new Set(els.filter(e => e.type === 'art').map(e => e.index))
+    setSlides(s => s.map((sl, si) => si !== active ? sl : {
+      ...sl,
+      shapes: sl.shapes.filter((_, i) => !delShapes.has(i)),
+      artTexts: sl.artTexts.filter((_, i) => !delArts.has(i)),
+      animations: remapAnimsAfterDelete(sl.animations, delShapes, delArts),
+    }))
+    setSelectedEl(null)
+  }
+  // 组合：给全部选中的形状成员赋同一个 groupId（≥2 个形状）
+  const groupSelection = () => {
+    const idxs = (selectedEls.length ? selectedEls : (selectedEl ? [selectedEl] : []))
+      .filter(e => e.type === 'shape').map(e => e.index)
+    if (idxs.length < 2) { alert(tf('slide.groupNeed2', '请先选中至少两个形状再组合')); return }
+    const gid = `g${Date.now()}`
+    const set = new Set(idxs)
+    updateActive({ shapes: current.shapes.map((s, i) => set.has(i) ? { ...s, groupId: gid } : s) })
+  }
+  // 取消组合：清掉主选所在组全部成员的 groupId（不打乱数组顺序）
+  const ungroupSelection = () => {
+    const gid = selectedEl?.type === 'shape' ? current.shapes[selectedEl.index]?.groupId : undefined
+    if (!gid) { alert(tf('slide.ungroupNeed', '请选中组内形状后再取消组合')); return }
+    updateActive({ shapes: current.shapes.map(s => s.groupId === gid ? { ...s, groupId: undefined } : s) })
+  }
+  // 渲染层选中框：所有选中成员都画框（主选另有缩放/旋转手柄）
+  const isSelEl = (type: 'shape' | 'art', index: number) => selectedEls.some(e => e.type === type && e.index === index)
+  // 组合/取消组合按钮可用性
+  const selShapeCount = selectedEls.filter(e => e.type === 'shape').length
+  const primaryGrouped = !!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.groupId)
 
   // 剪切 / 复制 / 粘贴（元素级，对标 MS PPT 右键菜单）
   const copySelected = () => {
@@ -850,18 +1004,20 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         dragRecordedRef.current = true
         recordHistory()
       }
-      if (selectedEl.type === 'shape') {
-        if (dragInfo.mode === 'move') {
-          updateShape(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 8) }, false)
-        } else if (dragInfo.mode === 'resize') {
+      if (dragInfo.mode === 'move') {
+        // 多选拖拽：对所有选中成员应用同一位移（内部坐标单位 1px=8）
+        const items = dragInfo.items && dragInfo.items.length
+          ? dragInfo.items
+          : [{ type: selectedEl.type, index: selectedEl.index, x: dragInfo.origX, y: dragInfo.origY }]
+        applyMoveDelta(items, dx * 8, dy * 8)
+      } else if (selectedEl.type === 'shape') {
+        if (dragInfo.mode === 'resize') {
           updateShape(selectedEl.index, { w: Math.max(20, dragInfo.origX + dx * 8), h: Math.max(20, dragInfo.origY + dy * 8) }, false)
         } else if (dragInfo.mode === 'rotate') {
           updateShape(selectedEl.index, { rotation: dragInfo.origX + dx }, false)
         }
       } else {
-        if (dragInfo.mode === 'move') {
-          updateArtText(selectedEl.index, { x: Math.max(0, dragInfo.origX + dx * 8), y: Math.max(0, dragInfo.origY + dy * 8) }, false)
-        } else if (dragInfo.mode === 'rotate') {
+        if (dragInfo.mode === 'rotate') {
           updateArtText(selectedEl.index, { rotation: dragInfo.origX + dx }, false)
         }
       }
@@ -884,6 +1040,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       // 仅内联编辑文本域（editing 打开）时交给浏览器原生行为，避免非受控 textarea 不同步
       const tag = (e.target as HTMLElement)?.tagName
       const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
+      // 删除键删除全部选中（文本编辑中/输入框内除外）
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !editing && !inField && (selectedEls.length > 0 || selectedEl)) {
+        e.preventDefault()
+        deleteSelection()
+        return
+      }
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const k = e.key.toLowerCase()
         if (k === 'z') { if (!editing) { e.preventDefault(); if (e.shiftKey) redo(); else undo() } return }
@@ -895,7 +1057,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl, editing])
+  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl, selectedEls, editing])
 
   // 点击/滚动/ESC 关闭右键菜单
   useEffect(() => {
@@ -940,6 +1102,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           <RibbonGroup label={t('slide.edit')}>
             <RibbonButton icon="↶" label={t('slide.undo')} onClick={undo} disabled={!past.length} />
             <RibbonButton icon="↷" label={t('slide.redo')} onClick={redo} disabled={!future.length} />
+          </RibbonGroup>
+          {/* 排列：叠放层次（作用主选）+ 组合/取消组合（多选形状） */}
+          <RibbonGroup label={tf('slide.arrange', '排列')}>
+            <RibbonButton icon="⤒" label={t('slide.bringToFront')} disabled={!selectedEl} onClick={() => { if (!selectedEl) return; if (selectedEl.type === 'shape') reorderShape(selectedEl.index, 'front'); else reorderArt(selectedEl.index, 'front') }} />
+            <RibbonButton icon="↑" label={t('slide.bringForward')} disabled={!selectedEl} onClick={() => { if (!selectedEl) return; if (selectedEl.type === 'shape') reorderShape(selectedEl.index, 'forward'); else reorderArt(selectedEl.index, 'forward') }} />
+            <RibbonButton icon="↓" label={t('slide.sendBackward')} disabled={!selectedEl} onClick={() => { if (!selectedEl) return; if (selectedEl.type === 'shape') reorderShape(selectedEl.index, 'backward'); else reorderArt(selectedEl.index, 'backward') }} />
+            <RibbonButton icon="⤓" label={t('slide.sendToBack')} disabled={!selectedEl} onClick={() => { if (!selectedEl) return; if (selectedEl.type === 'shape') reorderShape(selectedEl.index, 'back'); else reorderArt(selectedEl.index, 'back') }} />
+            <RibbonButton icon="⊞" label={tf('slide.group', '组合')} disabled={selShapeCount < 2} onClick={groupSelection} title={tf('slide.groupNeed2', '请先选中至少两个形状再组合')} />
+            <RibbonButton icon="⊟" label={tf('slide.ungroup', '取消组合')} disabled={!primaryGrouped} onClick={ungroupSelection} title={tf('slide.ungroupNeed', '请选中组内形状后再取消组合')} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.slides')}>
             <div className="relative">
@@ -1589,14 +1760,14 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
-                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move' }) }}
+                  onMouseDown={(e) => { if (editing?.type === 'shape' && editing?.index === i) return; e.stopPropagation(); const sel = pickSelection(sh.groupId ? groupShapeSels(sh.groupId) : [{ type: 'shape', index: i }], { type: 'shape', index: i }, e.shiftKey); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: sh.x, origY: sh.y, mode: 'move', items: dragItemsOf(sel.length ? sel : [{ type: 'shape', index: i }]) }) }}
                   onDoubleClick={(e) => { e.stopPropagation(); startEdit('shape', i) }}
-                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'shape', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'shape', index: i }) }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); pickSelection(sh.groupId ? groupShapeSels(sh.groupId) : [{ type: 'shape', index: i }], { type: 'shape', index: i }, e.shiftKey); setContextMenu({ x: e.clientX, y: e.clientY, type: 'shape', index: i }) }}
                   style={{
                     left: `${sh.x / 8}px`, top: `${sh.y / 8}px`, width: `${sh.w / 8}px`, height: `${sh.h / 8}px`,
                     transform: sh.rotation ? `rotate(${sh.rotation}deg)` : '',
                     zIndex: 20,
-                    outline: selectedEl?.type === 'shape' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none',
+                    outline: isSelEl('shape', i) ? '2px solid var(--color-primary)' : 'none',
                     outlineOffset: '2px',
                   }}>
                   {/* 形状内容层 — clip-path 只作用于形状本身，不影响手柄 */}
@@ -1680,7 +1851,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
               {/* 艺术字渲染层 — zIndex 21 > 文字内容 z-10 */}
               {current.artTexts.map((at, i) => (
-                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move' }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedEl({ type: 'art', index: i }); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: selectedEl?.type === 'art' && selectedEl?.index === i ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
+                <div key={i} className="absolute group cursor-move" onMouseDown={(e) => { if (editing?.type === 'art' && editing?.index === i) return; e.stopPropagation(); const sel = pickSelection([{ type: 'art', index: i }], { type: 'art', index: i }, e.shiftKey); dragRecordedRef.current = false; setDragInfo({ startX: e.clientX, startY: e.clientY, origX: at.x, origY: at.y, mode: 'move', items: dragItemsOf(sel.length ? sel : [{ type: 'art', index: i }]) }) }} onDoubleClick={(e) => { e.stopPropagation(); startEdit('art', i) }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); pickSelection([{ type: 'art', index: i }], { type: 'art', index: i }, e.shiftKey); setContextMenu({ x: e.clientX, y: e.clientY, type: 'art', index: i }) }} style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '', zIndex: 21, outline: isSelEl('art', i) ? '2px solid var(--color-primary)' : 'none', outlineOffset: '4px' }}>
                   {editing?.type === 'art' && editing?.index === i ? (
                     <textarea ref={editAreaRef} defaultValue={at.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="outline-none bg-transparent resize-none" style={{ fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700, color: at.color, textAlign: 'center', background: 'rgba(255,255,255,0.15)', padding: 2, minWidth: 80 }} />
                   ) : (
@@ -1734,13 +1905,17 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             <MenuItem label={t('slide.copy')} icon="⧉" onClick={() => { copySelected(); setContextMenu(null) }} />
             <MenuItem label={t('slide.paste')} icon="📋" disabled={!clipboardRef.current} onClick={() => { pasteClipboard(); setContextMenu(null) }} />
             <div className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
+            {/* 组合/取消组合：≥2 个形状可组合；点击成员已整组选中（pickSelection） */}
+            <MenuItem label={tf('slide.group', '组合')} icon="⊞" disabled={selShapeCount < 2} onClick={() => { groupSelection(); setContextMenu(null) }} />
+            <MenuItem label={tf('slide.ungroup', '取消组合')} icon="⊟" disabled={!(contextMenu.type === 'shape' && current.shapes[contextMenu.index]?.groupId)} onClick={() => { ungroupSelection(); setContextMenu(null) }} />
+            <div className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
             <div className="px-3 py-1 text-[11px] uppercase tracking-wide" style={{ color: 'var(--color-text-muted)' }}>{t('slide.layer')}</div>
             <MenuItem label={t('slide.bringToFront')} icon="⤒" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'front'); else reorderArt(contextMenu.index, 'front'); setContextMenu(null) }} />
             <MenuItem label={t('slide.bringForward')} icon="↑" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'forward'); else reorderArt(contextMenu.index, 'forward'); setContextMenu(null) }} />
             <MenuItem label={t('slide.sendBackward')} icon="↓" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'backward'); else reorderArt(contextMenu.index, 'backward'); setContextMenu(null) }} />
             <MenuItem label={t('slide.sendToBack')} icon="⤓" onClick={() => { if (contextMenu.type === 'shape') reorderShape(contextMenu.index, 'back'); else reorderArt(contextMenu.index, 'back'); setContextMenu(null) }} />
             <div className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
-            <MenuItem label={t('slide.delete')} icon="🗑" danger onClick={() => { if (contextMenu.type === 'shape') removeShape(contextMenu.index); else removeArtText(contextMenu.index); setContextMenu(null); setSelectedEl(null) }} />
+            <MenuItem label={t('slide.delete')} icon="🗑" danger onClick={() => { deleteSelection(); setContextMenu(null) }} />
           </div>
         </div>
       )}

@@ -60,6 +60,7 @@ export interface SlideShape {
   indent?: number // 缩进层级
   link?: string // 超链接 URL
   paras?: SlidePara[] // 逐段逐 run 完整样式
+  groupId?: string // 所属组合 ID（同组形状连续存储，写回时包为 p:grpSp）
 }
 
 export interface SlideData {
@@ -184,6 +185,7 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
             lineHeight: typeof s.lineHeight === 'number' ? s.lineHeight : undefined,
             indent: typeof s.indent === 'number' ? s.indent : undefined,
             link: typeof s.link === 'string' ? s.link : undefined,
+            groupId: typeof s.groupId === 'string' ? s.groupId : undefined,
             paras: Array.isArray(s.paras)
               ? s.paras.map((p: any) => ({
                   align: typeof p?.align === 'string' ? p.align : undefined,

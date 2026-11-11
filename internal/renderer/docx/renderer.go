@@ -3,26 +3,26 @@
 //
 // 结构：
 //
-//	[Content_Types].xml
-//	_rels/.rels
-//	word/document.xml      ← 主要内容
-//	word/_rels/document.xml.rels
-//	word/media/image1.png  ← 嵌入的图片
-//	docProps/core.xml      ← 元数据
+//      [Content_Types].xml
+//      _rels/.rels
+//      word/document.xml      ← 主要内容
+//      word/_rels/document.xml.rels
+//      word/media/image1.png  ← 嵌入的图片
+//      docProps/core.xml      ← 元数据
 package docx
 
 import (
-	"archive/zip"
-	"bytes"
-	"encoding/base64"
-	"fmt"
-	"io"
-	"net/http"
-	"strconv"
-	"strings"
-	"time"
+        "archive/zip"
+        "bytes"
+        "encoding/base64"
+        "fmt"
+        "io"
+        "net/http"
+        "strconv"
+        "strings"
+        "time"
 
-	"github.com/zai/samoffice/internal/core"
+        "github.com/zai/samoffice/internal/core"
 )
 
 type Renderer struct{}
@@ -34,220 +34,236 @@ func (r *Renderer) Supported() []string { return []string{".docx"} }
 // Render 将 UDM 渲染为 docx 字节流
 // Image.Src 支持：data:image/...;base64,... 或 http(s):// URL（暂不下载）或本地路径占位
 func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	w := zip.NewWriter(buf)
+        buf := &bytes.Buffer{}
+        w := zip.NewWriter(buf)
 
-	// 收集图片（data URI → imageN.ext），同时返回 src → 图片映射
-	images, imageMap := collectImages(doc)
+        // 收集图片（data URI → imageN.ext），同时返回 src → 图片映射
+        images, imageMap := collectImages(doc)
 
-	// 收集超链接目标：renderInline 会输出 r:id="rId{hash}"，
-	// 必须把这些 Relationship 注册进 document.xml.rels（TargetMode="External"），
-	// 否则 Word/WPS 会因关系缺失判定文档损坏。
-	linkRels := collectHyperlinks(doc)
+        // 收集超链接目标：renderInline 会输出 r:id="rId{hash}"，
+        // 必须把这些 Relationship 注册进 document.xml.rels（TargetMode="External"），
+        // 否则 Word/WPS 会因关系缺失判定文档损坏。
+        linkRels := collectHyperlinks(doc)
 
-	// 页码配置：生成页脚与关系
-	var footerRels []footRel
-	var footer1XML, footer2XML string
-	if doc.PageNumber != nil && doc.PageNumber.Enabled {
-		footer1XML = renderFooterXML(doc.PageNumber, false)
-		if doc.PageNumber.FirstPageDifferent {
-			footer2XML = renderFooterXML(doc.PageNumber, true) // 首页页脚（空）
-		} else {
-			footer2XML = footer1XML
-		}
-		footerRels = []footRel{
-			{relID: "rIdFooter1", target: "footer1.xml"},
-			{relID: "rIdFooter2", target: "footer2.xml"},
-		}
-	}
+        // 收集正文脚注引用（按文档顺序去重）：footnotes.xml 与 w:footnoteReference 均依赖
+        footnotes := collectFootnotes(doc)
 
-	// [Content_Types].xml（包含图片 MIME 类型、页脚与 numbering 覆盖）
-	if err := writeZip(w, "[Content_Types].xml", renderContentTypes(images, len(footerRels) > 0)); err != nil {
-		return nil, err
-	}
-	if err := writeZip(w, "_rels/.rels", rootRelsXML); err != nil {
-		return nil, err
-	}
-	if err := writeZip(w, "docProps/core.xml", renderCoreProps(doc.Meta)); err != nil {
-		return nil, err
-	}
-	// 文档保护（密码锁定）信息：私有 part，Word/WPS 会忽略，本应用重新打开时读取。
-	if doc.Protect != nil {
-		if err := writeZip(w, "docProps/samoffice_protect.xml", renderProtect(doc.Protect)); err != nil {
-			return nil, err
-		}
-	}
-	// word/_rels/document.xml.rels（image + footer + numbering + 超链接 relationship）
-	if err := writeZip(w, "word/_rels/document.xml.rels", renderDocRels(images, footerRels, linkRels)); err != nil {
-		return nil, err
-	}
-	// word/numbering.xml（bullet=1 / ordered=2 两个编号定义）
-	if err := writeZip(w, "word/numbering.xml", numberingXML); err != nil {
-		return nil, err
-	}
-	// word/document.xml
-	if err := writeZip(w, "word/document.xml", renderDocumentXML(doc, imageMap, footerRels)); err != nil {
-		return nil, err
-	}
-	// 页脚文件
-	if len(footerRels) > 0 {
-		if err := writeZip(w, "word/footer1.xml", footer1XML); err != nil {
-			return nil, err
-		}
-		if err := writeZip(w, "word/footer2.xml", footer2XML); err != nil {
-			return nil, err
-		}
-	}
+        // 批注：doc.Comments 非空时生成 word/comments.xml 部件
+        hasComments := len(doc.Comments) > 0
 
-	// 写入图片文件
-	for i, im := range images {
-		if err := writeZipBytes(w, "word/media/"+im.FileName, im.Data); err != nil {
-			return nil, err
-		}
-		_ = i
-	}
+        // 页码配置：生成页脚与关系
+        var footerRels []footRel
+        var footer1XML, footer2XML string
+        if doc.PageNumber != nil && doc.PageNumber.Enabled {
+                footer1XML = renderFooterXML(doc.PageNumber, false)
+                if doc.PageNumber.FirstPageDifferent {
+                        footer2XML = renderFooterXML(doc.PageNumber, true) // 首页页脚（空）
+                } else {
+                        footer2XML = footer1XML
+                }
+                footerRels = []footRel{
+                        {relID: "rIdFooter1", target: "footer1.xml"},
+                        {relID: "rIdFooter2", target: "footer2.xml"},
+                }
+        }
 
-	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("close zip: %w", err)
-	}
-	return buf.Bytes(), nil
+        // [Content_Types].xml（包含图片 MIME 类型、页脚、脚注、批注与 numbering 覆盖）
+        if err := writeZip(w, "[Content_Types].xml", renderContentTypes(images, len(footerRels) > 0, hasComments)); err != nil {
+                return nil, err
+        }
+        if err := writeZip(w, "_rels/.rels", rootRelsXML); err != nil {
+                return nil, err
+        }
+        if err := writeZip(w, "docProps/core.xml", renderCoreProps(doc.Meta)); err != nil {
+                return nil, err
+        }
+        // 文档保护（密码锁定）信息：私有 part，Word/WPS 会忽略，本应用重新打开时读取。
+        if doc.Protect != nil {
+                if err := writeZip(w, "docProps/samoffice_protect.xml", renderProtect(doc.Protect)); err != nil {
+                        return nil, err
+                }
+        }
+        // word/_rels/document.xml.rels（image + footer + numbering + footnotes + comments + 超链接 relationship）
+        if err := writeZip(w, "word/_rels/document.xml.rels", renderDocRels(images, footerRels, linkRels, hasComments)); err != nil {
+                return nil, err
+        }
+        // word/numbering.xml（bullet=1 / ordered=2 两个编号定义）
+        if err := writeZip(w, "word/numbering.xml", numberingXML); err != nil {
+                return nil, err
+        }
+        // word/footnotes.xml（分隔符脚注 + 正文脚注内容；renderFootnoteRef 输出 w:footnoteReference）
+        if err := writeZip(w, "word/footnotes.xml", renderFootnotesXML(footnotes)); err != nil {
+                return nil, err
+        }
+        // word/comments.xml（批注正文；正文由 renderText 输出 commentRangeStart/End + commentReference）
+        if hasComments {
+                if err := writeZip(w, "word/comments.xml", renderCommentsXML(doc.Comments)); err != nil {
+                        return nil, err
+                }
+        }
+        // word/document.xml
+        if err := writeZip(w, "word/document.xml", renderDocumentXML(doc, imageMap, footerRels)); err != nil {
+                return nil, err
+        }
+        // 页脚文件
+        if len(footerRels) > 0 {
+                if err := writeZip(w, "word/footer1.xml", footer1XML); err != nil {
+                        return nil, err
+                }
+                if err := writeZip(w, "word/footer2.xml", footer2XML); err != nil {
+                        return nil, err
+                }
+        }
+
+        // 写入图片文件
+        for i, im := range images {
+                if err := writeZipBytes(w, "word/media/"+im.FileName, im.Data); err != nil {
+                        return nil, err
+                }
+                _ = i
+        }
+
+        if err := w.Close(); err != nil {
+                return nil, fmt.Errorf("close zip: %w", err)
+        }
+        return buf.Bytes(), nil
 }
 
 // RenderToWriter 渲染并写入 io.Writer
 func (r *Renderer) RenderToWriter(doc *core.Document, out io.Writer) error {
-	data, err := r.Render(doc)
-	if err != nil {
-		return err
-	}
-	_, err = out.Write(data)
-	return err
+        data, err := r.Render(doc)
+        if err != nil {
+                return err
+        }
+        _, err = out.Write(data)
+        return err
 }
 
 // === 图片处理 ===
 
 type embedImage struct {
-	ID       int
-	FileName string // image1.png
-	RelID    string // rId100
-	Ext      string // png / jpg
-	MIME     string // image/png
-	Data     []byte
-	Width    int // EMU (914400 EMU = 1 inch)
-	Height   int
+        ID       int
+        FileName string // image1.png
+        RelID    string // rId100
+        Ext      string // png / jpg
+        MIME     string // image/png
+        Data     []byte
+        Width    int // EMU (914400 EMU = 1 inch)
+        Height   int
 }
 
 // collectImages 扫描文档所有 Image block/inline（含表格单元格、文本框内），
 // 提取 data URI / URL 图片。返回图片列表与 src → embedImage 映射；
 // 同一 src 只嵌入一次（去重），映射供渲染时查找 relId 与尺寸。
 func collectImages(doc *core.Document) ([]*embedImage, map[string]*embedImage) {
-	out := []*embedImage{}
-	m := map[string]*embedImage{}
-	id := 0
-	add := func(src string, w, h float64) {
-		if src == "" {
-			return
-		}
-		if _, ok := m[src]; ok {
-			return // 同一图片只嵌入一次
-		}
-		e := parseImage(src, w, h, &id)
-		if e == nil {
-			return
-		}
-		m[src] = e
-		out = append(out, e)
-	}
-	walkBlocks(doc.Blocks, func(b core.Block) {
-		if im, ok := b.(*core.Image); ok {
-			add(im.Src, im.Width, im.Height)
-		}
-	}, func(in core.Inline) {
-		if iim, ok := in.(*core.InlineImage); ok {
-			add(iim.Src, iim.Width, iim.Height)
-		}
-	})
-	return out, m
+        out := []*embedImage{}
+        m := map[string]*embedImage{}
+        id := 0
+        add := func(src string, w, h float64) {
+                if src == "" {
+                        return
+                }
+                if _, ok := m[src]; ok {
+                        return // 同一图片只嵌入一次
+                }
+                e := parseImage(src, w, h, &id)
+                if e == nil {
+                        return
+                }
+                m[src] = e
+                out = append(out, e)
+        }
+        walkBlocks(doc.Blocks, func(b core.Block) {
+                if im, ok := b.(*core.Image); ok {
+                        add(im.Src, im.Width, im.Height)
+                }
+        }, func(in core.Inline) {
+                if iim, ok := in.(*core.InlineImage); ok {
+                        add(iim.Src, iim.Width, iim.Height)
+                }
+        })
+        return out, m
 }
 
 // walkBlocks 深度优先遍历文档中的块与行内元素（覆盖段落/标题/列表/表格/
 // 文本框/脚注区等容器），供 collectImages 与 collectHyperlinks 复用。
 func walkBlocks(blocks []core.Block, visitBlock func(core.Block), visitInline func(core.Inline)) {
-	for _, b := range blocks {
-		if visitBlock != nil {
-			visitBlock(b)
-		}
-		switch v := b.(type) {
-		case *core.Paragraph:
-			walkInlines(v.Inline, visitInline)
-		case *core.Heading:
-			walkInlines(v.Inline, visitInline)
-		case *core.BulletList:
-			for _, item := range v.Items {
-				walkBlocks(item, visitBlock, visitInline)
-			}
-		case *core.Table:
-			for _, row := range v.Rows {
-				for _, cell := range row {
-					walkInlines(cell.Inline, visitInline)
-					walkBlocks(cell.Blocks, visitBlock, visitInline)
-				}
-			}
-		case *core.Textbox:
-			walkBlocks(v.Blocks, visitBlock, visitInline)
-		case *core.FootnoteSection:
-			for _, it := range v.Items {
-				walkInlines(it.Inline, visitInline)
-			}
-		}
-	}
+        for _, b := range blocks {
+                if visitBlock != nil {
+                        visitBlock(b)
+                }
+                switch v := b.(type) {
+                case *core.Paragraph:
+                        walkInlines(v.Inline, visitInline)
+                case *core.Heading:
+                        walkInlines(v.Inline, visitInline)
+                case *core.BulletList:
+                        for _, item := range v.Items {
+                                walkBlocks(item, visitBlock, visitInline)
+                        }
+                case *core.Table:
+                        for _, row := range v.Rows {
+                                for _, cell := range row {
+                                        walkInlines(cell.Inline, visitInline)
+                                        walkBlocks(cell.Blocks, visitBlock, visitInline)
+                                }
+                        }
+                case *core.Textbox:
+                        walkBlocks(v.Blocks, visitBlock, visitInline)
+                case *core.FootnoteSection:
+                        for _, it := range v.Items {
+                                walkInlines(it.Inline, visitInline)
+                        }
+                }
+        }
 }
 
 // walkInlines 遍历行内元素；超链接内部的行内元素一并遍历。
 func walkInlines(inlines []core.Inline, visit func(core.Inline)) {
-	if visit == nil {
-		return
-	}
-	for _, in := range inlines {
-		visit(in)
-		switch h := in.(type) {
-		case *core.Hyperlink:
-			walkInlines(h.Text, visit)
-		case core.Hyperlink:
-			walkInlines(h.Text, visit)
-		}
-	}
+        if visit == nil {
+                return
+        }
+        for _, in := range inlines {
+                visit(in)
+                switch h := in.(type) {
+                case *core.Hyperlink:
+                        walkInlines(h.Text, visit)
+                case core.Hyperlink:
+                        walkInlines(h.Text, visit)
+                }
+        }
 }
 
 // linkRel 记录超链接外链关系（写入 document.xml.rels）
 type linkRel struct {
-	relID  string
-	target string
+        relID  string
+        target string
 }
 
 // collectHyperlinks 收集文档中所有超链接 URL，按 renderInline 的
 // hashString 哈希方案生成 r:id，去重后返回关系列表。
 func collectHyperlinks(doc *core.Document) []linkRel {
-	seen := map[string]bool{}
-	out := []linkRel{}
-	walkBlocks(doc.Blocks, nil, func(in core.Inline) {
-		var url string
-		switch h := in.(type) {
-		case *core.Hyperlink:
-			url = h.URL
-		case core.Hyperlink:
-			url = h.URL
-		}
-		if url == "" {
-			return
-		}
-		relID := fmt.Sprintf("rId%d", hashString(url))
-		if seen[relID] {
-			return // 同一 rId 只注册一次（哈希冲突时先到先得）
-		}
-		seen[relID] = true
-		out = append(out, linkRel{relID: relID, target: url})
-	})
-	return out
+        seen := map[string]bool{}
+        out := []linkRel{}
+        walkBlocks(doc.Blocks, nil, func(in core.Inline) {
+                var url string
+                switch h := in.(type) {
+                case *core.Hyperlink:
+                        url = h.URL
+                case core.Hyperlink:
+                        url = h.URL
+                }
+                if url == "" {
+                        return
+                }
+                relID := fmt.Sprintf("rId%d", hashString(url))
+                if seen[relID] {
+                        return // 同一 rId 只注册一次（哈希冲突时先到先得）
+                }
+                seen[relID] = true
+                out = append(out, linkRel{relID: relID, target: url})
+        })
+        return out
 }
 
 // parseImage 解析 data URI 或 http(s) URL，返回 embedImage
@@ -256,58 +272,58 @@ func collectHyperlinks(doc *core.Document) []linkRel {
 //   - http://example.com/foo.png
 //   - https://example.com/foo.jpg
 func parseImage(src string, w, h float64, id *int) *embedImage {
-	if strings.HasPrefix(src, "data:") {
-		return parseDataURI(src, w, h, id)
-	}
-	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		return parseURLImage(src, w, h, id)
-	}
-	// 本地路径或其他格式暂不支持
-	return nil
+        if strings.HasPrefix(src, "data:") {
+                return parseDataURI(src, w, h, id)
+        }
+        if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+                return parseURLImage(src, w, h, id)
+        }
+        // 本地路径或其他格式暂不支持
+        return nil
 }
 
 // parseDataURI 解析 data:image/...;base64,xxxxx
 func parseDataURI(src string, w, h float64, id *int) *embedImage {
-	comma := strings.Index(src, ",")
-	if comma < 0 {
-		return nil
-	}
-	meta := src[5:comma] // image/png;base64
-	b64 := src[comma+1:]
+        comma := strings.Index(src, ",")
+        if comma < 0 {
+                return nil
+        }
+        meta := src[5:comma] // image/png;base64
+        b64 := src[comma+1:]
 
-	parts := strings.Split(meta, ";")
-	mime := parts[0] // image/png
-	if !strings.HasPrefix(mime, "image/") {
-		return nil
-	}
-	ext := mime[6:]
+        parts := strings.Split(meta, ";")
+        mime := parts[0] // image/png
+        if !strings.HasPrefix(mime, "image/") {
+                return nil
+        }
+        ext := mime[6:]
 
-	isBase64 := false
-	for _, p := range parts[1:] {
-		if p == "base64" {
-			isBase64 = true
-		}
-	}
-	if !isBase64 {
-		return nil
-	}
+        isBase64 := false
+        for _, p := range parts[1:] {
+                if p == "base64" {
+                        isBase64 = true
+                }
+        }
+        if !isBase64 {
+                return nil
+        }
 
-	data, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil
-	}
+        data, err := base64.StdEncoding.DecodeString(b64)
+        if err != nil {
+                return nil
+        }
 
-	*id++
-	return &embedImage{
-		ID:       *id,
-		FileName: fmt.Sprintf("image%d.%s", *id, ext),
-		RelID:    fmt.Sprintf("rIdImg%d", *id),
-		Ext:      ext,
-		MIME:     mime,
-		Data:     data,
-		Width:    pxToEMU(w, 400),
-		Height:   pxToEMU(h, 300),
-	}
+        *id++
+        return &embedImage{
+                ID:       *id,
+                FileName: fmt.Sprintf("image%d.%s", *id, ext),
+                RelID:    fmt.Sprintf("rIdImg%d", *id),
+                Ext:      ext,
+                MIME:     mime,
+                Data:     data,
+                Width:    pxToEMU(w, 400),
+                Height:   pxToEMU(h, 300),
+        }
 }
 
 // parseURLImage 下载 http(s) URL 图片
@@ -315,121 +331,134 @@ func parseDataURI(src string, w, h float64, id *int) *embedImage {
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
 func parseURLImage(url string, w, h float64, id *int) *embedImage {
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil
-	}
-	mime := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(mime, "image/") {
-		return nil
-	}
-	// 5MB 上限
-	const maxSize = 5 * 1024 * 1024
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSize+1))
-	if err != nil || len(body) > maxSize {
-		return nil
-	}
+        resp, err := httpClient.Get(url)
+        if err != nil {
+                return nil
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != 200 {
+                return nil
+        }
+        mime := resp.Header.Get("Content-Type")
+        if !strings.HasPrefix(mime, "image/") {
+                return nil
+        }
+        // 5MB 上限
+        const maxSize = 5 * 1024 * 1024
+        body, err := io.ReadAll(io.LimitReader(resp.Body, maxSize+1))
+        if err != nil || len(body) > maxSize {
+                return nil
+        }
 
-	ext := mime[6:]
-	if ext == "jpeg" {
-		ext = "jpg"
-	}
+        ext := mime[6:]
+        if ext == "jpeg" {
+                ext = "jpg"
+        }
 
-	*id++
-	return &embedImage{
-		ID:       *id,
-		FileName: fmt.Sprintf("image%d.%s", *id, ext),
-		RelID:    fmt.Sprintf("rIdImg%d", *id),
-		Ext:      ext,
-		MIME:     mime,
-		Data:     body,
-		Width:    pxToEMU(w, 400),
-		Height:   pxToEMU(h, 300),
-	}
+        *id++
+        return &embedImage{
+                ID:       *id,
+                FileName: fmt.Sprintf("image%d.%s", *id, ext),
+                RelID:    fmt.Sprintf("rIdImg%d", *id),
+                Ext:      ext,
+                MIME:     mime,
+                Data:     body,
+                Width:    pxToEMU(w, 400),
+                Height:   pxToEMU(h, 300),
+        }
 }
 
 // pxToEMU 像素转 EMU (English Metric Unit)
 // 914400 EMU = 1 inch = 96 px (默认 DPI)
 // 空值用 defaultValue
 func pxToEMU(px, defaultValue float64) int {
-	if px <= 0 {
-		px = defaultValue
-	}
-	return int(px * 914400 / 96)
+        if px <= 0 {
+                px = defaultValue
+        }
+        return int(px * 914400 / 96)
 }
 
 // renderContentTypes 渲染 [Content_Types].xml（含图片扩展）
-func renderContentTypes(images []*embedImage, hasFooter bool) string {
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+func renderContentTypes(images []*embedImage, hasFooter, hasComments bool) string {
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
 `)
-	// 收集图片扩展名
-	exts := map[string]bool{}
-	for _, im := range images {
-		exts[im.Ext] = true
-	}
-	for ext := range exts {
-		mime := "image/" + ext
-		if ext == "jpg" || ext == "jpeg" {
-			mime = "image/jpeg"
-		}
-		sb.WriteString(fmt.Sprintf(`  <Default Extension="%s" ContentType="%s"/>`+"\n", ext, mime))
-	}
-	if hasFooter {
-		sb.WriteString(`  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+        // 收集图片扩展名
+        exts := map[string]bool{}
+        for _, im := range images {
+                exts[im.Ext] = true
+        }
+        for ext := range exts {
+                mime := "image/" + ext
+                if ext == "jpg" || ext == "jpeg" {
+                        mime = "image/jpeg"
+                }
+                sb.WriteString(fmt.Sprintf(`  <Default Extension="%s" ContentType="%s"/>`+"\n", ext, mime))
+        }
+        if hasFooter {
+                sb.WriteString(`  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
   <Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 `)
-	}
-	// numbering.xml：bullet/ordered 列表编号定义（renderBulletList 引用 numId 1/2）
-	sb.WriteString(`  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+        }
+        // footnotes.xml：脚注部件（分隔符 + 正文脚注），始终生成
+        sb.WriteString(`  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
 `)
-	sb.WriteString(`  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+        if hasComments {
+                sb.WriteString(`  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>
+`)
+        }
+        // numbering.xml：bullet/ordered 列表编号定义（renderBulletList 引用 numId 1/2）
+        sb.WriteString(`  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+`)
+        sb.WriteString(`  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/samoffice_protect.xml" ContentType="application/vnd.samoffice.protect+xml"/>
 </Types>`)
-	return sb.String()
+        return sb.String()
 }
 
 // footRel 记录页脚关系
 type footRel struct {
-	relID  string
-	target string
+        relID  string
+        target string
 }
 
 // renderDocRels 渲染 word/_rels/document.xml.rels
-// 包含图片、页脚、numbering 定义与超链接（外部链接）关系
-func renderDocRels(images []*embedImage, footers []footRel, links []linkRel) string {
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+// 包含图片、页脚、numbering、脚注、批注定义与超链接（外部链接）关系
+func renderDocRels(images []*embedImage, footers []footRel, links []linkRel, hasComments bool) string {
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 `)
-	for _, im := range images {
-		sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/%s"/>`+"\n", im.RelID, im.FileName))
-	}
-	for _, f := range footers {
-		sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="%s"/>`+"\n", f.relID, f.target))
-	}
-	// numbering.xml 关系（renderBulletList 输出的 numId 1/2 依赖该部件）
-	sb.WriteString(`  <Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>` + "\n")
-	// 超链接：与 renderInline 的 rId{hashString(url)} 一致，缺了 Word 会报损坏
-	for _, l := range links {
-		sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="%s" TargetMode="External"/>`+"\n", l.relID, escAttr(l.target)))
-	}
-	sb.WriteString("</Relationships>")
-	return sb.String()
+        for _, im := range images {
+                sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/%s"/>`+"\n", im.RelID, im.FileName))
+        }
+        for _, f := range footers {
+                sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="%s"/>`+"\n", f.relID, f.target))
+        }
+        // numbering.xml 关系（renderBulletList 输出的 numId 1/2 依赖该部件）
+        sb.WriteString(`  <Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>` + "\n")
+        // footnotes.xml 关系（renderFootnoteRef 输出的 w:footnoteReference 依赖该部件）
+        sb.WriteString(`  <Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>` + "\n")
+        // comments.xml 关系（正文 commentReference 与 w:id 对应）
+        if hasComments {
+                sb.WriteString(`  <Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>` + "\n")
+        }
+        // 超链接：与 renderInline 的 rId{hashString(url)} 一致，缺了 Word 会报损坏
+        for _, l := range links {
+                sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="%s" TargetMode="External"/>`+"\n", l.relID, escAttr(l.target)))
+        }
+        sb.WriteString("</Relationships>")
+        return sb.String()
 }
 
 // renderDocumentXML 渲染 word/document.xml 主体
 func renderDocumentXML(doc *core.Document, images map[string]*embedImage, footers []footRel) string {
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
   xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
   xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
@@ -442,217 +471,208 @@ func renderDocumentXML(doc *core.Document, images map[string]*embedImage, footer
   mc:Ignorable="w14 wp14">
 <w:body>
 `)
-	for _, b := range doc.Blocks {
-		renderBlock(&sb, b, images, contentWidth(doc.PageSetup))
-		// 分页符且要求重启页码：插入分节符（sectPr 带 pgNumType start），使后续页码重新计算
-		if pb, ok := b.(*core.PageBreak); ok && pb.Restart {
-			start := pb.StartNumber
-			if start < 1 {
-				start = 1
-			}
-			sb.WriteString(`<w:p><w:pPr><w:sectPr><w:pgNumType w:start="`)
-			sb.WriteString(fmt.Sprintf("%d", start))
-			sb.WriteString(`"/><w:type w:val="nextPage"/></w:sectPr></w:pPr></w:p>` + "\n")
-		}
-	}
+        for _, b := range doc.Blocks {
+                renderBlock(&sb, b, images, contentWidth(doc.PageSetup))
+                // 分页符且要求重启页码：插入分节符（sectPr 带 pgNumType start），使后续页码重新计算
+                if pb, ok := b.(*core.PageBreak); ok && pb.Restart {
+                        start := pb.StartNumber
+                        if start < 1 {
+                                start = 1
+                        }
+                        sb.WriteString(`<w:p><w:pPr><w:sectPr><w:pgNumType w:start="`)
+                        sb.WriteString(fmt.Sprintf("%d", start))
+                        sb.WriteString(`"/><w:type w:val="nextPage"/></w:sectPr></w:pPr></w:p>` + "\n")
+                }
+        }
 
-	// 全局 sectPr（最后一节）：页面尺寸/方向/边距/分栏 + 页脚绑定
-	sb.WriteString(sectPrXML(doc.PageSetup, footers, doc.PageNumber))
-	sb.WriteString("</w:body>\n</w:document>")
-	return sb.String()
+        // 全局 sectPr（最后一节）：页面尺寸/方向/边距/分栏 + 页脚绑定
+        sb.WriteString(sectPrXML(doc.PageSetup, footers, doc.PageNumber))
+        sb.WriteString("</w:body>\n</w:document>")
+        return sb.String()
 }
 
 // pageDims 返回页面宽高（twips）与 orient 属性；无 PageSetup 时为 A4 纵向
 func pageDims(ps *core.PageSetup) (int, int, string) {
-	w, h := 11906, 16838 // A4 纵向（twips）
-	orient := ""
-	if ps != nil {
-		if ps.WidthTwips > 0 {
-			w = ps.WidthTwips
-		}
-		if ps.HeightTwips > 0 {
-			h = ps.HeightTwips
-		}
-		if ps.Orientation == "landscape" {
-			orient = ` w:orient="landscape"`
-			if w < h {
-				// 前端只给方向没互换宽高时，这里兜底交换
-				w, h = h, w
-			}
-		}
-	}
-	return w, h, orient
+        w, h := 11906, 16838 // A4 纵向（twips）
+        orient := ""
+        if ps != nil {
+                if ps.WidthTwips > 0 {
+                        w = ps.WidthTwips
+                }
+                if ps.HeightTwips > 0 {
+                        h = ps.HeightTwips
+                }
+                if ps.Orientation == "landscape" {
+                        orient = ` w:orient="landscape"`
+                        if w < h {
+                                // 前端只给方向没互换宽高时，这里兜底交换
+                                w, h = h, w
+                        }
+                }
+        }
+        return w, h, orient
 }
 
 // pageMargins 返回页边距（twips）；零值保持 1440 缺省
 func pageMargins(ps *core.PageSetup) (mt, mr, mb, ml int) {
-	mt, mr, mb, ml = 1440, 1440, 1440, 1440
-	if ps != nil {
-		if ps.MarginTop > 0 {
-			mt = ps.MarginTop
-		}
-		if ps.MarginRight > 0 {
-			mr = ps.MarginRight
-		}
-		if ps.MarginBottom > 0 {
-			mb = ps.MarginBottom
-		}
-		if ps.MarginLeft > 0 {
-			ml = ps.MarginLeft
-		}
-	}
-	return
+        mt, mr, mb, ml = 1440, 1440, 1440, 1440
+        if ps != nil {
+                if ps.MarginTop > 0 {
+                        mt = ps.MarginTop
+                }
+                if ps.MarginRight > 0 {
+                        mr = ps.MarginRight
+                }
+                if ps.MarginBottom > 0 {
+                        mb = ps.MarginBottom
+                }
+                if ps.MarginLeft > 0 {
+                        ml = ps.MarginLeft
+                }
+        }
+        return
 }
 
 // contentWidth 返回正文可用宽度（页宽 - 左右边距），供表格列宽估算
 func contentWidth(ps *core.PageSetup) int {
-	w, _, _ := pageDims(ps)
-	_, mr, _, ml := pageMargins(ps)
-	cw := w - ml - mr
-	if cw < 2000 {
-		return 9026
-	}
-	return cw
+        w, _, _ := pageDims(ps)
+        _, mr, _, ml := pageMargins(ps)
+        cw := w - ml - mr
+        if cw < 2000 {
+                return 9026
+        }
+        return cw
 }
 
 // sectPrXML 生成节属性：页面尺寸/方向/页边距/分栏 + 页脚引用 + titlePg。
 // 无 PageSetup 时保持 A4（11906×16838）与 1440 边距的既有行为。
 func sectPrXML(ps *core.PageSetup, footers []footRel, pn *core.PageNumberConfig) string {
-	w, h, orient := pageDims(ps)
-	mt, mr, mb, ml := pageMargins(ps)
-	var sb strings.Builder
-	sb.WriteString(`<w:sectPr>
+        w, h, orient := pageDims(ps)
+        mt, mr, mb, ml := pageMargins(ps)
+        var sb strings.Builder
+        sb.WriteString(`<w:sectPr>
 <w:pgSz w:w="` + fmt.Sprintf("%d", w) + `" w:h="` + fmt.Sprintf("%d", h) + `"` + orient + `/>
 <w:pgMar w:top="` + fmt.Sprintf("%d", mt) + `" w:right="` + fmt.Sprintf("%d", mr) +
-		`" w:bottom="` + fmt.Sprintf("%d", mb) + `" w:left="` + fmt.Sprintf("%d", ml) +
-		`" w:header="720" w:footer="720" w:gutter="0"/>
+                `" w:bottom="` + fmt.Sprintf("%d", mb) + `" w:left="` + fmt.Sprintf("%d", ml) +
+                `" w:header="720" w:footer="720" w:gutter="0"/>
 `)
-	if ps != nil && ps.Cols > 1 {
-		sb.WriteString(fmt.Sprintf(`<w:cols w:num="%d" w:space="720"/>`+"\n", ps.Cols))
-	}
-	if len(footers) > 0 {
-		// footer1 为 default（偶数页/奇数页通用），footer2 为 first
-		sb.WriteString(`<w:footerReference w:type="default" r:id="rIdFooter1"/>` + "\n")
-		sb.WriteString(`<w:footerReference w:type="first" r:id="rIdFooter2"/>` + "\n")
-	}
-	if pn != nil && pn.FirstPageDifferent {
-		sb.WriteString(`<w:titlePg/>` + "\n")
-	}
-	sb.WriteString(`</w:sectPr>
+        if ps != nil && ps.Cols > 1 {
+                sb.WriteString(fmt.Sprintf(`<w:cols w:num="%d" w:space="720"/>`+"\n", ps.Cols))
+        }
+        if len(footers) > 0 {
+                // footer1 为 default（偶数页/奇数页通用），footer2 为 first
+                sb.WriteString(`<w:footerReference w:type="default" r:id="rIdFooter1"/>` + "\n")
+                sb.WriteString(`<w:footerReference w:type="first" r:id="rIdFooter2"/>` + "\n")
+        }
+        if pn != nil && pn.FirstPageDifferent {
+                sb.WriteString(`<w:titlePg/>` + "\n")
+        }
+        sb.WriteString(`</w:sectPr>
 `)
-	return sb.String()
+        return sb.String()
 }
 
 // renderBlock 渲染单个 block
 func renderBlock(sb *strings.Builder, b core.Block, images map[string]*embedImage, contentW int) {
-	switch v := b.(type) {
-	case *core.Paragraph:
-		renderParagraph(sb, v, images)
-	case *core.Heading:
-		renderHeading(sb, v)
-	case *core.Table:
-		renderTable(sb, v, images, contentW)
-	case *core.BulletList:
-		renderBulletList(sb, v)
-	case *core.CodeBlock:
-		renderCodeBlock(sb, v)
-	case *core.Image:
-		renderImage(sb, v, images)
-	case *core.Math:
-		renderMath(sb, v)
-	case *core.Textbox:
-		renderTextbox(sb, v, images)
-	case *core.PageBreak:
-		// 非重启分页符：普通换页（restart 变体由调用方生成 sectPr 分节）
-		if !v.Restart {
-			sb.WriteString(`<w:p><w:r><w:br w:type="page"/></w:r></w:p>` + "\n")
-		}
-	case *core.FootnoteSection:
-		// 脚注区：docx 导出时以文末段落组呈现（保证保存后不丢失
-		// 脚注正文，如作者简介）。每条写成 "n. 内容" 的段落。
-		for _, it := range v.Items {
-			sb.WriteString("<w:p>")
-			sb.WriteString(`<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t xml:space="preserve">`)
-			sb.WriteString(escapeXML(fmt.Sprintf("%d. ", it.Num)))
-			sb.WriteString("</w:t></w:r>")
-			for _, in := range it.Inline {
-				renderInline(sb, in, "")
-			}
-			sb.WriteString("</w:p>\n")
-		}
-	case *core.RawBlock:
-		// 跳过
-	default:
-		sb.WriteString("<w:p/>")
-	}
+        switch v := b.(type) {
+        case *core.Paragraph:
+                renderParagraph(sb, v, images)
+        case *core.Heading:
+                renderHeading(sb, v)
+        case *core.Table:
+                renderTable(sb, v, images, contentW)
+        case *core.BulletList:
+                renderBulletList(sb, v)
+        case *core.CodeBlock:
+                renderCodeBlock(sb, v)
+        case *core.Image:
+                renderImage(sb, v, images)
+        case *core.Math:
+                renderMath(sb, v)
+        case *core.Textbox:
+                renderTextbox(sb, v, images)
+        case *core.PageBreak:
+                // 非重启分页符：普通换页（restart 变体由调用方生成 sectPr 分节）
+                if !v.Restart {
+                        sb.WriteString(`<w:p><w:r><w:br w:type="page"/></w:r></w:p>` + "\n")
+                }
+        case *core.FootnoteSection:
+                // 脚注区不再导出为文末普通段落：脚注内容由 collectFootnotes 写入
+                // word/footnotes.xml，正文引用由 renderFootnoteRef 输出 w:footnoteReference，
+                // Word 会自动在页底渲染脚注。
+        case *core.RawBlock:
+                // 跳过
+        default:
+                sb.WriteString("<w:p/>")
+        }
 }
 
 // renderTable 渲染 w:tbl。默认单线边框（Table.Border 为 pt，缺省 sz=4），
 // 表头单元格加浅蓝灰底纹；支持 colSpan → w:gridSpan、rowSpan → w:vMerge
 // （起点 restart，后续行自动补 continue 占位单元格维持网格对齐）。
 func renderTable(sb *strings.Builder, t *core.Table, images map[string]*embedImage, contentW int) {
-	// 列数：各行按 colSpan 展开后的最大列数
-	cols := 0
-	for _, row := range t.Rows {
-		n := 0
-		for _, c := range row {
-			span := c.ColSpan
-			if span < 1 {
-				span = 1
-			}
-			n += span
-		}
-		if n > cols {
-			cols = n
-		}
-	}
-	if cols == 0 {
-		cols = 1
-	}
-	if contentW <= 0 {
-		contentW = 9026 // A4 内容区宽度兜底（11906 - 2*1440）
-	}
-	// 列宽：优先 Table.Width（相对权重），否则均分
-	gridW := make([]int, cols)
-	if len(t.Width) > 0 {
-		total := 0.0
-		for _, wv := range t.Width {
-			if wv > 0 {
-				total += wv
-			}
-		}
-		if total > 0 {
-			wsum := 0
-			for i := 0; i < cols; i++ {
-				wv := t.Width[i%len(t.Width)]
-				if wv <= 0 {
-					wv = total / float64(cols)
-				}
-				px := int(float64(contentW) * wv / total)
-				gridW[i] = px
-				wsum += px
-			}
-			gridW[cols-1] += contentW - wsum // 余数补到最后一列
-		}
-	}
-	if gridW[0] == 0 {
-		for i := range gridW {
-			gridW[i] = contentW / cols
-		}
-		gridW[cols-1] += contentW - contentW/cols*cols
-	}
+        // 列数：各行按 colSpan 展开后的最大列数
+        cols := 0
+        for _, row := range t.Rows {
+                n := 0
+                for _, c := range row {
+                        span := c.ColSpan
+                        if span < 1 {
+                                span = 1
+                        }
+                        n += span
+                }
+                if n > cols {
+                        cols = n
+                }
+        }
+        if cols == 0 {
+                cols = 1
+        }
+        if contentW <= 0 {
+                contentW = 9026 // A4 内容区宽度兜底（11906 - 2*1440）
+        }
+        // 列宽：优先 Table.Width（相对权重），否则均分
+        gridW := make([]int, cols)
+        if len(t.Width) > 0 {
+                total := 0.0
+                for _, wv := range t.Width {
+                        if wv > 0 {
+                                total += wv
+                        }
+                }
+                if total > 0 {
+                        wsum := 0
+                        for i := 0; i < cols; i++ {
+                                wv := t.Width[i%len(t.Width)]
+                                if wv <= 0 {
+                                        wv = total / float64(cols)
+                                }
+                                px := int(float64(contentW) * wv / total)
+                                gridW[i] = px
+                                wsum += px
+                        }
+                        gridW[cols-1] += contentW - wsum // 余数补到最后一列
+                }
+        }
+        if gridW[0] == 0 {
+                for i := range gridW {
+                        gridW[i] = contentW / cols
+                }
+                gridW[cols-1] += contentW - contentW/cols*cols
+        }
 
-	// 边框线宽：Table.Border 为 pt；缺省 4（1/8pt 单位，Word 经典细线）
-	borderSz := 4
-	if t.Border > 0 {
-		borderSz = int(t.Border * 8)
-		if borderSz < 2 {
-			borderSz = 2
-		}
-	}
-	battr := fmt.Sprintf(` w:val="single" w:sz="%d" w:space="0" w:color="CBD5E1"`, borderSz)
+        // 边框线宽：Table.Border 为 pt；缺省 4（1/8pt 单位，Word 经典细线）
+        borderSz := 4
+        if t.Border > 0 {
+                borderSz = int(t.Border * 8)
+                if borderSz < 2 {
+                        borderSz = 2
+                }
+        }
+        battr := fmt.Sprintf(` w:val="single" w:sz="%d" w:space="0" w:color="CBD5E1"`, borderSz)
 
-	sb.WriteString(`<w:tbl>
+        sb.WriteString(`<w:tbl>
 <w:tblPr>
 <w:tblW w:w="5000" w:type="pct"/>
 <w:tblBorders>
@@ -666,217 +686,217 @@ func renderTable(sb *strings.Builder, t *core.Table, images map[string]*embedIma
 </w:tblPr>
 <w:tblGrid>
 `)
-	for i := 0; i < cols; i++ {
-		fmt.Fprintf(sb, `<w:gridCol w:w="%d"/>`+"\n", gridW[i])
-	}
-	sb.WriteString("</w:tblGrid>\n")
+        for i := 0; i < cols; i++ {
+                fmt.Fprintf(sb, `<w:gridCol w:w="%d"/>`+"\n", gridW[i])
+        }
+        sb.WriteString("</w:tblGrid>\n")
 
-	// pending[col]：该列还被上方 rowSpan 单元格占用的剩余行数
-	pending := make([]int, cols)
-	emitContinue := func(col int) {
-		fmt.Fprintf(sb, `<w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>`, gridW[col])
-	}
-	for _, row := range t.Rows {
-		sb.WriteString("<w:tr>")
-		col := 0
-		for _, c := range row {
-			for col < cols && pending[col] > 0 {
-				emitContinue(col)
-				pending[col]--
-				col++
-			}
-			span := c.ColSpan
-			if span < 1 {
-				span = 1
-			}
-			if col+span > cols {
-				span = cols - col
-			}
-			if span <= 0 {
-				break
-			}
-			if c.RowSpan > 1 {
-				for k := col; k < col+span && k < cols; k++ {
-					pending[k] = c.RowSpan - 1
-				}
-			}
-			cellW := 0
-			for k := col; k < col+span; k++ {
-				cellW += gridW[k]
-			}
-			renderTableCell(sb, &c, cellW, span, images)
-			col += span
-		}
-		for col < cols && pending[col] > 0 {
-			emitContinue(col)
-			pending[col]--
-			col++
-		}
-		sb.WriteString("</w:tr>\n")
-	}
-	sb.WriteString("</w:tbl>\n")
+        // pending[col]：该列还被上方 rowSpan 单元格占用的剩余行数
+        pending := make([]int, cols)
+        emitContinue := func(col int) {
+                fmt.Fprintf(sb, `<w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>`, gridW[col])
+        }
+        for _, row := range t.Rows {
+                sb.WriteString("<w:tr>")
+                col := 0
+                for _, c := range row {
+                        for col < cols && pending[col] > 0 {
+                                emitContinue(col)
+                                pending[col]--
+                                col++
+                        }
+                        span := c.ColSpan
+                        if span < 1 {
+                                span = 1
+                        }
+                        if col+span > cols {
+                                span = cols - col
+                        }
+                        if span <= 0 {
+                                break
+                        }
+                        if c.RowSpan > 1 {
+                                for k := col; k < col+span && k < cols; k++ {
+                                        pending[k] = c.RowSpan - 1
+                                }
+                        }
+                        cellW := 0
+                        for k := col; k < col+span; k++ {
+                                cellW += gridW[k]
+                        }
+                        renderTableCell(sb, &c, cellW, span, images)
+                        col += span
+                }
+                for col < cols && pending[col] > 0 {
+                        emitContinue(col)
+                        pending[col]--
+                        col++
+                }
+                sb.WriteString("</w:tr>\n")
+        }
+        sb.WriteString("</w:tbl>\n")
 }
 
 // renderTableCell 渲染 w:tc：tcPr（宽度/合并/表头底纹）+ 内容段落
 func renderTableCell(sb *strings.Builder, c *core.TableCell, widthTwips, span int, images map[string]*embedImage) {
-	sb.WriteString("<w:tc><w:tcPr>")
-	fmt.Fprintf(sb, `<w:tcW w:w="%d" w:type="dxa"/>`, widthTwips)
-	if span > 1 {
-		fmt.Fprintf(sb, `<w:gridSpan w:val="%d"/>`, span)
-	}
-	if c.RowSpan > 1 {
-		sb.WriteString(`<w:vMerge w:val="restart"/>`)
-	}
-	if c.IsHeader {
-		// 表头底纹（浅蓝灰），与前端表头样式近似
-		sb.WriteString(`<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>`)
-	}
-	sb.WriteString("</w:tcPr>")
-	if len(c.Blocks) > 0 {
-		for _, blk := range c.Blocks {
-			renderBlock(sb, blk, images, widthTwips)
-		}
-	} else if len(c.Inline) > 0 {
-		sb.WriteString("<w:p>")
-		for _, in := range c.Inline {
-			renderInline(sb, in, "")
-		}
-		sb.WriteString("</w:p>\n")
-	} else {
-		sb.WriteString("<w:p/>")
-	}
-	sb.WriteString("</w:tc>")
+        sb.WriteString("<w:tc><w:tcPr>")
+        fmt.Fprintf(sb, `<w:tcW w:w="%d" w:type="dxa"/>`, widthTwips)
+        if span > 1 {
+                fmt.Fprintf(sb, `<w:gridSpan w:val="%d"/>`, span)
+        }
+        if c.RowSpan > 1 {
+                sb.WriteString(`<w:vMerge w:val="restart"/>`)
+        }
+        if c.IsHeader {
+                // 表头底纹（浅蓝灰），与前端表头样式近似
+                sb.WriteString(`<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>`)
+        }
+        sb.WriteString("</w:tcPr>")
+        if len(c.Blocks) > 0 {
+                for _, blk := range c.Blocks {
+                        renderBlock(sb, blk, images, widthTwips)
+                }
+        } else if len(c.Inline) > 0 {
+                sb.WriteString("<w:p>")
+                for _, in := range c.Inline {
+                        renderInline(sb, in, "")
+                }
+                sb.WriteString("</w:p>\n")
+        } else {
+                sb.WriteString("<w:p/>")
+        }
+        sb.WriteString("</w:tc>")
 }
 
 // paraPr 构建 <w:pPr> 内容：样式、对齐、缩进、段间距、行距、换行与分页、提纲级别
 func paraPr(style, align string, props map[string]any) string {
-	var b strings.Builder
-	if style != "" {
-		b.WriteString(`<w:pStyle w:val="`)
-		b.WriteString(escapeXML(style))
-		b.WriteString(`"/>`)
-	}
-	if align != "" {
-		b.WriteString(`<w:jc w:val="`)
-		b.WriteString(escapeXML(align))
-		b.WriteString(`"/>`)
-	}
-	if props == nil {
-		props = map[string]any{}
-	}
-	num := func(k string) float64 {
-		switch v := props[k].(type) {
-		case float64:
-			return v
-		case int:
-			return float64(v)
-		}
-		return 0
-	}
-	// 缩进（前端以「字符」为单位 em 存储，1 字符 ≈ 240twips @12pt，与 Word 一致）
-	left, right, first, hang := num("indentLeft"), num("indentRight"), num("firstLine"), num("hanging")
-	if left == 0 && num("indent") > 0 {
-		left = num("indent") * 2
-	}
-	if left != 0 || right != 0 || first != 0 || hang != 0 {
-		b.WriteString(`<w:ind`)
-		if left != 0 {
-			fmt.Fprintf(&b, ` w:left="%d"`, int(left*240))
-		}
-		if right != 0 {
-			fmt.Fprintf(&b, ` w:right="%d"`, int(right*240))
-		}
-		if first != 0 {
-			fmt.Fprintf(&b, ` w:firstLine="%d"`, int(first*240))
-		}
-		if hang != 0 {
-			fmt.Fprintf(&b, ` w:hanging="%d"`, int(hang*240))
-		}
-		b.WriteString(`/>`)
-	}
-	// 段前/段后（pt → twips）
-	sb, sa := num("spaceBefore"), num("spaceAfter")
-	// 行距
-	kind, _ := props["lineSpacingKind"].(string)
-	lval := num("lineSpacingValue")
-	lh, _ := props["lineHeight"].(string)
-	var line int
-	rule := "auto"
-	switch kind {
-	case "single":
-		line = 240
-	case "1.5":
-		line = 360
-	case "double":
-		line = 480
-	case "multiple":
-		line = int(lval * 240)
-	case "exact":
-		line = int(lval * 20)
-		rule = "exact"
-	case "atLeast":
-		line = int(lval * 20)
-		rule = "atLeast"
-	default:
-		if lh != "" {
-			if strings.HasSuffix(lh, "pt") {
-				// 固定值行距（如 '28pt'）→ exact 规则
-				if f, err := strconv.ParseFloat(strings.TrimSuffix(lh, "pt"), 64); err == nil {
-					line = int(f * 20)
-					rule = "exact"
-				}
-			} else if f, err := strconv.ParseFloat(lh, 64); err == nil {
-				line = int(f * 240)
-			}
-		}
-	}
-	if sb != 0 || sa != 0 || line != 0 {
-		b.WriteString(`<w:spacing`)
-		if sb != 0 {
-			fmt.Fprintf(&b, ` w:before="%d"`, int(sb*20))
-		}
-		if sa != 0 {
-			fmt.Fprintf(&b, ` w:after="%d"`, int(sa*20))
-		}
-		if line != 0 {
-			fmt.Fprintf(&b, ` w:line="%d" w:lineRule="%s"`, line, rule)
-		}
-		b.WriteString(`/>`)
-	}
-	// 换行与分页
-	if v, ok := props["keepLines"].(bool); ok && v {
-		b.WriteString(`<w:keepLines/>`)
-	}
-	if v, ok := props["keepWithNext"].(bool); ok && v {
-		b.WriteString(`<w:keepNext/>`)
-	}
-	if v, ok := props["pageBreakBefore"].(bool); ok && v {
-		b.WriteString(`<w:pageBreakBefore/>`)
-	}
-	// 段落边框（pBdr）与底纹（shd）
-	if pbdr := paraBorderXML(props["border"]); pbdr != "" {
-		b.WriteString(pbdr)
-	}
-	if shd := paraShadingXML(props["shading"]); shd != "" {
-		b.WriteString(shd)
-	}
-	if v := num("outlineLevel"); v > 0 {
-		fmt.Fprintf(&b, `<w:outlineLvl w:val="%d"/>`, int(v)-1)
-	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return `<w:pPr>` + b.String() + `</w:pPr>`
+        var b strings.Builder
+        if style != "" {
+                b.WriteString(`<w:pStyle w:val="`)
+                b.WriteString(escapeXML(style))
+                b.WriteString(`"/>`)
+        }
+        if align != "" {
+                b.WriteString(`<w:jc w:val="`)
+                b.WriteString(escapeXML(align))
+                b.WriteString(`"/>`)
+        }
+        if props == nil {
+                props = map[string]any{}
+        }
+        num := func(k string) float64 {
+                switch v := props[k].(type) {
+                case float64:
+                        return v
+                case int:
+                        return float64(v)
+                }
+                return 0
+        }
+        // 缩进（前端以「字符」为单位 em 存储，1 字符 ≈ 240twips @12pt，与 Word 一致）
+        left, right, first, hang := num("indentLeft"), num("indentRight"), num("firstLine"), num("hanging")
+        if left == 0 && num("indent") > 0 {
+                left = num("indent") * 2
+        }
+        if left != 0 || right != 0 || first != 0 || hang != 0 {
+                b.WriteString(`<w:ind`)
+                if left != 0 {
+                        fmt.Fprintf(&b, ` w:left="%d"`, int(left*240))
+                }
+                if right != 0 {
+                        fmt.Fprintf(&b, ` w:right="%d"`, int(right*240))
+                }
+                if first != 0 {
+                        fmt.Fprintf(&b, ` w:firstLine="%d"`, int(first*240))
+                }
+                if hang != 0 {
+                        fmt.Fprintf(&b, ` w:hanging="%d"`, int(hang*240))
+                }
+                b.WriteString(`/>`)
+        }
+        // 段前/段后（pt → twips）
+        sb, sa := num("spaceBefore"), num("spaceAfter")
+        // 行距
+        kind, _ := props["lineSpacingKind"].(string)
+        lval := num("lineSpacingValue")
+        lh, _ := props["lineHeight"].(string)
+        var line int
+        rule := "auto"
+        switch kind {
+        case "single":
+                line = 240
+        case "1.5":
+                line = 360
+        case "double":
+                line = 480
+        case "multiple":
+                line = int(lval * 240)
+        case "exact":
+                line = int(lval * 20)
+                rule = "exact"
+        case "atLeast":
+                line = int(lval * 20)
+                rule = "atLeast"
+        default:
+                if lh != "" {
+                        if strings.HasSuffix(lh, "pt") {
+                                // 固定值行距（如 '28pt'）→ exact 规则
+                                if f, err := strconv.ParseFloat(strings.TrimSuffix(lh, "pt"), 64); err == nil {
+                                        line = int(f * 20)
+                                        rule = "exact"
+                                }
+                        } else if f, err := strconv.ParseFloat(lh, 64); err == nil {
+                                line = int(f * 240)
+                        }
+                }
+        }
+        if sb != 0 || sa != 0 || line != 0 {
+                b.WriteString(`<w:spacing`)
+                if sb != 0 {
+                        fmt.Fprintf(&b, ` w:before="%d"`, int(sb*20))
+                }
+                if sa != 0 {
+                        fmt.Fprintf(&b, ` w:after="%d"`, int(sa*20))
+                }
+                if line != 0 {
+                        fmt.Fprintf(&b, ` w:line="%d" w:lineRule="%s"`, line, rule)
+                }
+                b.WriteString(`/>`)
+        }
+        // 换行与分页
+        if v, ok := props["keepLines"].(bool); ok && v {
+                b.WriteString(`<w:keepLines/>`)
+        }
+        if v, ok := props["keepWithNext"].(bool); ok && v {
+                b.WriteString(`<w:keepNext/>`)
+        }
+        if v, ok := props["pageBreakBefore"].(bool); ok && v {
+                b.WriteString(`<w:pageBreakBefore/>`)
+        }
+        // 段落边框（pBdr）与底纹（shd）
+        if pbdr := paraBorderXML(props["border"]); pbdr != "" {
+                b.WriteString(pbdr)
+        }
+        if shd := paraShadingXML(props["shading"]); shd != "" {
+                b.WriteString(shd)
+        }
+        if v := num("outlineLevel"); v > 0 {
+                fmt.Fprintf(&b, `<w:outlineLvl w:val="%d"/>`, int(v)-1)
+        }
+        if b.Len() == 0 {
+                return ""
+        }
+        return `<w:pPr>` + b.String() + `</w:pPr>`
 }
 
 // paraShadingXML 解析段落底纹 props["shading"]（hex 或颜色名）→ <w:shd>。
 // 前端 schema 的 shading attr 为 CSS background-color（hex 字符串）。
 func paraShadingXML(v any) string {
-	s, ok := v.(string)
-	if !ok || s == "" {
-		return ""
-	}
-	return `<w:shd w:val="clear" w:color="auto" w:fill="` + normalizeColor(s) + `"/>`
+        s, ok := v.(string)
+        if !ok || s == "" {
+                return ""
+        }
+        return `<w:shd w:val="clear" w:color="auto" w:fill="` + normalizeColor(s) + `"/>`
 }
 
 // paraBorderXML 解析段落边框 props["border"]，兼容两种形态：
@@ -888,438 +908,438 @@ func paraShadingXML(v any) string {
 //  2. 对象（防御性支持）：{"top":{"color":"#FF0000","size":1},...} 或
 //     {"sides":"all","color":"FF0000","size":1}，size 单位 pt → w:sz = size*8。
 func paraBorderXML(v any) string {
-	type sideSpec struct {
-		color string
-		size  float64
-	}
-	sides := map[string]sideSpec{}
-	switch bv := v.(type) {
-	case string:
-		if bv == "" {
-			return ""
-		}
-		if bv == "redBottom" {
-			return `<w:pBdr><w:bottom w:val="single" w:sz="12" w:space="1" w:color="C00000"/></w:pBdr>`
-		}
-		kw := map[string]sideSpec{
-			"top":    {color: "CCCCCC", size: 6}, // 1px ≈ 0.75pt → sz 6
-			"right":  {color: "CCCCCC", size: 6},
-			"bottom": {color: "CCCCCC", size: 6},
-			"left":   {color: "4F46E5", size: 18}, // 3px = 2.25pt → sz 18
-		}
-		fields := strings.Fields(bv)
-		all := false
-		for _, f := range fields {
-			if f == "all" {
-				all = true
-			}
-		}
-		for name, spec := range kw {
-			if all || containsStr(fields, name) {
-				sides[name] = spec
-			}
-		}
-	case map[string]any:
-		// {"sides":"all","color":"...","size":1} 整体形态
-		if s, ok := bv["sides"].(string); ok {
-			spec := sideSpec{color: "000000", size: 4}
-			if c, ok := bv["color"].(string); ok && c != "" {
-				spec.color = normalizeColor(c)
-			}
-			if f, ok := numAny(bv["size"]); ok && f > 0 {
-				spec.size = f * 8
-			}
-			fields := strings.Fields(s)
-			all := false
-			for _, f := range fields {
-				if f == "all" {
-					all = true
-				}
-			}
-			for _, name := range []string{"top", "left", "bottom", "right"} {
-				if all || containsStr(fields, name) {
-					sides[name] = spec
-				}
-			}
-		}
-		// {"top":{...},...} 每边形态
-		for _, name := range []string{"top", "left", "bottom", "right"} {
-			raw, ok := bv[name]
-			if !ok {
-				continue
-			}
-			spec := sideSpec{color: "000000", size: 4}
-			if m, ok := raw.(map[string]any); ok {
-				if c, ok := m["color"].(string); ok && c != "" {
-					spec.color = normalizeColor(c)
-				}
-				if f, ok := numAny(m["size"]); ok && f > 0 {
-					spec.size = f * 8 // pt → 1/8pt
-				} else if f, ok := numAny(m["width"]); ok && f > 0 {
-					spec.size = f * 8
-				}
-			} else if c, ok := raw.(string); ok && c != "" {
-				spec.color = normalizeColor(c)
-			}
-			sides[name] = spec
-		}
-	default:
-		return ""
-	}
-	if len(sides) == 0 {
-		return ""
-	}
-	// w:pBdr 子元素顺序：top → left → bottom → right
-	var b strings.Builder
-	b.WriteString("<w:pBdr>")
-	for _, name := range []string{"top", "left", "bottom", "right"} {
-		spec, ok := sides[name]
-		if !ok {
-			continue
-		}
-		fmt.Fprintf(&b, `<w:%s w:val="single" w:sz="%d" w:space="1" w:color="%s"/>`,
-			name, int(spec.size), spec.color)
-	}
-	b.WriteString("</w:pBdr>")
-	return b.String()
+        type sideSpec struct {
+                color string
+                size  float64
+        }
+        sides := map[string]sideSpec{}
+        switch bv := v.(type) {
+        case string:
+                if bv == "" {
+                        return ""
+                }
+                if bv == "redBottom" {
+                        return `<w:pBdr><w:bottom w:val="single" w:sz="12" w:space="1" w:color="C00000"/></w:pBdr>`
+                }
+                kw := map[string]sideSpec{
+                        "top":    {color: "CCCCCC", size: 6}, // 1px ≈ 0.75pt → sz 6
+                        "right":  {color: "CCCCCC", size: 6},
+                        "bottom": {color: "CCCCCC", size: 6},
+                        "left":   {color: "4F46E5", size: 18}, // 3px = 2.25pt → sz 18
+                }
+                fields := strings.Fields(bv)
+                all := false
+                for _, f := range fields {
+                        if f == "all" {
+                                all = true
+                        }
+                }
+                for name, spec := range kw {
+                        if all || containsStr(fields, name) {
+                                sides[name] = spec
+                        }
+                }
+        case map[string]any:
+                // {"sides":"all","color":"...","size":1} 整体形态
+                if s, ok := bv["sides"].(string); ok {
+                        spec := sideSpec{color: "000000", size: 4}
+                        if c, ok := bv["color"].(string); ok && c != "" {
+                                spec.color = normalizeColor(c)
+                        }
+                        if f, ok := numAny(bv["size"]); ok && f > 0 {
+                                spec.size = f * 8
+                        }
+                        fields := strings.Fields(s)
+                        all := false
+                        for _, f := range fields {
+                                if f == "all" {
+                                        all = true
+                                }
+                        }
+                        for _, name := range []string{"top", "left", "bottom", "right"} {
+                                if all || containsStr(fields, name) {
+                                        sides[name] = spec
+                                }
+                        }
+                }
+                // {"top":{...},...} 每边形态
+                for _, name := range []string{"top", "left", "bottom", "right"} {
+                        raw, ok := bv[name]
+                        if !ok {
+                                continue
+                        }
+                        spec := sideSpec{color: "000000", size: 4}
+                        if m, ok := raw.(map[string]any); ok {
+                                if c, ok := m["color"].(string); ok && c != "" {
+                                        spec.color = normalizeColor(c)
+                                }
+                                if f, ok := numAny(m["size"]); ok && f > 0 {
+                                        spec.size = f * 8 // pt → 1/8pt
+                                } else if f, ok := numAny(m["width"]); ok && f > 0 {
+                                        spec.size = f * 8
+                                }
+                        } else if c, ok := raw.(string); ok && c != "" {
+                                spec.color = normalizeColor(c)
+                        }
+                        sides[name] = spec
+                }
+        default:
+                return ""
+        }
+        if len(sides) == 0 {
+                return ""
+        }
+        // w:pBdr 子元素顺序：top → left → bottom → right
+        var b strings.Builder
+        b.WriteString("<w:pBdr>")
+        for _, name := range []string{"top", "left", "bottom", "right"} {
+                spec, ok := sides[name]
+                if !ok {
+                        continue
+                }
+                fmt.Fprintf(&b, `<w:%s w:val="single" w:sz="%d" w:space="1" w:color="%s"/>`,
+                        name, int(spec.size), spec.color)
+        }
+        b.WriteString("</w:pBdr>")
+        return b.String()
 }
 
 func containsStr(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+        for _, v := range list {
+                if v == s {
+                        return true
+                }
+        }
+        return false
 }
 
 // numAny 宽松地把 any 转为 float64（JSON 数字可能是 float64/int）
 func numAny(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case int:
-		return float64(n), true
-	case string:
-		if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
-			return f, true
-		}
-	}
-	return 0, false
+        switch n := v.(type) {
+        case float64:
+                return n, true
+        case int:
+                return float64(n), true
+        case string:
+                if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+                        return f, true
+                }
+        }
+        return 0, false
 }
 
 // letterSpacingTwips 解析字符间距值（"1px"/"0.5em"/"2pt"/纯数字）为 twips。
 // 换算：1px = 15twips（96dpi：1pt=0.75px → 20twips/pt ÷ 96px/in × 72pt/in = 15）；
 // em 按正文 16px 基准（em×16×15）；pt 直接 ×20。
 func letterSpacingTwips(s string) int {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	unit := "px"
-	numPart := s
-	lower := strings.ToLower(s)
-	for _, u := range []string{"px", "em", "pt"} {
-		if strings.HasSuffix(lower, u) {
-			unit = u
-			numPart = strings.TrimSpace(s[:len(s)-len(u)])
-			break
-		}
-	}
-	f, err := strconv.ParseFloat(numPart, 64)
-	if err != nil || f == 0 {
-		return 0
-	}
-	switch unit {
-	case "pt":
-		return int(f * 20)
-	case "em":
-		return int(f * 16 * 15) // 1em ≈ 16px（正文字号基准）
-	default: // px
-		return int(f * 15)
-	}
+        s = strings.TrimSpace(s)
+        if s == "" {
+                return 0
+        }
+        unit := "px"
+        numPart := s
+        lower := strings.ToLower(s)
+        for _, u := range []string{"px", "em", "pt"} {
+                if strings.HasSuffix(lower, u) {
+                        unit = u
+                        numPart = strings.TrimSpace(s[:len(s)-len(u)])
+                        break
+                }
+        }
+        f, err := strconv.ParseFloat(numPart, 64)
+        if err != nil || f == 0 {
+                return 0
+        }
+        switch unit {
+        case "pt":
+                return int(f * 20)
+        case "em":
+                return int(f * 16 * 15) // 1em ≈ 16px（正文字号基准）
+        default: // px
+                return int(f * 15)
+        }
 }
 
 // runSpacingXML 段落级 letterSpacing（props["letterSpacing"]）→ 每个 run 的
 // <w:spacing>（rPr 内为字符间距；注意与 pPr 内的段间距 w:spacing 不同名不同义）。
 func runSpacingXML(props map[string]any) string {
-	if props == nil {
-		return ""
-	}
-	s, ok := props["letterSpacing"].(string)
-	if !ok || s == "" {
-		return ""
-	}
-	tw := letterSpacingTwips(s)
-	if tw == 0 {
-		return ""
-	}
-	return fmt.Sprintf(`<w:spacing w:val="%d"/>`, tw)
+        if props == nil {
+                return ""
+        }
+        s, ok := props["letterSpacing"].(string)
+        if !ok || s == "" {
+                return ""
+        }
+        tw := letterSpacingTwips(s)
+        if tw == 0 {
+                return ""
+        }
+        return fmt.Sprintf(`<w:spacing w:val="%d"/>`, tw)
 }
 
 func renderParagraph(sb *strings.Builder, p *core.Paragraph, images map[string]*embedImage) {
-	// 公式段落：单个文本且内容为 ⟨formula:...⟩ 时渲染为 OMML 数学公式
-	if len(p.Inline) == 1 {
-		if t, ok := p.Inline[0].(*core.Text); ok {
-			if omml, ok2 := extractFormulaOMML(t.Content); ok2 {
-				sb.WriteString(`<w:p><m:oMathPara><m:oMath>`)
-				sb.WriteString(omml)
-				sb.WriteString(`</m:oMath></m:oMathPara></w:p>` + "\n")
-				return
-			}
-		}
-	}
-	sb.WriteString("<w:p>")
-	if ppr := paraPr(p.Style, p.Align, p.Props); ppr != "" {
-		sb.WriteString(ppr)
-	}
-	// 段落级字符间距：作用于段内所有 run（含超链接内文本）
-	runExtra := runSpacingXML(p.Props)
-	for _, in := range p.Inline {
-		// InlineImage 处理
-		if iim, ok := in.(*core.InlineImage); ok {
-			renderInlineImage(sb, iim, images)
-			continue
-		}
-		renderInline(sb, in, runExtra)
-	}
-	sb.WriteString("</w:p>\n")
+        // 公式段落：单个文本且内容为 ⟨formula:...⟩ 时渲染为 OMML 数学公式
+        if len(p.Inline) == 1 {
+                if t, ok := p.Inline[0].(*core.Text); ok {
+                        if omml, ok2 := extractFormulaOMML(t.Content); ok2 {
+                                sb.WriteString(`<w:p><m:oMathPara><m:oMath>`)
+                                sb.WriteString(omml)
+                                sb.WriteString(`</m:oMath></m:oMathPara></w:p>` + "\n")
+                                return
+                        }
+                }
+        }
+        sb.WriteString("<w:p>")
+        if ppr := paraPr(p.Style, p.Align, p.Props); ppr != "" {
+                sb.WriteString(ppr)
+        }
+        // 段落级字符间距：作用于段内所有 run（含超链接内文本）
+        runExtra := runSpacingXML(p.Props)
+        for _, in := range p.Inline {
+                // InlineImage 处理
+                if iim, ok := in.(*core.InlineImage); ok {
+                        renderInlineImage(sb, iim, images)
+                        continue
+                }
+                renderInline(sb, in, runExtra)
+        }
+        sb.WriteString("</w:p>\n")
 }
 
 func renderHeading(sb *strings.Builder, h *core.Heading) {
-	level := h.Level
-	if level < 1 {
-		level = 1
-	}
-	if level > 6 {
-		level = 6
-	}
-	sb.WriteString("<w:p>")
-	sb.WriteString(`<w:pPr><w:pStyle w:val="Heading`)
-	sb.WriteString(fmt.Sprintf("%d", level))
-	sb.WriteString(`"/>`)
-	if extra := paraPr("", "", h.Props); extra != "" {
-		// 去掉 paraPr 生成的 <w:pPr> 包裹，仅拼接内部
-		inner := strings.TrimSuffix(strings.TrimPrefix(extra, `<w:pPr>`), `</w:pPr>`)
-		sb.WriteString(inner)
-	}
-	sb.WriteString(`</w:pPr>`)
-	runExtra := runSpacingXML(h.Props)
-	for _, in := range h.Inline {
-		renderInline(sb, in, runExtra)
-	}
-	sb.WriteString("</w:p>\n")
+        level := h.Level
+        if level < 1 {
+                level = 1
+        }
+        if level > 6 {
+                level = 6
+        }
+        sb.WriteString("<w:p>")
+        sb.WriteString(`<w:pPr><w:pStyle w:val="Heading`)
+        sb.WriteString(fmt.Sprintf("%d", level))
+        sb.WriteString(`"/>`)
+        if extra := paraPr("", "", h.Props); extra != "" {
+                // 去掉 paraPr 生成的 <w:pPr> 包裹，仅拼接内部
+                inner := strings.TrimSuffix(strings.TrimPrefix(extra, `<w:pPr>`), `</w:pPr>`)
+                sb.WriteString(inner)
+        }
+        sb.WriteString(`</w:pPr>`)
+        runExtra := runSpacingXML(h.Props)
+        for _, in := range h.Inline {
+                renderInline(sb, in, runExtra)
+        }
+        sb.WriteString("</w:p>\n")
 }
 
 // renderMath 将公式块（LaTeX）导出为 OMML（m:oMath）。
 func renderMath(sb *strings.Builder, m *core.Math) {
-	omml, ok := latexToOMML(m.Formula)
-	if !ok {
-		// 解析失败时退化为纯文本段落，避免丢公式
-		sb.WriteString("<w:p><w:r><w:t xml:space=\"preserve\">")
-		sb.WriteString(escapeXML(m.Formula))
-		sb.WriteString("</w:t></w:r></w:p>\n")
-		return
-	}
-	if m.Inline {
-		// 行内公式：用 run 内的 m:oMath
-		sb.WriteString("<w:p><w:r><m:oMath>")
-		sb.WriteString(omml)
-		sb.WriteString("</m:oMath></w:r></w:p>\n")
-	} else {
-		sb.WriteString("<w:p><m:oMathPara><m:oMath>")
-		sb.WriteString(omml)
-		sb.WriteString("</m:oMath></m:oMathPara></w:p>\n")
-	}
+        omml, ok := latexToOMML(m.Formula)
+        if !ok {
+                // 解析失败时退化为纯文本段落，避免丢公式
+                sb.WriteString("<w:p><w:r><w:t xml:space=\"preserve\">")
+                sb.WriteString(escapeXML(m.Formula))
+                sb.WriteString("</w:t></w:r></w:p>\n")
+                return
+        }
+        if m.Inline {
+                // 行内公式：用 run 内的 m:oMath
+                sb.WriteString("<w:p><w:r><m:oMath>")
+                sb.WriteString(omml)
+                sb.WriteString("</m:oMath></w:r></w:p>\n")
+        } else {
+                sb.WriteString("<w:p><m:oMathPara><m:oMath>")
+                sb.WriteString(omml)
+                sb.WriteString("</m:oMath></m:oMathPara></w:p>\n")
+        }
 }
 
 // prstForShape 将前端 shape 值映射为 OOXML prstGeom 预设名
 func prstForShape(shape string) string {
-	switch shape {
-	case "roundRect":
-		return "roundRect"
-	case "ellipse":
-		return "ellipse"
-	case "triangle":
-		return "triangle"
-	case "diamond":
-		return "diamond"
-	case "rightArrow":
-		return "rightArrow"
-	case "star5":
-		return "star5"
-	case "heart":
-		return "heart"
-	default:
-		return "rect"
-	}
+        switch shape {
+        case "roundRect":
+                return "roundRect"
+        case "ellipse":
+                return "ellipse"
+        case "triangle":
+                return "triangle"
+        case "diamond":
+                return "diamond"
+        case "rightArrow":
+                return "rightArrow"
+        case "star5":
+                return "star5"
+        case "heart":
+                return "heart"
+        default:
+                return "rect"
+        }
 }
 
 // dashValForLineStyle 将线型映射为 OOXML prstDash 值
 func dashValForLineStyle(ls string) string {
-	switch ls {
-	case "dash":
-		return "dash"
-	case "dot":
-		return "dot"
-	case "dashDot":
-		return "dashDot"
-	default:
-		return "solid"
-	}
+        switch ls {
+        case "dash":
+                return "dash"
+        case "dot":
+                return "dot"
+        case "dashDot":
+                return "dashDot"
+        default:
+                return "solid"
+        }
 }
 
 // renderTextbox 渲染文本框/形状块为 OOXML wps:txbx 结构，包含边框、填充、圆角与内部内容。
 func renderTextbox(sb *strings.Builder, tb *core.Textbox, images map[string]*embedImage) {
-	em := func(cm float64) int {
-		if cm <= 0 {
-			return 0
-		}
-		return int(cm * 360000)
-	}
-	w := em(tb.W)
-	h := em(tb.H)
-	if w == 0 {
-		w = 3429000 // 默认 9.53cm
-	}
-	if h == 0 {
-		h = 1701000 // 默认 4.73cm
-	}
-	borderEMU := int(tb.BorderW * 12700)
-	lnStyle := dashValForLineStyle(tb.LineStyle)
-	bc := strings.TrimPrefix(tb.BorderColor, "#")
-	fc := strings.TrimPrefix(tb.FillColor, "#")
-	if len(bc) == 0 {
-		bc = "000000"
-	}
-	shapePr := prstForShape(tb.Shape)
-	wrap := tb.Wrap
-	if wrap == "" {
-		wrap = "square"
-	}
-	// 圆角比例（仅 roundRect）
-	var avLst string
-	if shapePr == "roundRect" {
-		adj := 25000
-		if tb.Radius > 0 {
-			// 半径(pt) / 最小边(cm*28.35 pt) 约为圆角占比
-			minEdgeCm := tb.W
-			if tb.H < minEdgeCm || minEdgeCm == 0 {
-				minEdgeCm = tb.H
-			}
-			if minEdgeCm > 0 {
-				ratio := tb.Radius / (minEdgeCm * 28.35)
-				if ratio > 0 {
-					adj = int(ratio * 100000)
-				}
-			}
-		}
-		avLst = fmt.Sprintf(`<a:avLst><a:gd name="adj" fmla="val %d"/></a:avLst>`, adj)
-	}
-	// 边框与填充
-	ln := fmt.Sprintf(`<a:ln w="%d"><a:prstDash val="%s"/></a:ln>`, borderEMU, lnStyle)
-	if bc != "" {
-		ln = fmt.Sprintf(`<a:ln w="%d"><a:prstDash val="%s"/><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln>`, borderEMU, lnStyle, bc)
-	}
-	fill := ""
-	if fc != "" {
-		fill = fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"/></a:solidFill>`, fc)
-	}
-	sb.WriteString(`<w:p><w:r><w:pict>`)
-	sb.WriteString(`<wps:txbx>`)
-	// 文本框占位（w:txbxContent 需要至少一个段落）
-	sb.WriteString(`<w:txbxContent>`)
-	if len(tb.Blocks) == 0 {
-		sb.WriteString(`<w:p/>`)
-	} else {
-		for _, blk := range tb.Blocks {
-			renderBlock(sb, blk, images, 0)
-		}
-	}
-	sb.WriteString(`</w:txbxContent>`)
-	sb.WriteString(`</wps:txbx>`)
-	// 形状外观（边框/填充/圆角）放在 spPr
-	sb.WriteString(`<w:spPr>`)
-	sb.WriteString(fmt.Sprintf(`<a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>`, em(tb.X), em(tb.Y), w, h))
-	sb.WriteString(fmt.Sprintf(`<a:prstGeom prst="%s">%s</a:prstGeom>`, shapePr, avLst))
-	sb.WriteString(fill)
-	sb.WriteString(ln)
-	sb.WriteString(`</w:spPr>`)
-	sb.WriteString(`</w:pict></w:r></w:p>` + "\n")
+        em := func(cm float64) int {
+                if cm <= 0 {
+                        return 0
+                }
+                return int(cm * 360000)
+        }
+        w := em(tb.W)
+        h := em(tb.H)
+        if w == 0 {
+                w = 3429000 // 默认 9.53cm
+        }
+        if h == 0 {
+                h = 1701000 // 默认 4.73cm
+        }
+        borderEMU := int(tb.BorderW * 12700)
+        lnStyle := dashValForLineStyle(tb.LineStyle)
+        bc := strings.TrimPrefix(tb.BorderColor, "#")
+        fc := strings.TrimPrefix(tb.FillColor, "#")
+        if len(bc) == 0 {
+                bc = "000000"
+        }
+        shapePr := prstForShape(tb.Shape)
+        wrap := tb.Wrap
+        if wrap == "" {
+                wrap = "square"
+        }
+        // 圆角比例（仅 roundRect）
+        var avLst string
+        if shapePr == "roundRect" {
+                adj := 25000
+                if tb.Radius > 0 {
+                        // 半径(pt) / 最小边(cm*28.35 pt) 约为圆角占比
+                        minEdgeCm := tb.W
+                        if tb.H < minEdgeCm || minEdgeCm == 0 {
+                                minEdgeCm = tb.H
+                        }
+                        if minEdgeCm > 0 {
+                                ratio := tb.Radius / (minEdgeCm * 28.35)
+                                if ratio > 0 {
+                                        adj = int(ratio * 100000)
+                                }
+                        }
+                }
+                avLst = fmt.Sprintf(`<a:avLst><a:gd name="adj" fmla="val %d"/></a:avLst>`, adj)
+        }
+        // 边框与填充
+        ln := fmt.Sprintf(`<a:ln w="%d"><a:prstDash val="%s"/></a:ln>`, borderEMU, lnStyle)
+        if bc != "" {
+                ln = fmt.Sprintf(`<a:ln w="%d"><a:prstDash val="%s"/><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln>`, borderEMU, lnStyle, bc)
+        }
+        fill := ""
+        if fc != "" {
+                fill = fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"/></a:solidFill>`, fc)
+        }
+        sb.WriteString(`<w:p><w:r><w:pict>`)
+        sb.WriteString(`<wps:txbx>`)
+        // 文本框占位（w:txbxContent 需要至少一个段落）
+        sb.WriteString(`<w:txbxContent>`)
+        if len(tb.Blocks) == 0 {
+                sb.WriteString(`<w:p/>`)
+        } else {
+                for _, blk := range tb.Blocks {
+                        renderBlock(sb, blk, images, 0)
+                }
+        }
+        sb.WriteString(`</w:txbxContent>`)
+        sb.WriteString(`</wps:txbx>`)
+        // 形状外观（边框/填充/圆角）放在 spPr
+        sb.WriteString(`<w:spPr>`)
+        sb.WriteString(fmt.Sprintf(`<a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>`, em(tb.X), em(tb.Y), w, h))
+        sb.WriteString(fmt.Sprintf(`<a:prstGeom prst="%s">%s</a:prstGeom>`, shapePr, avLst))
+        sb.WriteString(fill)
+        sb.WriteString(ln)
+        sb.WriteString(`</w:spPr>`)
+        sb.WriteString(`</w:pict></w:r></w:p>` + "\n")
 }
 
 func renderBulletList(sb *strings.Builder, l *core.BulletList) {
-	for _, item := range l.Items {
-		sb.WriteString("<w:p>")
-		sb.WriteString(`<w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="`)
-		if l.Ordered {
-			sb.WriteString("2")
-		} else {
-			sb.WriteString("1")
-		}
-		sb.WriteString(`"/></w:numPr></w:pPr>`)
-		for _, b := range item {
-			if p, ok := b.(*core.Paragraph); ok {
-				for _, in := range p.Inline {
-					renderInline(sb, in, runSpacingXML(p.Props))
-				}
-			}
-		}
-		sb.WriteString("</w:p>\n")
-	}
+        for _, item := range l.Items {
+                sb.WriteString("<w:p>")
+                sb.WriteString(`<w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="`)
+                if l.Ordered {
+                        sb.WriteString("2")
+                } else {
+                        sb.WriteString("1")
+                }
+                sb.WriteString(`"/></w:numPr></w:pPr>`)
+                for _, b := range item {
+                        if p, ok := b.(*core.Paragraph); ok {
+                                for _, in := range p.Inline {
+                                        renderInline(sb, in, runSpacingXML(p.Props))
+                                }
+                        }
+                }
+                sb.WriteString("</w:p>\n")
+        }
 }
 
 func renderCodeBlock(sb *strings.Builder, c *core.CodeBlock) {
-	sb.WriteString(`<w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr>`)
-	for _, line := range strings.Split(c.Code, "\n") {
-		if line == "" {
-			continue
-		}
-		sb.WriteString(`<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t xml:space="preserve">`)
-		sb.WriteString(escapeXML(line))
-		sb.WriteString("</w:t></w:r>")
-	}
-	sb.WriteString("</w:p>\n")
+        sb.WriteString(`<w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr>`)
+        for _, line := range strings.Split(c.Code, "\n") {
+                if line == "" {
+                        continue
+                }
+                sb.WriteString(`<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr><w:t xml:space="preserve">`)
+                sb.WriteString(escapeXML(line))
+                sb.WriteString("</w:t></w:r>")
+        }
+        sb.WriteString("</w:p>\n")
 }
 
 // renderImage 渲染块级 Image，使用 drawing 元素嵌入真实图片
 func renderImage(sb *strings.Builder, im *core.Image, images map[string]*embedImage) {
-	e, ok := images[im.Src]
-	if !ok {
-		// 占位（URL 或本地路径，无法嵌入）
-		sb.WriteString(`<w:p><w:r><w:t xml:space="preserve">[Image: `)
-		sb.WriteString(escapeXML(im.Src))
-		sb.WriteString(`]</w:t></w:r></w:p>`)
-		return
-	}
+        e, ok := images[im.Src]
+        if !ok {
+                // 占位（URL 或本地路径，无法嵌入）
+                sb.WriteString(`<w:p><w:r><w:t xml:space="preserve">[Image: `)
+                sb.WriteString(escapeXML(im.Src))
+                sb.WriteString(`]</w:t></w:r></w:p>`)
+                return
+        }
 
-	// 文字环绕：left/right 使用浮动锚点（四周型环绕），否则使用嵌入型
-	floating := im.Float == "left" || im.Float == "right"
+        // 文字环绕：left/right 使用浮动锚点（四周型环绕），否则使用嵌入型
+        floating := im.Float == "left" || im.Float == "right"
 
-	var jc string
-	if !floating {
-		switch im.Align {
-		case "left":
-			jc = ` w:val="left"`
-		case "right":
-			jc = ` w:val="right"`
-		default:
-			jc = ` w:val="center"`
-		}
-	}
+        var jc string
+        if !floating {
+                switch im.Align {
+                case "left":
+                        jc = ` w:val="left"`
+                case "right":
+                        jc = ` w:val="right"`
+                default:
+                        jc = ` w:val="center"`
+                }
+        }
 
-	sb.WriteString("<w:p>")
-	if jc != "" {
-		sb.WriteString(`<w:pPr><w:jc` + jc + `/></w:pPr>`)
-	}
+        sb.WriteString("<w:p>")
+        if jc != "" {
+                sb.WriteString(`<w:pPr><w:jc` + jc + `/></w:pPr>`)
+        }
 
-	graphic := renderGraphicXML(e)
-	if floating {
-		posAlign := "left"
-		if im.Float == "right" {
-			posAlign = "right"
-		}
-		sb.WriteString(`<w:r><w:drawing>
+        graphic := renderGraphicXML(e)
+        if floating {
+                posAlign := "left"
+                if im.Float == "right" {
+                        posAlign = "right"
+                }
+                sb.WriteString(`<w:r><w:drawing>
 <wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
   <wp:simplePos x="0" y="0"/>
   <wp:positionH relativeFrom="column"><wp:align>` + posAlign + `</wp:align></wp:positionH>
@@ -1332,8 +1352,8 @@ func renderImage(sb *strings.Builder, im *core.Image, images map[string]*embedIm
   ` + graphic + `
 </wp:anchor>
 </w:drawing></w:r>`)
-	} else {
-		sb.WriteString(`<w:r><w:drawing>
+        } else {
+                sb.WriteString(`<w:r><w:drawing>
 <wp:inline distT="0" distB="0" distL="0" distR="0">
 <wp:extent cx="` + fmt.Sprintf("%d", e.Width) + `" cy="` + fmt.Sprintf("%d", e.Height) + `"/>
 <wp:effectExtent l="0" t="0" r="0" b="0"/>
@@ -1342,14 +1362,14 @@ func renderImage(sb *strings.Builder, im *core.Image, images map[string]*embedIm
 ` + graphic + `
 </wp:inline>
 </w:drawing></w:r>`)
-	}
-	sb.WriteString("</w:p>\n")
+        }
+        sb.WriteString("</w:p>\n")
 }
 
 // renderGraphicXML 渲染图片的 drawing 图形部分（a:graphic ... pic:pic）
 func renderGraphicXML(e *embedImage) string {
-	var sb strings.Builder
-	sb.WriteString(`<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        var sb strings.Builder
+        sb.WriteString(`<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
 <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
 <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
 <pic:nvPicPr>
@@ -1367,43 +1387,43 @@ func renderGraphicXML(e *embedImage) string {
 </pic:pic>
 </a:graphicData>
 </a:graphic>`)
-	return sb.String()
+        return sb.String()
 }
 
 // renderInlineImage 渲染行内图片（嵌在段落中的 drawing）
 func renderInlineImage(sb *strings.Builder, iim *core.InlineImage, images map[string]*embedImage) {
-	e, ok := images[iim.Src]
-	if !ok {
-		// 占位
-		sb.WriteString(`<w:r><w:t xml:space="preserve">[img]</w:t></w:r>`)
-		return
-	}
-	sb.WriteString(`<w:r><w:drawing>
+        e, ok := images[iim.Src]
+        if !ok {
+                // 占位
+                sb.WriteString(`<w:r><w:t xml:space="preserve">[img]</w:t></w:r>`)
+                return
+        }
+        sb.WriteString(`<w:r><w:drawing>
 <wp:inline distT="0" distB="0" distL="0" distR="0">
 <wp:extent cx="`)
-	sb.WriteString(fmt.Sprintf("%d", e.Width))
-	sb.WriteString(`" cy="`)
-	sb.WriteString(fmt.Sprintf("%d", e.Height))
-	sb.WriteString(`"/>
+        sb.WriteString(fmt.Sprintf("%d", e.Width))
+        sb.WriteString(`" cy="`)
+        sb.WriteString(fmt.Sprintf("%d", e.Height))
+        sb.WriteString(`"/>
 <wp:docPr id="`)
-	sb.WriteString(fmt.Sprintf("%d", e.ID))
-	sb.WriteString(`" name="Picture `)
-	sb.WriteString(fmt.Sprintf("%d", e.ID))
-	sb.WriteString(`"/>
+        sb.WriteString(fmt.Sprintf("%d", e.ID))
+        sb.WriteString(`" name="Picture `)
+        sb.WriteString(fmt.Sprintf("%d", e.ID))
+        sb.WriteString(`"/>
 <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
 <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
 <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
 <pic:nvPicPr><pic:cNvPr id="`)
-	sb.WriteString(fmt.Sprintf("%d", e.ID))
-	sb.WriteString(`" name="image"/><pic:cNvPicPr/></pic:nvPicPr>
+        sb.WriteString(fmt.Sprintf("%d", e.ID))
+        sb.WriteString(`" name="image"/><pic:cNvPicPr/></pic:nvPicPr>
 <pic:blipFill><a:blip r:embed="`)
-	sb.WriteString(e.RelID)
-	sb.WriteString(`"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+        sb.WriteString(e.RelID)
+        sb.WriteString(`"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
 <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="`)
-	sb.WriteString(fmt.Sprintf("%d", e.Width))
-	sb.WriteString(`" cy="`)
-	sb.WriteString(fmt.Sprintf("%d", e.Height))
-	sb.WriteString(`"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+        sb.WriteString(fmt.Sprintf("%d", e.Width))
+        sb.WriteString(`" cy="`)
+        sb.WriteString(fmt.Sprintf("%d", e.Height))
+        sb.WriteString(`"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
 </pic:pic>
 </a:graphicData>
 </a:graphic>
@@ -1414,218 +1434,295 @@ func renderInlineImage(sb *strings.Builder, iim *core.InlineImage, images map[st
 // renderInline 渲染行内元素。runExtra 为附加到 run rPr 的 XML 片段
 // （如段落级字符间距 <w:spacing/>），透传给文本/修订/超链接内文本。
 func renderInline(sb *strings.Builder, in core.Inline, runExtra string) {
-	switch v := in.(type) {
-	case *core.Text:
-		renderText(sb, *v, runExtra)
-	case core.Text:
-		renderText(sb, v, runExtra)
-	case *core.Track:
-		renderTrack(sb, *v, runExtra)
-	case core.Track:
-		renderTrack(sb, v, runExtra)
-	case *core.Hyperlink:
-		renderHyperlink(sb, v.URL, v.Text, runExtra)
-	case core.Hyperlink:
-		renderHyperlink(sb, v.URL, v.Text, runExtra)
-	case *core.FootnoteRef:
-		renderFootnoteRef(sb, v.Num)
-	case core.FootnoteRef:
-		renderFootnoteRef(sb, v.Num)
-	case *core.InlineImage:
-		// 行内图片仅在段落上下文有 images 映射时渲染，此处跳过
-	}
+        switch v := in.(type) {
+        case *core.Text:
+                renderText(sb, *v, runExtra)
+        case core.Text:
+                renderText(sb, v, runExtra)
+        case *core.Track:
+                renderTrack(sb, *v, runExtra)
+        case core.Track:
+                renderTrack(sb, v, runExtra)
+        case *core.Hyperlink:
+                renderHyperlink(sb, v.URL, v.Text, runExtra)
+        case core.Hyperlink:
+                renderHyperlink(sb, v.URL, v.Text, runExtra)
+        case *core.FootnoteRef:
+                renderFootnoteRef(sb, v.Num)
+        case core.FootnoteRef:
+                renderFootnoteRef(sb, v.Num)
+        case *core.InlineImage:
+                // 行内图片仅在段落上下文有 images 映射时渲染，此处跳过
+        }
 }
 
 // renderHyperlink 渲染超链接。r:id 与 document.xml.rels 中注册的
 // rId{hashString(url)} 对应（关系由 collectHyperlinks 收集注册）。
 func renderHyperlink(sb *strings.Builder, url string, text []core.Inline, runExtra string) {
-	sb.WriteString(`<w:hyperlink r:id="`)
-	sb.WriteString(fmt.Sprintf("rId%d", hashString(url)))
-	sb.WriteString(`">`)
-	for _, t := range text {
-		switch tt := t.(type) {
-		case *core.Text:
-			renderText(sb, *tt, runExtra)
-		case core.Text:
-			renderText(sb, tt, runExtra)
-		case *core.Track:
-			renderTrack(sb, *tt, runExtra)
-		case core.Track:
-			renderTrack(sb, tt, runExtra)
-		}
-	}
-	sb.WriteString(`</w:hyperlink>`)
+        sb.WriteString(`<w:hyperlink r:id="`)
+        sb.WriteString(fmt.Sprintf("rId%d", hashString(url)))
+        sb.WriteString(`">`)
+        for _, t := range text {
+                switch tt := t.(type) {
+                case *core.Text:
+                        renderText(sb, *tt, runExtra)
+                case core.Text:
+                        renderText(sb, tt, runExtra)
+                case *core.Track:
+                        renderTrack(sb, *tt, runExtra)
+                case core.Track:
+                        renderTrack(sb, tt, runExtra)
+                }
+        }
+        sb.WriteString(`</w:hyperlink>`)
 }
 
-// renderFootnoteRef 渲染脚注引用标记：上标 [n]。
-// （docx 正式脚注需 footnotes.xml + footnoteReference，此处以视觉等价的上标文本持久化，
-// 保证保存后编号与正文不丢失。）
+// renderFootnoteRef 渲染正式脚注引用：<w:footnoteReference w:id="N"/>，
+// 脚注内容由 renderFootnotesXML 写入 word/footnotes.xml（id 与此处的 num 一致）。
 func renderFootnoteRef(sb *strings.Builder, num int) {
-	sb.WriteString(`<w:r><w:rPr><w:vertAlign w:val="superscript"/><w:color w:val="4F46E5"/></w:rPr><w:t>[`)
-	sb.WriteString(fmt.Sprintf("%d", num))
-	sb.WriteString(`]</w:t></w:r>`)
+        sb.WriteString(`<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="`)
+        sb.WriteString(fmt.Sprintf("%d", num))
+        sb.WriteString(`"/></w:r>`)
+}
+
+// collectFootnotes 按文档顺序收集正文中的脚注引用（按 num 去重，保留首次内容），
+// 供 renderFootnotesXML 生成 word/footnotes.xml。
+func collectFootnotes(doc *core.Document) []core.FootnoteRef {
+        seen := map[int]bool{}
+        out := []core.FootnoteRef{}
+        walkBlocks(doc.Blocks, nil, func(in core.Inline) {
+                var fr *core.FootnoteRef
+                switch v := in.(type) {
+                case *core.FootnoteRef:
+                        fr = v
+                case core.FootnoteRef:
+                        fr = &v
+                }
+                if fr == nil || fr.Num <= 0 || seen[fr.Num] {
+                        return
+                }
+                seen[fr.Num] = true
+                out = append(out, *fr)
+        })
+        return out
+}
+
+// renderFootnotesXML 生成 word/footnotes.xml：
+// 分隔符（id=-1）、续接分隔符（id=0）与正文脚注（id=1..N，内容为 FootnoteRef.Content）。
+func renderFootnotesXML(items []core.FootnoteRef) string {
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`)
+        sb.WriteString(`<w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:separator/></w:r></w:p></w:footnote>`)
+        sb.WriteString(`<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>`)
+        for _, it := range items {
+                fmt.Fprintf(&sb, `<w:footnote w:id="%d">`, it.Num)
+                sb.WriteString(`<w:p><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>`)
+                if it.Content != "" {
+                        sb.WriteString(`<w:r><w:t xml:space="preserve">` + escapeXML(" "+it.Content) + `</w:t></w:r>`)
+                }
+                sb.WriteString(`</w:p></w:footnote>`)
+        }
+        sb.WriteString(`</w:footnotes>`)
+        return sb.String()
+}
+
+// renderCommentsXML 生成 word/comments.xml。w:id 采用 hashString(commentID)，
+// 与 renderText 输出的 commentRangeStart/End + commentReference 一致。
+func renderCommentsXML(comments []core.Comment) string {
+        now := time.Now().UTC().Format(time.RFC3339)
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`)
+        for _, c := range comments {
+                id := hashString(c.ID)
+                fmt.Fprintf(&sb, `<w:comment w:id="%d" w:author="%s" w:date="%s">`, id, escAttr(c.Author), now)
+                sb.WriteString(`<w:p><w:r><w:t xml:space="preserve">` + escapeXML(c.Content) + `</w:t></w:r></w:p>`)
+                sb.WriteString(`</w:comment>`)
+        }
+        sb.WriteString(`</w:comments>`)
+        return sb.String()
 }
 
 // renderTrack 渲染修订追踪行内：插入保留文本，删除加删除线。
 func renderTrack(sb *strings.Builder, t core.Track, runExtra string) {
-	if t.Content == "" {
-		return
-	}
-	sb.WriteString("<w:r>")
-	if t.Bold || t.Italic || t.Under || t.Strike || t.Font != "" || t.FontSize != 0 || t.Color != "" || t.Highlight != "" || t.Superscript || t.Subscript || runExtra != "" {
-		sb.WriteString("<w:rPr>")
-		if t.Bold {
-			sb.WriteString("<w:b/>")
-		}
-		if t.Italic {
-			sb.WriteString("<w:i/>")
-		}
-		if t.Under {
-			sb.WriteString(`<w:u w:val="single"/>`)
-		}
-		if t.Strike {
-			sb.WriteString("<w:strike/>")
-		}
-		if t.Font != "" {
-			sb.WriteString(`<w:rFonts w:ascii="` + escapeXML(t.Font) + `" w:hAnsi="` + escapeXML(t.Font) + `" w:eastAsia="` + escapeXML(t.Font) + `"/>`)
-		}
-		if t.FontSize != 0 {
-			sb.WriteString(`<w:sz w:val="` + fmt.Sprintf("%d", int(t.FontSize*2)) + `"/>`)
-		}
-		if t.Color != "" {
-			sb.WriteString(`<w:color w:val="` + normalizeColor(t.Color) + `"/>`)
-		}
-		if t.Highlight != "" {
-			sb.WriteString(highlightXML(t.Highlight))
-		}
-		if t.Superscript || t.Subscript {
-			val := "subscript"
-			if t.Superscript {
-				val = "superscript"
-			}
-			sb.WriteString(`<w:vertAlign w:val="` + val + `"/>`)
-		}
-		if t.Track == "delete" {
-			// 修订删除：用删除线标记
-			sb.WriteString("<w:strike/>")
-		}
-		if t.Track == "insert" {
-			// 修订插入：用下划线标记
-			sb.WriteString(`<w:u w:val="single"/>`)
-		}
-		sb.WriteString(runExtra)
-		sb.WriteString("</w:rPr>")
-	}
-	sb.WriteString(`<w:t xml:space="preserve">`)
-	sb.WriteString(escapeXML(t.Content))
-	sb.WriteString("</w:t></w:r>")
+        if t.Content == "" {
+                return
+        }
+        sb.WriteString("<w:r>")
+        if t.Bold || t.Italic || t.Under || t.Strike || t.Font != "" || t.FontSize != 0 || t.Color != "" || t.Highlight != "" || t.Superscript || t.Subscript || runExtra != "" {
+                sb.WriteString("<w:rPr>")
+                if t.Bold {
+                        sb.WriteString("<w:b/>")
+                }
+                if t.Italic {
+                        sb.WriteString("<w:i/>")
+                }
+                if t.Under {
+                        sb.WriteString(`<w:u w:val="single"/>`)
+                }
+                if t.Strike {
+                        sb.WriteString("<w:strike/>")
+                }
+                if t.Font != "" {
+                        sb.WriteString(`<w:rFonts w:ascii="` + escapeXML(t.Font) + `" w:hAnsi="` + escapeXML(t.Font) + `" w:eastAsia="` + escapeXML(t.Font) + `"/>`)
+                }
+                if t.FontSize != 0 {
+                        sb.WriteString(`<w:sz w:val="` + fmt.Sprintf("%d", int(t.FontSize*2)) + `"/>`)
+                }
+                if t.Color != "" {
+                        sb.WriteString(`<w:color w:val="` + normalizeColor(t.Color) + `"/>`)
+                }
+                if t.Highlight != "" {
+                        sb.WriteString(highlightXML(t.Highlight))
+                }
+                if t.Superscript || t.Subscript {
+                        val := "subscript"
+                        if t.Superscript {
+                                val = "superscript"
+                        }
+                        sb.WriteString(`<w:vertAlign w:val="` + val + `"/>`)
+                }
+                if t.Track == "delete" {
+                        // 修订删除：用删除线标记
+                        sb.WriteString("<w:strike/>")
+                }
+                if t.Track == "insert" {
+                        // 修订插入：用下划线标记
+                        sb.WriteString(`<w:u w:val="single"/>`)
+                }
+                sb.WriteString(runExtra)
+                sb.WriteString("</w:rPr>")
+        }
+        sb.WriteString(`<w:t xml:space="preserve">`)
+        sb.WriteString(escapeXML(t.Content))
+        sb.WriteString("</w:t></w:r>")
 }
 
-// renderText 渲染文本 run（含粗体/斜体、字体、字号、颜色、上下标、字符间距、高亮等标记）
+// renderText 渲染文本 run（含粗体/斜体、字体、字号、颜色、上下标、字符间距、高亮等标记）；
+// 带 CommentID 的文本额外输出批注范围标记（commentRangeStart/End）与 commentReference。
 func renderText(sb *strings.Builder, t core.Text, runExtra string) {
-	if t.Content == "" {
-		return
-	}
-	sb.WriteString("<w:r>")
-	if t.Bold || t.Italic || t.Under || t.Strike || t.Style == "code" || t.Font != "" || t.FontSize != 0 || t.Color != "" || t.Highlight != "" || t.Superscript || t.Subscript || t.LetterSpacing != "" || runExtra != "" {
-		sb.WriteString("<w:rPr>")
-		if t.Font != "" {
-			sb.WriteString(`<w:rFonts w:ascii="` + escapeXML(t.Font) + `" w:hAnsi="` + escapeXML(t.Font) + `" w:eastAsia="` + escapeXML(t.Font) + `"/>`)
-		}
-		if t.FontSize != 0 {
-			sb.WriteString(`<w:sz w:val="` + fmt.Sprintf("%d", int(t.FontSize*2)) + `"/>`)
-		}
-		if t.Color != "" {
-			sb.WriteString(`<w:color w:val="` + normalizeColor(t.Color) + `"/>`)
-		}
-		if t.Bold {
-			sb.WriteString("<w:b/>")
-		}
-		if t.Italic {
-			sb.WriteString("<w:i/>")
-		}
-		if t.Under {
-			sb.WriteString(`<w:u w:val="single"/>`)
-		}
-		if t.Strike {
-			sb.WriteString("<w:strike/>")
-		}
-		// 字符间距：run 级 letterSpacing（如 "1px"）优先，其次段落级透传 runExtra
-		if tw := letterSpacingTwips(t.LetterSpacing); tw != 0 {
-			fmt.Fprintf(sb, `<w:spacing w:val="%d"/>`, tw)
-		} else {
-			sb.WriteString(runExtra)
-		}
-		if t.Highlight != "" {
-			sb.WriteString(highlightXML(t.Highlight))
-		}
-		if t.Superscript || t.Subscript {
-			val := "subscript"
-			if t.Superscript {
-				val = "superscript"
-			}
-			sb.WriteString(`<w:vertAlign w:val="` + val + `"/>`)
-		}
-		if t.Style == "code" {
-			sb.WriteString(`<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>`)
-		}
-		sb.WriteString("</w:rPr>")
-	}
-	sb.WriteString(`<w:t xml:space="preserve">`)
-	sb.WriteString(escapeXML(t.Content))
-	sb.WriteString("</w:t></w:r>")
+        if t.Content == "" && t.CommentID == "" {
+                return
+        }
+        if t.CommentID != "" {
+                // 批注锚点：w:id 与 comments.xml 中 hashString(commentId) 对应
+                id := hashString(t.CommentID)
+                fmt.Fprintf(sb, `<w:commentRangeStart w:id="%d"/>`, id)
+                if t.Content != "" {
+                        writeTextRun(sb, t, runExtra)
+                }
+                fmt.Fprintf(sb, `<w:commentRangeEnd w:id="%d"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="%d"/></w:r>`, id, id)
+                return
+        }
+        writeTextRun(sb, t, runExtra)
+}
+
+// writeTextRun 输出普通文本 run（renderText 的非批注主体）
+func writeTextRun(sb *strings.Builder, t core.Text, runExtra string) {
+        if t.Content == "" {
+                return
+        }
+        sb.WriteString("<w:r>")
+        if t.Bold || t.Italic || t.Under || t.Strike || t.Style == "code" || t.Font != "" || t.FontSize != 0 || t.Color != "" || t.Highlight != "" || t.Superscript || t.Subscript || t.LetterSpacing != "" || runExtra != "" {
+                sb.WriteString("<w:rPr>")
+                if t.Font != "" {
+                        sb.WriteString(`<w:rFonts w:ascii="` + escapeXML(t.Font) + `" w:hAnsi="` + escapeXML(t.Font) + `" w:eastAsia="` + escapeXML(t.Font) + `"/>`)
+                }
+                if t.FontSize != 0 {
+                        sb.WriteString(`<w:sz w:val="` + fmt.Sprintf("%d", int(t.FontSize*2)) + `"/>`)
+                }
+                if t.Color != "" {
+                        sb.WriteString(`<w:color w:val="` + normalizeColor(t.Color) + `"/>`)
+                }
+                if t.Bold {
+                        sb.WriteString("<w:b/>")
+                }
+                if t.Italic {
+                        sb.WriteString("<w:i/>")
+                }
+                if t.Under {
+                        sb.WriteString(`<w:u w:val="single"/>`)
+                }
+                if t.Strike {
+                        sb.WriteString("<w:strike/>")
+                }
+                // 字符间距：run 级 letterSpacing（如 "1px"）优先，其次段落级透传 runExtra
+                if tw := letterSpacingTwips(t.LetterSpacing); tw != 0 {
+                        fmt.Fprintf(sb, `<w:spacing w:val="%d"/>`, tw)
+                } else {
+                        sb.WriteString(runExtra)
+                }
+                if t.Highlight != "" {
+                        sb.WriteString(highlightXML(t.Highlight))
+                }
+                if t.Superscript || t.Subscript {
+                        val := "subscript"
+                        if t.Superscript {
+                                val = "superscript"
+                        }
+                        sb.WriteString(`<w:vertAlign w:val="` + val + `"/>`)
+                }
+                if t.Style == "code" {
+                        sb.WriteString(`<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>`)
+                }
+                sb.WriteString("</w:rPr>")
+        }
+        sb.WriteString(`<w:t xml:space="preserve">`)
+        sb.WriteString(escapeXML(t.Content))
+        sb.WriteString("</w:t></w:r>")
 }
 
 // normalizeColor 将前端颜色（#rrggbb 或颜色名）规范为 6 位十六进制（无 #），供 OOXML 使用。
 func normalizeColor(c string) string {
-	c = strings.TrimSpace(c)
-	c = strings.TrimPrefix(c, "#")
-	if len(c) == 3 {
-		c = string([]byte{c[0], c[0], c[1], c[1], c[2], c[2]})
-	}
-	return strings.ToLower(c)
+        c = strings.TrimSpace(c)
+        c = strings.TrimPrefix(c, "#")
+        if len(c) == 3 {
+                c = string([]byte{c[0], c[0], c[1], c[1], c[2], c[2]})
+        }
+        return strings.ToLower(c)
 }
 
 // wordHighlight 将前端高亮颜色映射为 OOXML 标准高亮名；
 // 不在调色板内时返回 ""（由 highlightXML 退化为底纹 shd）。
 func wordHighlight(c string) string {
-	switch strings.ToLower(strings.TrimPrefix(c, "#")) {
-	case "ffff00", "yellow":
-		return "yellow"
-	case "00ff00", "green":
-		return "green"
-	case "00ffff", "cyan":
-		return "cyan"
-	case "ff00ff", "magenta":
-		return "magenta"
-	case "0000ff", "blue":
-		return "blue"
-	case "ff0000", "red":
-		return "red"
-	case "000000", "black":
-		return "black"
-	case "ffffff", "white":
-		return "white"
-	case "00b050":
-		return "green"
-	default:
-		return ""
-	}
+        switch strings.ToLower(strings.TrimPrefix(c, "#")) {
+        case "ffff00", "yellow":
+                return "yellow"
+        case "00ff00", "green":
+                return "green"
+        case "00ffff", "cyan":
+                return "cyan"
+        case "ff00ff", "magenta":
+                return "magenta"
+        case "0000ff", "blue":
+                return "blue"
+        case "ff0000", "red":
+                return "red"
+        case "000000", "black":
+                return "black"
+        case "ffffff", "white":
+                return "white"
+        case "00b050":
+                return "green"
+        default:
+                return ""
+        }
 }
 
 // highlightXML 渲染高亮：标准色用 w:highlight（命名调色板），
 // 非标准色（如 #FFE08A 等自定义 hex）用 w:shd 底纹，避免被强制成黄色丢失原色。
 func highlightXML(c string) string {
-	if name := wordHighlight(c); name != "" {
-		return `<w:highlight w:val="` + name + `"/>`
-	}
-	return `<w:shd w:val="clear" w:color="auto" w:fill="` + normalizeColor(c) + `"/>`
+        if name := wordHighlight(c); name != "" {
+                return `<w:highlight w:val="` + name + `"/>`
+        }
+        return `<w:shd w:val="clear" w:color="auto" w:fill="` + normalizeColor(c) + `"/>`
 }
 
 // renderProtect 将文档保护信息写入 docProps/samoffice_protect.xml。
 // 该部件为 SamOffice 私有，存储密码哈希，不存明文。
 func renderProtect(p *core.DocumentProtect) string {
-	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <samProtect xmlns="http://schemas.samoffice.com/protect">
   <enabled>%t</enabled>
   <hash>%s</hash>
@@ -1633,155 +1730,155 @@ func renderProtect(p *core.DocumentProtect) string {
 }
 
 func renderCoreProps(meta core.Meta) string {
-	now := time.Now().UTC().Format(time.RFC3339)
-	created := meta.CreatedAt
-	if created == "" {
-		created = now
-	}
-	modified := meta.ModifiedAt
-	if modified == "" {
-		modified = now
-	}
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        now := time.Now().UTC().Format(time.RFC3339)
+        created := meta.CreatedAt
+        if created == "" {
+                created = now
+        }
+        modified := meta.ModifiedAt
+        if modified == "" {
+                modified = now
+        }
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
   xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <dc:title>`)
-	sb.WriteString(escapeXML(meta.Title))
-	sb.WriteString("</dc:title><dc:creator>")
-	sb.WriteString(escapeXML(meta.Author))
-	sb.WriteString("</dc:creator><dc:subject>")
-	sb.WriteString(escapeXML(meta.Subject))
-	sb.WriteString("</dc:subject><dc:description>")
-	sb.WriteString(escapeXML(meta.Description))
-	sb.WriteString("</dc:description><dc:language>")
-	sb.WriteString(escapeXML(meta.Language))
-	sb.WriteString("</dc:language><dcterms:created xsi:type=\"dcterms:W3CDTF\">")
-	sb.WriteString(escapeXML(created))
-	sb.WriteString("</dcterms:created><dcterms:modified xsi:type=\"dcterms:W3CDTF\">")
-	sb.WriteString(escapeXML(modified))
-	sb.WriteString("</dcterms:modified></cp:coreProperties>")
-	return sb.String()
+        sb.WriteString(escapeXML(meta.Title))
+        sb.WriteString("</dc:title><dc:creator>")
+        sb.WriteString(escapeXML(meta.Author))
+        sb.WriteString("</dc:creator><dc:subject>")
+        sb.WriteString(escapeXML(meta.Subject))
+        sb.WriteString("</dc:subject><dc:description>")
+        sb.WriteString(escapeXML(meta.Description))
+        sb.WriteString("</dc:description><dc:language>")
+        sb.WriteString(escapeXML(meta.Language))
+        sb.WriteString("</dc:language><dcterms:created xsi:type=\"dcterms:W3CDTF\">")
+        sb.WriteString(escapeXML(created))
+        sb.WriteString("</dcterms:created><dcterms:modified xsi:type=\"dcterms:W3CDTF\">")
+        sb.WriteString(escapeXML(modified))
+        sb.WriteString("</dcterms:modified></cp:coreProperties>")
+        return sb.String()
 }
 
 // renderFooterXML 生成 word/footerN.xml，含 PAGE 字段（按 pageNumber 配置格式化、设置样式）。
 // firstPage 为 true 时生成首页页脚（通常为空）。
 func renderFooterXML(pn *core.PageNumberConfig, firstPage bool) string {
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
   xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <w:p>`)
-	if firstPage {
-		// 首页页脚（通常为空）
-		sb.WriteString(`<w:pPr><w:pBdr/></w:pPr>`)
-		sb.WriteString(`</w:p>
+        if firstPage {
+                // 首页页脚（通常为空）
+                sb.WriteString(`<w:pPr><w:pBdr/></w:pPr>`)
+                sb.WriteString(`</w:p>
 </w:ftr>`)
-		return sb.String()
-	}
+                return sb.String()
+        }
 
-	// 段落属性：对齐
-	align := escAttr(pn.Align)
-	if align == "" {
-		align = "center"
-	}
-	sb.WriteString(`<w:pPr><w:jc w:val="` + align + `"/></w:pPr>`)
+        // 段落属性：对齐
+        align := escAttr(pn.Align)
+        if align == "" {
+                align = "center"
+        }
+        sb.WriteString(`<w:pPr><w:jc w:val="` + align + `"/></w:pPr>`)
 
-	// 解析格式模板：前缀 {n} 前缀 {total} 后缀
-	format := pn.Format
-	if format == "" {
-		format = "第 {n} 页"
-	}
-	beforeN := format
-	afterN := ""
-	if idx := strings.Index(format, "{n}"); idx >= 0 {
-		beforeN = format[:idx]
-		rest := format[idx+3:]
-		afterN = rest
-		if tidx := strings.Index(afterN, "{total}"); tidx >= 0 {
-			afterN = afterN[:tidx] + afterN[tidx+7:]
-		}
-	} else if tidx := strings.Index(format, "{total}"); tidx >= 0 {
-		beforeN = format[:tidx]
-		afterN = format[tidx+7:]
-	}
+        // 解析格式模板：前缀 {n} 前缀 {total} 后缀
+        format := pn.Format
+        if format == "" {
+                format = "第 {n} 页"
+        }
+        beforeN := format
+        afterN := ""
+        if idx := strings.Index(format, "{n}"); idx >= 0 {
+                beforeN = format[:idx]
+                rest := format[idx+3:]
+                afterN = rest
+                if tidx := strings.Index(afterN, "{total}"); tidx >= 0 {
+                        afterN = afterN[:tidx] + afterN[tidx+7:]
+                }
+        } else if tidx := strings.Index(format, "{total}"); tidx >= 0 {
+                beforeN = format[:tidx]
+                afterN = format[tidx+7:]
+        }
 
-	// 字体/样式属性
-	fontSize := int(pn.FontSize)
-	if fontSize <= 0 {
-		fontSize = 18 // 9pt
-	}
-	colorAttr := ""
-	if pn.FontColor != "" {
-		colorAttr = ` w:color="` + escAttr(pn.FontColor) + `"`
-	}
-	boldAttr := ""
-	if pn.Bold {
-		boldAttr = `<w:b/>`
-	}
-	italicAttr := ""
-	if pn.Italic {
-		italicAttr = `<w:i/>`
-	}
-	rPr := `<w:rPr>` + boldAttr + italicAttr + `<w:sz w:val="` + fmt.Sprintf("%d", fontSize) + `"/>` + colorAttr + `</w:rPr>`
+        // 字体/样式属性
+        fontSize := int(pn.FontSize)
+        if fontSize <= 0 {
+                fontSize = 18 // 9pt
+        }
+        colorAttr := ""
+        if pn.FontColor != "" {
+                colorAttr = ` w:color="` + escAttr(pn.FontColor) + `"`
+        }
+        boldAttr := ""
+        if pn.Bold {
+                boldAttr = `<w:b/>`
+        }
+        italicAttr := ""
+        if pn.Italic {
+                italicAttr = `<w:i/>`
+        }
+        rPr := `<w:rPr>` + boldAttr + italicAttr + `<w:sz w:val="` + fmt.Sprintf("%d", fontSize) + `"/>` + colorAttr + `</w:rPr>`
 
-	if beforeN != "" {
-		sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(beforeN) + `</w:t></w:r>`)
-	}
-	// PAGE 字段
-	sb.WriteString(`<w:r>` + rPr + `<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="end"/></w:r>`)
-	if afterN != "" {
-		sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(afterN) + `</w:t></w:r>`)
-	}
-	sb.WriteString(`</w:p>
+        if beforeN != "" {
+                sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(beforeN) + `</w:t></w:r>`)
+        }
+        // PAGE 字段
+        sb.WriteString(`<w:r>` + rPr + `<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="end"/></w:r>`)
+        if afterN != "" {
+                sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(afterN) + `</w:t></w:r>`)
+        }
+        sb.WriteString(`</w:p>
 </w:ftr>`)
-	return sb.String()
+        return sb.String()
 }
 
 func escAttr(s string) string {
-	s = strings.ReplaceAll(s, `"`, "&quot;")
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	return s
+        s = strings.ReplaceAll(s, `"`, "&quot;")
+        s = strings.ReplaceAll(s, "&", "&amp;")
+        s = strings.ReplaceAll(s, "<", "&lt;")
+        return s
 }
 
 func escapeXML(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, `"`, "&quot;")
-	s = strings.ReplaceAll(s, `'`, "&apos;")
-	return s
+        s = strings.ReplaceAll(s, "&", "&amp;")
+        s = strings.ReplaceAll(s, "<", "&lt;")
+        s = strings.ReplaceAll(s, ">", "&gt;")
+        s = strings.ReplaceAll(s, `"`, "&quot;")
+        s = strings.ReplaceAll(s, `'`, "&apos;")
+        return s
 }
 
 func hashString(s string) int {
-	h := 0
-	for _, r := range s {
-		h = h*31 + int(r)
-	}
-	if h < 0 {
-		h = -h
-	}
-	return h%1000 + 100
+        h := 0
+        for _, r := range s {
+                h = h*31 + int(r)
+        }
+        if h < 0 {
+                h = -h
+        }
+        return h%1000 + 100
 }
 
 func writeZip(w *zip.Writer, name, content string) error {
-	f, err := w.Create(name)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write([]byte(content))
-	return err
+        f, err := w.Create(name)
+        if err != nil {
+                return err
+        }
+        _, err = f.Write([]byte(content))
+        return err
 }
 
 func writeZipBytes(w *zip.Writer, name string, data []byte) error {
-	f, err := w.Create(name)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	return err
+        f, err := w.Create(name)
+        if err != nil {
+                return err
+        }
+        _, err = f.Write(data)
+        return err
 }
 
 const rootRelsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1792,8 +1889,8 @@ const rootRelsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 // numberingXML 定义 renderBulletList 引用的两个编号：
 //
-//	abstractNumId 0 → numId 1：项目符号（•，Symbol 字体，缩进 720/360）
-//	abstractNumId 1 → numId 2：有序编号（%1. 十进制，缩进 720/360）
+//      abstractNumId 0 → numId 1：项目符号（•，Symbol 字体，缩进 720/360）
+//      abstractNumId 1 → numId 2：有序编号（%1. 十进制，缩进 720/360）
 //
 // 单级即可覆盖前端 bullet_list / ordered_list 的导出需求。
 const numberingXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

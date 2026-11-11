@@ -271,11 +271,53 @@ export function createPaginationPlugin(
         const name = nodes[k].type.name
         const forceBreak =
           name === 'page_break' || (nodes[k].attrs && (nodes[k].attrs as any).pageBreakBefore)
+        const keepLinesK = !!(nodes[k].attrs && (nodes[k].attrs as any).keepLines)
         const blockTop = cumTop[k] + runningShift
         const blockH = children[k].offsetHeight
         const blockPageNo = pageOf(blockTop)
         // 该块“被推下后”的实际顶部坐标（含已计算的断点 margin，用于底部累计）
         let actualTop = blockTop
+
+        // keepWithNext（与下段同页，Word “段中不分页/与下段同页”语义之二）：
+        // 处理本块 k 之前，若上一块要求与本块同页、且本块首个可见片段将被断页
+        // 推离上一块所在页，则把上一块整体推到本块落点页顶部（断点整体后移）。
+        // 仅处理“上一块尚未被块级断点推过、且未跨页拆分”的安全情形（否则
+        // 块级 margin 与既有行级/子块级断点叠加会双重推下）。
+        const prevAttrs: any = k > 0 ? (nodes[k - 1].attrs || {}) : {}
+        if (
+          k > 0 && prevAttrs.keepWithNext &&
+          name !== 'page_break' && !forceBreak &&
+          !tailTextless.has(k - 1) && !tailTextless.has(k) &&
+          !blockBreaks.has(froms[k - 1]) &&
+          children[k - 1].offsetHeight > 0 &&
+          pageOf(actualTops[k - 1]) === blockPage[k - 1]
+        ) {
+          // 本块首个可见片段高度：段落/标题取首行，表格/列表取首行/首条目，其余取整块
+          let firstTop = cumTop[k] + runningShift
+          let firstH = children[k].offsetHeight
+          if (splittable(name) && lineTops[k].length) firstH = lineTops[k][0].height
+          else if (rowSplittable(name) && subTops[k].length) firstH = Math.min(subTops[k][0].h, per)
+          firstH = Math.min(firstH, per) // 防测量异常导致的死循环
+          let seamPage = pageOf(firstTop)
+          while (firstTop + firstH > pageBottomOf(seamPage) - 0.5) seamPage += 1
+          if (seamPage > blockPage[k - 1]) {
+            const pos = froms[k - 1]
+            const prevTop = actualTops[k - 1]
+            const mt = Math.max(0, pageTopOf(seamPage) - prevTop)
+            if (mt > 0) {
+              // 与块级断点一致：Decoration margin 会替换上一块折叠后的自然上边距，需补 natGap
+              const prevNatBottom = k - 1 > 0 ? cumTop[k - 2] + children[k - 2].offsetHeight : 0
+              const natGap = Math.max(0, cumTop[k - 1] - prevNatBottom)
+              breakMargin.set(pos, mt + natGap)
+              blockBreaks.add(pos)
+              breakDetails.set(pos, { mt: mt + natGap, landY: prevTop + mt, pg: seamPage })
+              runningShift += mt
+              actualTops[k - 1] = prevTop + mt
+              blockPage[k - 1] = seamPage
+              contentMaxY = Math.max(contentMaxY, prevTop + mt + children[k - 1].offsetHeight)
+            }
+          }
+        }
 
         // 尾部无文字块：豁免断页（见上方 tailTextless 注释）
         if (tailTextless.has(k)) {
@@ -363,9 +405,11 @@ export function createPaginationPlugin(
           if (isTable && subShift > 0) {
             tablePad.set(froms[k], subShift)
           }
-        } else if (forceBreak || !splittable(name)) {
+        } else if (forceBreak || !splittable(name) || keepLinesK) {
           // 整块跳页：块底超过"当前页内容区底边（下直角）"或强制分页时，
           // 把整块推到能容纳它的下一页顶部，保证内容不越过页面下直角标记。
+          // keepLines（段中不分页）也走整块跳页：禁止后续行级拆分，
+          // 块放不下当前页时整体后移（与 Word “段中不分页”语义一致）。
           // 关键修复：原实现用 pageOf(blockBottom) > blockPageNo（块底是否跨过整页
           // 步长 pageStep）判定断页 —— 当块底落在 (下直角, 下一页步长) 区间时，
           // 内容已越过下直角却未跨过整页步长，会被误判为"无需断页"，导致最后一段/

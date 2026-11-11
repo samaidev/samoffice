@@ -2,11 +2,18 @@ package xlsx
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"math"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -33,6 +40,10 @@ type cellJSON struct {
 		ColSpan int `json:"colSpan"`
 	} `json:"mergeRange,omitempty"`
 	HiddenBy string `json:"hiddenBy,omitempty"`
+	// Valign 垂直对齐（"top"/"middle"/"bottom"），对应 excelize Alignment.Vertical
+	Valign string `json:"valign,omitempty"`
+	// Wrap 自动换行，对应 excelize Alignment.WrapText
+	Wrap bool `json:"wrap,omitempty"`
 	// Fmt 数字格式 token（"int"/"0.00"/"percent"/"percent2"/"thousands"/
 	// "thousands2"/"date" 或自定义 "0.000" 形式），仅识别的格式才输出。
 	Fmt string `json:"fmt,omitempty"`
@@ -45,6 +56,23 @@ type sheetJSON struct {
 	Rows  int                 `json:"rows"`
 	Cols  int                 `json:"cols"`
 	Cells map[string]cellJSON `json:"cells"`
+	// ColWidths 列宽表：key 为 0 基列号字符串，value 为像素宽（前端约定默认 80px 不写入）
+	ColWidths map[string]float64 `json:"colWidths,omitempty"`
+	// Freeze 冻结窗格单元格（如 "C3" 表示冻结上方 2 行与左侧 2 列），空表示未冻结
+	Freeze string `json:"freeze,omitempty"`
+	// Images 浮动图片列表（base64 不含 data: 前缀）
+	Images []imageJSON `json:"images,omitempty"`
+}
+
+// imageJSON 描述一张浮动图片：锚定单元格（0 基 row/col）、原始字节 base64、
+// 扩展名（不含点，如 png/jpeg/gif）与显示像素尺寸。
+type imageJSON struct {
+	Row    int    `json:"row"`
+	Col    int    `json:"col"`
+	Base64 string `json:"base64"`
+	Ext    string `json:"ext"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 type workbookJSON struct {
@@ -184,6 +212,8 @@ func ReadXLSX(path string) (string, error) {
 		sj.Cols = maxC + 3
 		// 读取 list 类型数据验证，写入覆盖单元格的 valid 字段
 		applyValidations(f, name, &sj)
+		// 读取列宽 / 冻结窗格 / 浮动图片（新增的 sheet 级元数据）
+		readSheetExtras(f, name, &sj)
 		out.Sheets = append(out.Sheets, sj)
 	}
 
@@ -272,6 +302,114 @@ func applyCellFormat(f *excelize.File, sheet, ref string, cj *cellJSON) {
 	if tok := fmtTokenFromNumFmt(style.NumFmt, custom); tok != "" {
 		cj.Fmt = tok
 	}
+	// 垂直对齐与自动换行（与前端 cell.valign / cell.wrap 对应）
+	if style.Alignment != nil {
+		switch strings.ToLower(style.Alignment.Vertical) {
+		case "top":
+			cj.Valign = "top"
+		case "center", "middle":
+			cj.Valign = "middle"
+		case "bottom":
+			cj.Valign = "bottom"
+		}
+		if style.Alignment.WrapText {
+			cj.Wrap = true
+		}
+	}
+}
+
+// readSheetExtras 读取 sheet 级元数据：自定义列宽、冻结窗格与浮动图片。
+// 列宽只记录与默认值不同的列（chars→px 近似 px=chars*7+5）；默认宽度的列
+// 交给前端使用默认 80px，不写入 JSON，保持空 sheet 的快照简洁。
+func readSheetExtras(f *excelize.File, sheet string, sj *sheetJSON) {
+	// ---- 列宽：探测数据区外两列得到默认宽度，仅记录差异列 ----
+	maxC := sj.Cols - 3 // sj.Cols = maxC + 3
+	if maxC < 0 {
+		maxC = 0
+	}
+	probeCol, _ := excelize.ColumnNumberToName(maxC + 4)
+	defW, derr := f.GetColWidth(sheet, probeCol)
+	if derr != nil || defW <= 0 {
+		defW = defaultColWidthChars
+	}
+	cw := map[string]float64{}
+	for c := 0; c <= maxC+1 && c < 256; c++ {
+		colName, _ := excelize.ColumnNumberToName(c + 1)
+		w, err := f.GetColWidth(sheet, colName)
+		if err != nil || w <= 0 || math.Abs(w-defW) < 0.01 {
+			continue
+		}
+		px := math.Round(w*7 + 5)
+		if px < 20 || px > 2000 {
+			continue
+		}
+		cw[strconv.Itoa(c)] = px
+	}
+	if len(cw) > 0 {
+		sj.ColWidths = cw
+	}
+	// ---- 冻结窗格：GetPanes 返回冻结行列数，还原为锚点单元格名 ----
+	if panes, err := f.GetPanes(sheet); err == nil && panes.Freeze && (panes.XSplit > 0 || panes.YSplit > 0) {
+		if ref, cerr := excelize.CoordinatesToCellName(panes.XSplit+1, panes.YSplit+1); cerr == nil {
+			sj.Freeze = ref
+		}
+	}
+	// ---- 浮动图片：GetPictureCells 枚举锚点，GetPictures 取字节与显示尺寸 ----
+	cells, err := f.GetPictureCells(sheet)
+	if err != nil {
+		return
+	}
+	for _, cellRef := range cells {
+		pics, perr := f.GetPictures(sheet, cellRef)
+		if perr != nil {
+			continue
+		}
+		col, row, cerr := excelize.CellNameToCoordinates(cellRef)
+		if cerr != nil {
+			continue
+		}
+		for _, pic := range pics {
+			if len(pic.File) == 0 {
+				continue
+			}
+			ext := strings.TrimPrefix(strings.ToLower(pic.Extension), ".")
+			if ext == "jpg" {
+				ext = "jpeg"
+			}
+			// 显示尺寸 = 原始尺寸 × ScaleX/Y（excelize 读回时已算好缩放）
+			w, h := 0, 0
+			if cfg, _, derr := image.DecodeConfig(bytes.NewReader(pic.File)); derr == nil {
+				w = cfg.Width
+				h = cfg.Height
+			}
+			if w > 0 && pic.Format != nil && pic.Format.ScaleX > 0 {
+				w = int(math.Round(float64(w) * pic.Format.ScaleX))
+			}
+			if h > 0 && pic.Format != nil && pic.Format.ScaleY > 0 {
+				h = int(math.Round(float64(h) * pic.Format.ScaleY))
+			}
+			sj.Images = append(sj.Images, imageJSON{
+				Row:    row - 1,
+				Col:    col - 1,
+				Base64: base64.StdEncoding.EncodeToString(pic.File),
+				Ext:    ext,
+				Width:  w,
+				Height: h,
+			})
+		}
+	}
+}
+
+// defaultColWidthChars 是 xlsx 未显式设置列宽时的默认字符宽（8.43 ≈ 64px）。
+const defaultColWidthChars = 8.43
+
+// writableImageExts 是 AddPictureFromBytes 支持的图片扩展名（与 excelize
+// 内部 supportedImageTypes 对齐，避免引用其未导出符号）。
+var writableImageExts = map[string]string{
+	".bmp": ".bmp", ".emf": ".emf", ".emz": ".emz", ".gif": ".gif",
+	".ico": ".ico", ".jpeg": ".jpeg", ".jpg": ".jpeg", ".png": ".png",
+	".svg": ".svg", ".tif": ".tiff", ".tiff": ".tiff", ".wmf": ".wmf",
+	".wmz": ".wmz",
 }
 
 // WriteXLSX 把前端传来的 JSON 写回 xlsx，完整保留格式与合并。
@@ -342,15 +480,19 @@ func WriteXLSX(path string, jsonStr string) error {
 				expr := strings.TrimPrefix(formulaExpr, "=")
 				if err := f.SetCellFormula(sheetName, ref, expr); err != nil {
 					// 公式写入失败时退回普通值
-					f.SetCellValue(sheetName, ref, cj.Value)
+					if verr := f.SetCellValue(sheetName, ref, cj.Value); verr != nil {
+						return fmt.Errorf("set cell %s: %w", ref, verr)
+					}
 				}
 			} else if cj.Value != "" {
-				f.SetCellValue(sheetName, ref, cj.Value)
+				if err := f.SetCellValue(sheetName, ref, cj.Value); err != nil {
+					return fmt.Errorf("set cell %s: %w", ref, err)
+				}
 			}
-			// 构建样式签名（含数字格式 token）
+			// 构建样式签名（含数字格式 token、垂直对齐与自动换行）
 			alignMap := map[string]string{"left": "left", "center": "center", "right": "right", "justify": "justify"}
-			styleKey := fmt.Sprintf("%v|%v|%v|%v|%v|%v|%s|%v|%s|%s|%s|%s",
-				cj.Bold, cj.Italic, cj.Under, cj.Strike, cj.Color, cj.Bg, alignMap[cj.Align], cj.FontSize, cj.FontFamily, cj.Border, cj.BorderColor, cj.Fmt)
+			styleKey := fmt.Sprintf("%v|%v|%v|%v|%v|%v|%s|%v|%s|%s|%s|%s|%s|%v",
+				cj.Bold, cj.Italic, cj.Under, cj.Strike, cj.Color, cj.Bg, alignMap[cj.Align], cj.FontSize, cj.FontFamily, cj.Border, cj.BorderColor, cj.Fmt, cj.Valign, cj.Wrap)
 			sid, ok := styleCache[styleKey]
 			if !ok {
 				sid = newStyle(f, cj)
@@ -380,6 +522,12 @@ func WriteXLSX(path string, jsonStr string) error {
 
 		// 数据验证（下拉列表）：valid 字段写为 list 类型 DataValidation
 		writeValidations(f, sheetName, &sj)
+		// 列宽 / 冻结窗格 / 浮动图片（sheet 级元数据）
+		writeColWidths(f, sheetName, &sj)
+		writeFreeze(f, sheetName, &sj)
+		if err := writeImages(f, sheetName, &sj); err != nil {
+			return err
+		}
 	}
 
 	// 若仍有空的 __tmp__ 残留则删除
@@ -389,6 +537,106 @@ func WriteXLSX(path string, jsonStr string) error {
 
 	if err := f.SaveAs(path); err != nil {
 		return fmt.Errorf("save: %w", err)
+	}
+	return nil
+}
+
+// writeColWidths 把前端列宽表（key 为 0 基列号字符串，value 为 px）写回 xlsx。
+// px→chars 近似 chars=(px-5)/7；px<=0 或超出合理范围的列直接跳过。
+func writeColWidths(f *excelize.File, sheet string, sj *sheetJSON) {
+	for key, px := range sj.ColWidths {
+		c, err := strconv.Atoi(key)
+		if err != nil || c < 0 || c >= 256 || px < 20 || px > 2000 {
+			continue
+		}
+		colName, _ := excelize.ColumnNumberToName(c + 1)
+		chars := (px - 5) / 7
+		if chars < 1 {
+			chars = 1
+		}
+		if serr := f.SetColWidth(sheet, colName, colName, chars); serr != nil {
+			continue
+		}
+	}
+}
+
+// writeFreeze 把冻结窗格锚点（如 "C3"）写回 xlsx；空串表示未冻结不处理。
+func writeFreeze(f *excelize.File, sheet string, sj *sheetJSON) {
+	s := strings.TrimSpace(strings.ToUpper(sj.Freeze))
+	if s == "" {
+		return
+	}
+	col, row, err := excelize.CellNameToCoordinates(s)
+	if err != nil {
+		return
+	}
+	x, y := col-1, row-1
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	if x == 0 && y == 0 {
+		return
+	}
+	activePane := "bottomRight"
+	if x == 0 {
+		activePane = "bottomLeft"
+	} else if y == 0 {
+		activePane = "topRight"
+	}
+	_ = f.SetPanes(sheet, &excelize.Panes{
+		Freeze:      true,
+		XSplit:      x,
+		YSplit:      y,
+		TopLeftCell: s,
+		ActivePane:  activePane,
+	})
+}
+
+// writeImages 把前端浮动图片列表写回 xlsx：base64 解码后经 AddPictureFromBytes
+// 写入，缩放比例按目标尺寸/原始尺寸计算。解码失败或扩展名不支持时跳过该图。
+func writeImages(f *excelize.File, sheet string, sj *sheetJSON) error {
+	for _, im := range sj.Images {
+		if im.Base64 == "" || im.Row < 0 || im.Col < 0 {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(im.Base64)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		ext := strings.ToLower(strings.TrimSpace(im.Ext))
+		if ext == "" {
+			ext = "png"
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		if _, ok := writableImageExts[ext]; !ok {
+			continue // webp/svg 等当前不支持写入的格式
+		}
+		if ext == ".jpg" {
+			ext = ".jpeg"
+		}
+		cfg, _, derr := image.DecodeConfig(bytes.NewReader(raw))
+		scaleX, scaleY := 1.0, 1.0
+		if derr == nil && cfg.Width > 0 && cfg.Height > 0 && im.Width > 0 && im.Height > 0 {
+			scaleX = float64(im.Width) / float64(cfg.Width)
+			scaleY = float64(im.Height) / float64(cfg.Height)
+		}
+		cellRef, cerr := excelize.CoordinatesToCellName(im.Col+1, im.Row+1)
+		if cerr != nil {
+			continue
+		}
+		pic := &excelize.Picture{
+			Extension: ext,
+			File:      raw,
+			Format:    &excelize.GraphicOptions{ScaleX: scaleX, ScaleY: scaleY},
+		}
+		if err := f.AddPictureFromBytes(sheet, cellRef, pic); err != nil {
+			return fmt.Errorf("add picture at %s: %w", cellRef, err)
+		}
 	}
 	return nil
 }
@@ -434,8 +682,16 @@ func newStyle(f *excelize.File, cj cellJSON) int {
 		}
 		st.Font = font
 	}
-	if cj.Align != "" {
-		st.Alignment = &excelize.Alignment{Horizontal: strings.Title(cj.Align)}
+	if cj.Align != "" || cj.Valign != "" || cj.Wrap {
+		align := &excelize.Alignment{}
+		if cj.Align != "" {
+			align.Horizontal = strings.Title(cj.Align)
+		}
+		if cj.Valign != "" {
+			align.Vertical = strings.Title(cj.Valign)
+		}
+		align.WrapText = cj.Wrap
+		st.Alignment = align
 	}
 	if cj.Bg != "" {
 		st.Fill = excelize.Fill{
@@ -529,6 +785,13 @@ func fmtTokenFromNumFmt(numFmtID int, customNumFmt string) string {
 	if builtinDateNumFmtIDs[numFmtID] {
 		return "date"
 	}
+	if customNumFmt != "" {
+		// 货币格式：¥/￥ + 千分位 + 两位小数
+		trimmed := strings.TrimSpace(customNumFmt)
+		if trimmed == "¥#,##0.00" || trimmed == "￥#,##0.00" || trimmed == `"¥"#,##0.00` {
+			return "currency"
+		}
+	}
 	if customNumFmt != "" && customNumFmtPattern.MatchString(customNumFmt) {
 		return customNumFmt // 直接以 "0.00"/"0.000" 等作为 token
 	}
@@ -553,6 +816,9 @@ func numFmtFromToken(token string) (builtinID int, custom string, ok bool) {
 		return 10, "", true
 	case "date":
 		return 14, "", true
+	case "currency":
+		// 货币格式使用自定义格式串（人民币符号 + 千分位 + 两位小数）
+		return 0, "¥#,##0.00", true
 	}
 	if customNumFmtPattern.MatchString(token) {
 		return 0, token, true

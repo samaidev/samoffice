@@ -62,6 +62,7 @@ type shapeWrite struct {
         LineHeight float64     `json:"lineHeight,omitempty"` // 行距倍数（1=单倍）
         Indent     int         `json:"indent,omitempty"`     // 缩进层级（0 起）
         Link       string      `json:"link,omitempty"`       // 超链接 URL
+        GroupID    string      `json:"groupId,omitempty"`  // 所属组合 ID（非空时连续同组段写出为 p:grpSp）
         Paras      []paraWrite `json:"paras"`               // 逐段逐 run（优先于 Text/Color 等扁平字段）
 }
 
@@ -441,7 +442,8 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
 
         b.WriteString(`<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>`)
 
-        for idx, sh := range s.Shapes {
+        // writeShape 输出单个形状/图片（id = idx+10 保持全局唯一，组内同样适用）
+        writeShape := func(idx int, sh shapeWrite) {
                 // 旋转属性（前端存角度，xfrm rot 单位 1/60000 度）
                 rotAttr := ""
                 if sh.Rotation != 0 {
@@ -452,7 +454,7 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                         imgName := sh.Img
                         rId, ok := mediaRels[imgName]
                         if !ok {
-                                continue
+                                return
                         }
                         b.WriteString(`<p:pic><p:nvPicPr><p:cNvPr id="`)
                         b.WriteString(fmt.Sprintf("%d", idx+10))
@@ -469,168 +471,227 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                         b.WriteString(`" cy="`)
                         b.WriteString(fmt.Sprintf("%d", sh.Cy))
                         b.WriteString(`"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`)
+                        return
+                }
+                // 文本 / 矩形
+                geom := prstGeom(sh.Type)
+                fill := normColor(sh.Fill)
+                b.WriteString(`<p:sp><p:nvSpPr><p:cNvPr id="`)
+                b.WriteString(fmt.Sprintf("%d", idx+10))
+                b.WriteString(`" name="Shape`)
+                b.WriteString(fmt.Sprintf("%d", idx+1))
+                b.WriteString(`"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>`)
+                b.WriteString(`<a:xfrm`)
+                b.WriteString(rotAttr)
+                b.WriteString(`><a:off x="`)
+                b.WriteString(fmt.Sprintf("%d", sh.X))
+                b.WriteString(`" y="`)
+                b.WriteString(fmt.Sprintf("%d", sh.Y))
+                b.WriteString(`"/><a:ext cx="`)
+                b.WriteString(fmt.Sprintf("%d", sh.Cx))
+                b.WriteString(`" cy="`)
+                b.WriteString(fmt.Sprintf("%d", sh.Cy))
+                b.WriteString(`"/></a:xfrm>`)
+                b.WriteString(`<a:prstGeom prst="`)
+                b.WriteString(geom)
+                b.WriteString(`"><a:avLst/></a:prstGeom>`)
+                // 填充：渐变优先，其次纯色，否则无填充
+                if c1, c2, ok := parseGradientColors(sh.Gradient); ok {
+                        b.WriteString(`<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="`)
+                        b.WriteString(c1)
+                        b.WriteString(`"/></a:gs><a:gs pos="100000"><a:srgbClr val="`)
+                        b.WriteString(c2)
+                        b.WriteString(`"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill>`)
+                } else if fill != "" {
+                        b.WriteString(`<a:solidFill><a:srgbClr val="`)
+                        b.WriteString(fill)
+                        b.WriteString(`"/></a:solidFill>`)
                 } else {
-                        // 文本 / 矩形
-                        geom := prstGeom(sh.Type)
-                        fill := normColor(sh.Fill)
-                        b.WriteString(`<p:sp><p:nvSpPr><p:cNvPr id="`)
-                        b.WriteString(fmt.Sprintf("%d", idx+10))
-                        b.WriteString(`" name="Shape`)
-                        b.WriteString(fmt.Sprintf("%d", idx+1))
-                        b.WriteString(`"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>`)
-                        b.WriteString(`<a:xfrm`)
-                        b.WriteString(rotAttr)
-                        b.WriteString(`><a:off x="`)
-                        b.WriteString(fmt.Sprintf("%d", sh.X))
-                        b.WriteString(`" y="`)
-                        b.WriteString(fmt.Sprintf("%d", sh.Y))
-                        b.WriteString(`"/><a:ext cx="`)
-                        b.WriteString(fmt.Sprintf("%d", sh.Cx))
-                        b.WriteString(`" cy="`)
-                        b.WriteString(fmt.Sprintf("%d", sh.Cy))
-                        b.WriteString(`"/></a:xfrm>`)
-                        b.WriteString(`<a:prstGeom prst="`)
-                        b.WriteString(geom)
-                        b.WriteString(`"><a:avLst/></a:prstGeom>`)
-                        // 填充：渐变优先，其次纯色，否则无填充
-                        if c1, c2, ok := parseGradientColors(sh.Gradient); ok {
-                                b.WriteString(`<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="`)
-                                b.WriteString(c1)
-                                b.WriteString(`"/></a:gs><a:gs pos="100000"><a:srgbClr val="`)
-                                b.WriteString(c2)
-                                b.WriteString(`"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill>`)
-                        } else if fill != "" {
-                                b.WriteString(`<a:solidFill><a:srgbClr val="`)
-                                b.WriteString(fill)
-                                b.WriteString(`"/></a:solidFill>`)
-                        } else {
-                                b.WriteString(`<a:noFill/>`)
+                        b.WriteString(`<a:noFill/>`)
+                }
+                // 描边：有边框色时输出实线，否则无线条
+                if lc := normColor(sh.LineColor); lc != "" {
+                        lw := int64(math.Round(sh.LineWpt * 12700))
+                        if lw <= 0 {
+                                lw = 12700
                         }
-                        // 描边：有边框色时输出实线，否则无线条
-                        if lc := normColor(sh.LineColor); lc != "" {
-                                lw := int64(math.Round(sh.LineWpt * 12700))
-                                if lw <= 0 {
-                                        lw = 12700
-                                }
-                                b.WriteString(`<a:ln w="`)
-                                b.WriteString(fmt.Sprintf("%d", lw))
-                                b.WriteString(`"><a:solidFill><a:srgbClr val="`)
-                                b.WriteString(lc)
-                                b.WriteString(`"/></a:solidFill></a:ln>`)
-                        } else {
-                                b.WriteString(`<a:ln><a:noFill/></a:ln>`)
-                        }
-                        // 阴影/发光（glow 在 outerShdw 之前，符合 CT_EffectList 顺序）
-                        b.WriteString(effectLstXML(sh.Shadow, sh.Glow, sh.GlowColor))
-                        b.WriteString(`</p:spPr>`)
+                        b.WriteString(`<a:ln w="`)
+                        b.WriteString(fmt.Sprintf("%d", lw))
+                        b.WriteString(`"><a:solidFill><a:srgbClr val="`)
+                        b.WriteString(lc)
+                        b.WriteString(`"/></a:solidFill></a:ln>`)
+                } else {
+                        b.WriteString(`<a:ln><a:noFill/></a:ln>`)
+                }
+                // 阴影/发光（glow 在 outerShdw 之前，符合 CT_EffectList 顺序）
+                b.WriteString(effectLstXML(sh.Shadow, sh.Glow, sh.GlowColor))
+                b.WriteString(`</p:spPr>`)
 
-                        // 文本框
-                        color := normColor(sh.Color)
-                        if color == "" {
-                                color = "1F2937"
-                        }
-                        sz := sh.SizePt
-                        if sz <= 0 {
-                                sz = 18
-                        }
-                        b.WriteString(`<p:txBody><a:bodyPr anchor="`)
-                        b.WriteString(vanchorToPptx(sh.Vanchor))
-                        b.WriteString(`"/><a:lstStyle/>`)
-                        if len(sh.Paras) > 0 {
-                                // 逐段逐 run 写出（保留每个 run 的颜色/字号/加粗/斜体/下划线/字体）
-                                for _, pa := range sh.Paras {
-                                        b.WriteString(`<a:p>`)
-                                        b.WriteString(paraPrXML(pa.Align, sh.LineHeight, sh.Bullet, sh.Numbered, sh.Indent))
-                                        for _, rn := range pa.Runs {
-                                                if rn.Text == "" {
-                                                        continue
-                                                }
-                                                runSz := rn.SizePt
-                                                if runSz <= 0 {
-                                                        runSz = sz
-                                                }
-                                                runColor := normColor(rn.Color)
-                                                if runColor == "" {
-                                                        runColor = color
-                                                }
-                                                b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
-                                                b.WriteString(fmt.Sprintf("%d", runSz*100))
-                                                b.WriteString(`"`)
-                                                if rn.Bold {
-                                                        b.WriteString(` b="1"`)
-                                                }
-                                                if rn.Italic {
-                                                        b.WriteString(` i="1"`)
-                                                }
-                                                if rn.Underline {
-                                                        b.WriteString(` u="sng"`)
-                                                }
-                                                b.WriteString(`><a:solidFill><a:srgbClr val="`)
-                                                b.WriteString(runColor)
-                                                b.WriteString(`"/></a:solidFill>`)
-                                                if tf := normFont(rn.Font); tf != "" {
-                                                        b.WriteString(`<a:latin typeface="`)
-                                                        b.WriteString(xmlEsc(tf))
+                // 文本框
+                color := normColor(sh.Color)
+                if color == "" {
+                        color = "1F2937"
+                }
+                sz := sh.SizePt
+                if sz <= 0 {
+                        sz = 18
+                }
+                b.WriteString(`<p:txBody><a:bodyPr anchor="`)
+                b.WriteString(vanchorToPptx(sh.Vanchor))
+                b.WriteString(`"/><a:lstStyle/>`)
+                if len(sh.Paras) > 0 {
+                        // 逐段逐 run 写出（保留每个 run 的颜色/字号/加粗/斜体/下划线/字体）
+                        for _, pa := range sh.Paras {
+                                b.WriteString(`<a:p>`)
+                                b.WriteString(paraPrXML(pa.Align, sh.LineHeight, sh.Bullet, sh.Numbered, sh.Indent))
+                                for _, rn := range pa.Runs {
+                                        if rn.Text == "" {
+                                                continue
+                                        }
+                                        runSz := rn.SizePt
+                                        if runSz <= 0 {
+                                                runSz = sz
+                                        }
+                                        runColor := normColor(rn.Color)
+                                        if runColor == "" {
+                                                runColor = color
+                                        }
+                                        b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
+                                        b.WriteString(fmt.Sprintf("%d", runSz*100))
+                                        b.WriteString(`"`)
+                                        if rn.Bold {
+                                                b.WriteString(` b="1"`)
+                                        }
+                                        if rn.Italic {
+                                                b.WriteString(` i="1"`)
+                                        }
+                                        if rn.Underline {
+                                                b.WriteString(` u="sng"`)
+                                        }
+                                        b.WriteString(`><a:solidFill><a:srgbClr val="`)
+                                        b.WriteString(runColor)
+                                        b.WriteString(`"/></a:solidFill>`)
+                                        if tf := normFont(rn.Font); tf != "" {
+                                                b.WriteString(`<a:latin typeface="`)
+                                                b.WriteString(xmlEsc(tf))
+                                                b.WriteString(`"/>`)
+                                        }
+                                        // 超链接（hlinkClick 位于所有字体元素之后）
+                                        if sh.Link != "" {
+                                                if rid, ok := linkRels[strings.TrimSpace(sh.Link)]; ok {
+                                                        b.WriteString(`<a:hlinkClick r:id="`)
+                                                        b.WriteString(rid)
                                                         b.WriteString(`"/>`)
                                                 }
-                                                // 超链接（hlinkClick 位于所有字体元素之后）
-                                                if sh.Link != "" {
-                                                        if rid, ok := linkRels[strings.TrimSpace(sh.Link)]; ok {
-                                                                b.WriteString(`<a:hlinkClick r:id="`)
-                                                                b.WriteString(rid)
-                                                                b.WriteString(`"/>`)
-                                                        }
-                                                }
-                                                b.WriteString(`</a:rPr><a:t>`)
-                                                b.WriteString(xmlEsc(rn.Text))
-                                                b.WriteString(`</a:t></a:r>`)
                                         }
-                                        b.WriteString(`</a:p>`)
+                                        b.WriteString(`</a:rPr><a:t>`)
+                                        b.WriteString(xmlEsc(rn.Text))
+                                        b.WriteString(`</a:t></a:r>`)
                                 }
-                        } else {
-                                lines := strings.Split(sh.Text, "\n")
-                                for li, line := range lines {
-                                        if li > 0 {
-                                                b.WriteString(`<a:p/>`)
-                                        }
-                                        b.WriteString(`<a:p>`)
-                                        b.WriteString(paraPrXML(sh.Align, sh.LineHeight, sh.Bullet, sh.Numbered, sh.Indent))
-                                        if line != "" {
-                                                b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
-                                                b.WriteString(fmt.Sprintf("%d", sz*100))
-                                                b.WriteString(`"`)
-                                                if sh.Bold {
-                                                        b.WriteString(` b="1"`)
-                                                }
-                                                if sh.Italic {
-                                                        b.WriteString(` i="1"`)
-                                                }
-                                                if sh.Underline {
-                                                        b.WriteString(` u="sng"`)
-                                                }
-                                                b.WriteString(`><a:solidFill><a:srgbClr val="`)
-                                                b.WriteString(color)
-                                                b.WriteString(`"/></a:solidFill>`)
-                                                // 超链接（hlinkClick 位于字体填充之后）
-                                                if sh.Link != "" {
-                                                        if rid, ok := linkRels[strings.TrimSpace(sh.Link)]; ok {
-                                                                b.WriteString(`<a:hlinkClick r:id="`)
-                                                                b.WriteString(rid)
-                                                                b.WriteString(`"/>`)
-                                                        }
-                                                }
-                                                b.WriteString(`</a:rPr><a:t>`)
-                                                b.WriteString(xmlEsc(line))
-                                                b.WriteString(`</a:t></a:r>`)
-                                        }
-                                        b.WriteString(`</a:p>`)
-                                }
-                                if len(lines) == 0 {
-                                        b.WriteString(`<a:p><a:endParaRPr lang="en-US"/></a:p>`)
-                                }
+                                b.WriteString(`</a:p>`)
                         }
-                        b.WriteString(`</p:txBody></p:sp>`)
+                } else {
+                        lines := strings.Split(sh.Text, "\n")
+                        for li, line := range lines {
+                                if li > 0 {
+                                        b.WriteString(`<a:p/>`)
+                                }
+                                b.WriteString(`<a:p>`)
+                                b.WriteString(paraPrXML(sh.Align, sh.LineHeight, sh.Bullet, sh.Numbered, sh.Indent))
+                                if line != "" {
+                                        b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
+                                        b.WriteString(fmt.Sprintf("%d", sz*100))
+                                        b.WriteString(`"`)
+                                        if sh.Bold {
+                                                b.WriteString(` b="1"`)
+                                        }
+                                        if sh.Italic {
+                                                b.WriteString(` i="1"`)
+                                        }
+                                        if sh.Underline {
+                                                b.WriteString(` u="sng"`)
+                                        }
+                                        b.WriteString(`><a:solidFill><a:srgbClr val="`)
+                                        b.WriteString(color)
+                                        b.WriteString(`"/></a:solidFill>`)
+                                        // 超链接（hlinkClick 位于字体填充之后）
+                                        if sh.Link != "" {
+                                                if rid, ok := linkRels[strings.TrimSpace(sh.Link)]; ok {
+                                                        b.WriteString(`<a:hlinkClick r:id="`)
+                                                        b.WriteString(rid)
+                                                        b.WriteString(`"/>`)
+                                                }
+                                        }
+                                        b.WriteString(`</a:rPr><a:t>`)
+                                        b.WriteString(xmlEsc(line))
+                                        b.WriteString(`</a:t></a:r>`)
+                                }
+                                b.WriteString(`</a:p>`)
+                        }
+                        if len(lines) == 0 {
+                                b.WriteString(`<a:p><a:endParaRPr lang="en-US"/></a:p>`)
+                        }
                 }
+                b.WriteString(`</p:txBody></p:sp>`)
+        }
+
+        // 遍历形状：连续同 GroupID 的段包进 p:grpSp（off/ext=成员包围盒，
+        // chOff/chExt=off/ext → 恒等子空间，子形状坐标已绝对，合法 OOXML）
+        idx := 0
+        for idx < len(s.Shapes) {
+                gid := s.Shapes[idx].GroupID
+                if gid == "" {
+                        writeShape(idx, s.Shapes[idx])
+                        idx++
+                        continue
+                }
+                j := idx + 1
+                for j < len(s.Shapes) && s.Shapes[j].GroupID == gid {
+                        j++
+                }
+                members := s.Shapes[idx:j]
+                minX, minY := members[0].X, members[0].Y
+                maxX, maxY := members[0].X+members[0].Cx, members[0].Y+members[0].Cy
+                for _, m := range members[1:] {
+                        if m.X < minX {
+                                minX = m.X
+                        }
+                        if m.Y < minY {
+                                minY = m.Y
+                        }
+                        if m.X+m.Cx > maxX {
+                                maxX = m.X + m.Cx
+                        }
+                        if m.Y+m.Cy > maxY {
+                                maxY = m.Y + m.Cy
+                        }
+                }
+                b.WriteString(`<p:grpSp><p:nvGrpSpPr><p:cNvPr id="`)
+                // 组 id 与形状 id（idx+10）不冲突（≥1000+len，远大于 idx+10 的上限）
+                b.WriteString(fmt.Sprintf("%d", len(s.Shapes)+1000+idx))
+                b.WriteString(`" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>`)
+                b.WriteString(`<a:off x="`)
+                b.WriteString(fmt.Sprintf("%d", minX))
+                b.WriteString(`" y="`)
+                b.WriteString(fmt.Sprintf("%d", minY))
+                b.WriteString(`"/><a:ext cx="`)
+                b.WriteString(fmt.Sprintf("%d", maxX-minX))
+                b.WriteString(`" cy="`)
+                b.WriteString(fmt.Sprintf("%d", maxY-minY))
+                b.WriteString(`"/><a:chOff x="`)
+                b.WriteString(fmt.Sprintf("%d", minX))
+                b.WriteString(`" y="`)
+                b.WriteString(fmt.Sprintf("%d", minY))
+                b.WriteString(`"/><a:chExt cx="`)
+                b.WriteString(fmt.Sprintf("%d", maxX-minX))
+                b.WriteString(`" cy="`)
+                b.WriteString(fmt.Sprintf("%d", maxY-minY))
+                b.WriteString(`"/></a:xfrm></p:grpSpPr>`)
+                for k := idx; k < j; k++ {
+                        writeShape(k, s.Shapes[k])
+                }
+                b.WriteString(`</p:grpSp>`)
+                idx = j
         }
 
         b.WriteString(`</p:spTree></p:cSld>`)
@@ -838,6 +899,8 @@ func (w *pptxWriter) contentTypes() string {
         b.WriteString(`<Default Extension="jpg" ContentType="image/jpeg"/>`)
         b.WriteString(`<Default Extension="gif" ContentType="image/gif"/>`)
         b.WriteString(`<Default Extension="bmp" ContentType="image/bmp"/>`)
+        b.WriteString(`<Default Extension="svg" ContentType="image/svg+xml"/>`)
+        b.WriteString(`<Default Extension="webp" ContentType="image/webp"/>`)
         b.WriteString(`<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>`)
         b.WriteString(`<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>`)
         b.WriteString(`<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>`)

@@ -24,6 +24,7 @@ import (
         "encoding/xml"
         "fmt"
         "io"
+        "math"
         "sort"
         "strconv"
         "strings"
@@ -93,6 +94,17 @@ type shapeDef struct {
         Link       string  `json:"link,omitempty"`       // 超链接目标（a:hlinkClick 的 rel Target）
         Paras     []paraDef `json:"paras,omitempty"`     // 逐段落逐 run 的完整样式
         Img       string    `json:"img,omitempty"`       // 图片 data URL
+        GroupID   string    `json:"groupId,omitempty"`  // 所属组合（p:grpSp）ID；非组内形状为空
+}
+
+// grpXfrm 组形状（p:grpSp）的坐标系（EMU）：
+// off/ext 为组在父空间中的包围框，chOff/chExt 为子形状空间的框；
+// 子形状绝对坐标 = chOff + (child - chOff) * ext / chExt（每轴独立）。
+type grpXfrm struct {
+        offX, offY, extCx, extCy         int64
+        chOffX, chOffY, chExtCx, chExtCy int64
+        sawCh bool   // xfrm 是否显式给出 chOff/chExt（缺省 = off/ext）
+        gid   string // 组 ID（grpN 递增）
 }
 
 type slideContent struct {
@@ -1054,6 +1066,10 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
         var sawOff, sawExt bool // 当前形状是否自带完整 xfrm（占位符可继承版式/母版）
         var curPhIdx string     // 当前占位符 idx
 
+        // 组（p:grpSp）上下文栈：支持嵌套；栈顶为最内层组
+        var grpStack []grpXfrm
+        grpN := 0
+
         // 文本形状累积状态
         var paras []paraDef  // 当前形状的所有段落
         var curPara *paraDef // 当前段落
@@ -1197,6 +1213,35 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
                 shapeDefault = runDef{}
         }
 
+        // finishChild 追加子形状：先把坐标经组栈自内向外逐层绝对化，再打上最内层组 ID。
+        // 组内子形状的文字/样式解析（paras 等）不受影响，仅几何被换算。
+        // 每层换算（每轴独立）：abs = off + (child - chOff) * ext / chExt，
+        // 即子空间框 [chOff, chOff+chExt] 映射到父空间框 [off, off+ext]
+        // （chOff=off 时等价于 abs = chOff + (child-chOff)*ext/chExt）。
+        finishChild := func(sd *shapeDef) {
+                for i := len(grpStack) - 1; i >= 0; i-- {
+                        g := &grpStack[i]
+                        chx, chy, cex, cey := g.chOffX, g.chOffY, g.chExtCx, g.chExtCy
+                        if !g.sawCh {
+                                // chOff/chExt 缺省 = off/ext（此时换算为恒等）
+                                chx, chy, cex, cey = g.offX, g.offY, g.extCx, g.extCy
+                        }
+                        // 除零保护：chExt 为 0 时该轴不换算
+                        if cex != 0 {
+                                sd.X = g.offX + int64(math.Round(float64(sd.X-chx)*float64(g.extCx)/float64(cex)))
+                                sd.Cx = int64(math.Round(float64(sd.Cx) * float64(g.extCx) / float64(cex)))
+                        }
+                        if cey != 0 {
+                                sd.Y = g.offY + int64(math.Round(float64(sd.Y-chy)*float64(g.extCy)/float64(cey)))
+                                sd.Cy = int64(math.Round(float64(sd.Cy) * float64(g.extCy) / float64(cey)))
+                        }
+                }
+                if len(grpStack) > 0 {
+                        sd.GroupID = grpStack[len(grpStack)-1].gid
+                }
+                shapes = append(shapes, *sd)
+        }
+
         for {
                 tok, err := dec.Token()
                 if err != nil {
@@ -1207,6 +1252,11 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
                 case xml.StartElement:
                         local := t.Name.Local
                         switch local {
+                        case "grpSp":
+                                // 组合形状：压栈组上下文（off/ext/chOff/chExt 在随后的 grpSpPr/xfrm 中读到）
+                                finalizeShape()
+                                grpN++
+                                grpStack = append(grpStack, grpXfrm{gid: fmt.Sprintf("grp%d", grpN)})
                         case "sp":
                                 finalizeShape()
                                 cur = &shapeDef{Kind: "text"}
@@ -1256,6 +1306,17 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
                                                 }
                                         }
                                         sawOff = true
+                                } else if n := len(grpStack); n > 0 {
+                                        // 组自身 xfrm 的 off（组 xfrm 先于子形状出现）
+                                        g := &grpStack[n-1]
+                                        for _, a := range t.Attr {
+                                                switch a.Name.Local {
+                                                case "x":
+                                                        g.offX = atoi64(a.Value)
+                                                case "y":
+                                                        g.offY = atoi64(a.Value)
+                                                }
+                                        }
                                 }
                         case "ext":
                                 if cur != nil && !inBlipFill {
@@ -1268,6 +1329,43 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
                                                 }
                                         }
                                         sawExt = true
+                                } else if n := len(grpStack); n > 0 {
+                                        g := &grpStack[n-1]
+                                        for _, a := range t.Attr {
+                                                switch a.Name.Local {
+                                                case "cx":
+                                                        g.extCx = atoi64(a.Value)
+                                                case "cy":
+                                                        g.extCy = atoi64(a.Value)
+                                                }
+                                        }
+                                }
+                        case "chOff":
+                                // 组子空间偏移（仅出现在 grpSp 的 xfrm 里）
+                                if n := len(grpStack); n > 0 {
+                                        g := &grpStack[n-1]
+                                        for _, a := range t.Attr {
+                                                switch a.Name.Local {
+                                                case "x":
+                                                        g.chOffX = atoi64(a.Value)
+                                                case "y":
+                                                        g.chOffY = atoi64(a.Value)
+                                                }
+                                        }
+                                        g.sawCh = true
+                                }
+                        case "chExt":
+                                if n := len(grpStack); n > 0 {
+                                        g := &grpStack[n-1]
+                                        for _, a := range t.Attr {
+                                                switch a.Name.Local {
+                                                case "cx":
+                                                        g.chExtCx = atoi64(a.Value)
+                                                case "cy":
+                                                        g.chExtCy = atoi64(a.Value)
+                                                }
+                                        }
+                                        g.sawCh = true
                                 }
                         case "txBody":
                                 inTxBody = true
@@ -1548,11 +1646,21 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
                                                 cur.Vanchor = bodyVanchor
                                         }
                                         finalizeShape()
-                                        shapes = append(shapes, *cur)
+                                        finishChild(cur)
                                         cur = nil
                                         inTxBody = false
                                         bodyVanchor = ""
                                 }
+                        case "grpSp":
+                                // 组结束：出栈（子形状已在追加时换算/打 ID）
+                                finalizeShape()
+                                if n := len(grpStack); n > 0 {
+                                        grpStack = grpStack[:n-1]
+                                }
+                        case "blipFill":
+                                // blipFill 结束后（如 pic 的 spPr）出现的 a:ext 属于形状尺寸，
+                                // 不能再被 !inBlipFill 守卫误吞（否则图片宽高恒为 0 且污染组 xfrm）
+                                inBlipFill = false
                         case "pic":
                                 if cur != nil {
                                         // 解析图片字节
@@ -1564,7 +1672,7 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
                                                 }
                                         }
                                         finalizeShape()
-                                        shapes = append(shapes, *cur)
+                                        finishChild(cur)
                                         cur = nil
                                         inPic = false
                                         inBlipFill = false

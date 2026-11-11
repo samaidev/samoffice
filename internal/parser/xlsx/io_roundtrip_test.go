@@ -1,7 +1,12 @@
 package xlsx
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -323,6 +328,117 @@ func TestLiteralListValidationRef(t *testing.T) {
 	}
 	if got := literalList("Sheet1!$A$1:$A$3"); got != "" {
 		t.Errorf("literalList cross-sheet ref = %q, want empty", got)
+	}
+}
+
+// TestRoundTripImagesColWidthsFreeze 验证新增的 sheet 级字段（浮动图片、列宽、
+// 冻结窗格、货币格式、垂直对齐与自动换行）能完整走 Write → Read 一遍。
+func TestRoundTripImagesColWidthsFreeze(t *testing.T) {
+	// 生成一张 3x2 红色 PNG（内存中构造，无需外部资源）
+	var pngBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	for x := 0; x < 3; x++ {
+		for y := 0; y < 2; y++ {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	pngB64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
+
+	wb := workbookJSON{Sheets: []sheetJSON{{
+		Name: "S1", Rows: 10, Cols: 10,
+		ColWidths: map[string]float64{"0": 120},
+		Freeze:    "B2",
+		Images: []imageJSON{{
+			Row: 4, Col: 1, Base64: pngB64, Ext: "png",
+			Width: 90, Height: 60,
+		}},
+		Cells: map[string]cellJSON{
+			"0-0": {Value: "12.5", Fmt: "currency"},
+			"1-0": {Value: "长文本", Valign: "top", Wrap: true},
+		},
+	}}}
+	data, err := json.Marshal(wb)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "rt2.xlsx")
+	if err := WriteXLSX(path, string(data)); err != nil {
+		t.Fatalf("WriteXLSX: %v", err)
+	}
+
+	// 直接用 excelize 校验写盘结果
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	w, err := f.GetColWidth("S1", "A")
+	if err != nil {
+		t.Fatalf("GetColWidth: %v", err)
+	}
+	if px := w*7 + 5; px < 119 || px > 121 {
+		t.Errorf("col A width chars=%f → px=%f, want ≈120", w, px)
+	}
+	panes, err := f.GetPanes("S1")
+	if err != nil || !panes.Freeze || panes.XSplit != 1 || panes.YSplit != 1 {
+		t.Errorf("panes = %+v (err=%v), want freeze B2 (x=1,y=1)", panes, err)
+	}
+	picCells, err := f.GetPictureCells("S1")
+	if err != nil || len(picCells) != 1 {
+		t.Fatalf("GetPictureCells = %v (err=%v), want 1 picture", picCells, err)
+	}
+	pics, err := f.GetPictures("S1", picCells[0])
+	if err != nil || len(pics) != 1 {
+		t.Fatalf("GetPictures = %d (err=%v), want 1", len(pics), err)
+	}
+	gotBytes, _ := base64.StdEncoding.DecodeString(pngB64)
+	if !bytes.Equal(pics[0].File, gotBytes) {
+		t.Errorf("picture bytes mismatch")
+	}
+	sid, _ := f.GetCellStyle("S1", "A1")
+	st, _ := f.GetStyle(sid)
+	if st == nil || st.CustomNumFmt == nil || *st.CustomNumFmt != "¥#,##0.00" {
+		if st != nil {
+			t.Errorf("A1 numfmt = %v, want ¥#,##0.00", st.CustomNumFmt)
+		}
+	}
+	sid, _ = f.GetCellStyle("S1", "A2")
+	st, _ = f.GetStyle(sid)
+	if st == nil || st.Alignment == nil || !strings.EqualFold(st.Alignment.Vertical, "top") || !st.Alignment.WrapText {
+		t.Errorf("A2 alignment = %+v, want vertical=top wrap=true", st.Alignment)
+	}
+	f.Close()
+
+	// 再用 ReadXLSX 读回，校验 JSON 字段
+	jsonStr, err := ReadXLSX(path)
+	if err != nil {
+		t.Fatalf("ReadXLSX: %v", err)
+	}
+	var back workbookJSON
+	if err := json.Unmarshal([]byte(jsonStr), &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(back.Sheets) == 0 {
+		t.Fatal("no sheets")
+	}
+	sj := back.Sheets[0]
+	if got := sj.ColWidths["0"]; got < 119 || got > 121 {
+		t.Errorf("round trip colWidths[0] = %v, want ≈120", got)
+	}
+	if sj.Freeze != "B2" {
+		t.Errorf("round trip freeze = %q, want B2", sj.Freeze)
+	}
+	if len(sj.Images) != 1 || sj.Images[0].Base64 != pngB64 || sj.Images[0].Ext != "png" || sj.Images[0].Row != 4 || sj.Images[0].Col != 1 {
+		t.Errorf("round trip images = %+v, want 1 png at (4,1) with same bytes", sj.Images)
+	}
+	if got := sj.Cells["0-0"].Fmt; got != "currency" {
+		t.Errorf("round trip A1 fmt = %q, want currency", got)
+	}
+	if sj.Cells["1-0"].Valign != "top" || !sj.Cells["1-0"].Wrap {
+		t.Errorf("round trip A2 valign/wrap = %q/%v, want top/true", sj.Cells["1-0"].Valign, sj.Cells["1-0"].Wrap)
 	}
 }
 

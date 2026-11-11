@@ -17,6 +17,20 @@ import { decideOpen } from './lib/openroute'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
+// 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
+type SheetData = {
+  name: string
+  cells: Record<string, any>
+  rows?: number
+  cols?: number
+  // 0 基列号 → 像素宽（默认 80px 不写入）
+  colWidths?: Record<number, number>
+  // 冻结窗格锚点单元格名（如 "C3"），空表示未冻结
+  freeze?: string
+  // 浮动图片（base64 不含 data: 前缀）
+  images?: { row: number; col: number; base64: string; ext: string; width: number; height: number }[]
+}
+
 // 一个已打开的文件窗口（标签页）。持有该窗口的完整数据快照，切换时恢复，避免多文件互相覆盖。
 interface OpenWindow {
   id: number
@@ -26,9 +40,9 @@ interface OpenWindow {
   doc?: Document
   md?: string
   html?: string
-  sheets?: { name: string; cells: Record<string, any> }[]
+  sheets?: SheetData[]
   slides?: SlideData[]
-  sheetSnapshot?: { name: string; rows: number; cols: number; cells: Record<string, any> }[] | null
+  sheetSnapshot?: SheetData[] | null
   slideSnapshot?: SlideData[] | null
   pdf?: { url: string; name: string; nonce: number } | null
   sheetEpoch: number
@@ -169,9 +183,9 @@ ${t('sample.md.more')}
   const [doc, setDoc] = useState<Document>(emptyDoc)
   const [spellErrors, setSpellErrors] = useState<SpellError[]>([])
   // 打开 xlsx/xls 时传入表格编辑器的初始 sheet 数据；epoch 用于强制重挂载以加载新文件
-  const [sheetInitial, setSheetInitial] = useState<{ name: string; cells: Record<string, any> }[] | null>(null)
-  // SpreadsheetEditor 回传的完整工作簿快照（含边框/合并/填充），用于保存 xlsx
-  const [sheetSnapshot, setSheetSnapshot] = useState<{ name: string; rows: number; cols: number; cells: Record<string, any> }[] | null>(null)
+  const [sheetInitial, setSheetInitial] = useState<SheetData[] | null>(null)
+  // SpreadsheetEditor 回传的完整工作簿快照（含边框/合并/填充/列宽/图片），用于保存 xlsx
+  const [sheetSnapshot, setSheetSnapshot] = useState<SheetData[] | null>(null)
   const [sheetEpoch, setSheetEpoch] = useState(0)
   // SlideEditor 回传的最新幻灯片快照（EMU 坐标），用于保存 pptx
   const [slideSnapshot, setSlideSnapshot] = useState<SlideData[] | null>(null)
@@ -299,7 +313,8 @@ ${t('sample.md.more')}
     setDoc(w.doc ?? emptyDoc)
     setMdContent(w.md ?? sampleMd)
     setHtmlContent(w.html ?? '')
-    setSheetInitial(w.sheets ? w.sheets.map(s => ({ name: s.name, cells: s.cells })) : null)
+    // 保留全部字段（colWidths/freeze/images 等），否则窗口切换后重挂载会丢元数据
+    setSheetInitial(w.sheets ? w.sheets.map(s => ({ ...s })) : null)
     setSlideInitial(w.slides ? w.slides.map(s => ({ ...s })) : null)
     setSheetSnapshot(w.sheetSnapshot ?? null)
     setSlideSnapshot(w.slideSnapshot ?? null)
@@ -481,6 +496,62 @@ ${t('sample.md.more')}
       zoom: win.zoom ?? docZoom, spellErrors: win.spellErrors ?? [],
     } as OpenWindow)
   }
+  // 新建空白窗口后，等编辑器首次回传规范化内容时重设“已保存”基线，
+  // 避免新建标签立刻显示未保存脏点。until 过期后不再生效（防止吞掉真实编辑）。
+  const pendingBaselineRef = useRef<{ path: string; kind: 'document' | 'slide'; until: number } | null>(null)
+
+  // DocumentEditor 内容回流：命中新建基线窗口时以回传 UDM 重设指纹基线
+  const handleDocChange = (d: Document) => {
+    setDoc(d)
+    const p = pendingBaselineRef.current
+    if (p && p.kind === 'document' && Date.now() <= p.until && activeWindow && activeWindow.path === p.path) {
+      pendingBaselineRef.current = null
+      setWindows(prev => prev.map(w => (w.id === activeWindow.id
+        ? { ...w, savedFingerprint: fingerprintOf({ ...w, doc: d }) } : w)))
+    }
+  }
+  // SlideEditor 快照回流：同理重设幻灯片窗口基线
+  const handleSlideSnapshot = (slides: SlideData[]) => {
+    setSlideSnapshot(slides)
+    const p = pendingBaselineRef.current
+    if (p && p.kind === 'slide' && Date.now() <= p.until && activeWindow && activeWindow.path === p.path) {
+      pendingBaselineRef.current = null
+      setWindows(prev => prev.map(w => (w.id === activeWindow.id
+        ? { ...w, slideSnapshot: slides, savedFingerprint: fingerprintOf({ ...w, slideSnapshot: slides }) } : w)))
+    }
+  }
+
+  // 新建空白文件：不经过磁盘，直接用内存初始数据激活一个新窗口标签。
+  // path 使用不带盘符的伪路径（含扩展名），保证保存时永远走“另存为”对话框。
+  const handleNewFile = (kind: 'document' | 'spreadsheet' | 'slide' | 'markdown') => {
+    setFilesOpen(false)
+    setMenuOpen(false)
+    const seq = Date.now()
+    if (kind === 'document') {
+      const path = `新建文档-${seq}.docx`
+      pendingBaselineRef.current = { path, kind: 'document', until: Date.now() + 1500 }
+      activateWindowData({ type: 'document', path, title: t('app.untitled'), doc: emptyDoc })
+    } else if (kind === 'spreadsheet') {
+      const path = `新建表格-${seq}.xlsx`
+      activateWindowData({
+        type: 'spreadsheet', path, title: t('app.untitled'),
+        sheets: [{ name: t('app.sheet1') || 'Sheet1', cells: {} }],
+        sheetEpoch: sheetEpoch + 1,
+      })
+    } else if (kind === 'slide') {
+      const path = `新建演示-${seq}.pptx`
+      pendingBaselineRef.current = { path, kind: 'slide', until: Date.now() + 1500 }
+      activateWindowData({
+        type: 'slide', path, title: t('app.untitled'),
+        slides: [{ title: '', content: '', bg: '#ffffff', shapes: [], pageW: 12192000, pageH: 6858000 } as SlideData],
+        slideEpoch: slideEpoch + 1,
+      })
+    } else {
+      const path = `新建笔记-${seq}.md`
+      activateWindowData({ type: 'markdown', path, title: t('app.untitled'), md: '' })
+    }
+  }
+
   const [toast, setToast] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -1048,6 +1119,33 @@ ${t('sample.md.more')}
       return
     }
 
+    // Excel 选项卡：走原生 xlsx 写盘（保留值/格式/合并/列宽/图片），必须放在
+    // fmt 推断与通用“另存为”对话框之前，否则新建表格会按 docx 过滤器另存、
+    // 甚至被 writeDocument 写成 docx（旧实现只判断 filePath 扩展名的遗留 bug）。
+    if (tab === 'spreadsheet') {
+      const hasRealXlsxPath = /^[A-Za-z]:[\\/]/.test(filePath) && /\.xlsx?$/i.test(filePath)
+      let target = filePath
+      if (opts.forceDialog || !hasRealXlsxPath) {
+        const baseName = filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || ''
+        const defaultName = baseName || t('app.untitled')
+        target = await backend.saveFileDialog(defaultName, 'xlsx')
+        if (!target) return // 用户取消
+        if (!/\.xlsx?$/i.test(target)) target += '.xlsx'
+      }
+      setLoading(true)
+      try {
+        await backend.writeXLSX(target, JSON.stringify({ sheets: sheetSnapshot || [] }))
+        syncActivePath(target)
+        const name = target.split(/[\\/]/).pop() || target
+        showToast(t('app.saved', { name }))
+      } catch (e: any) {
+        showToast(t('app.saveFailed', { msg: e.message }))
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     const fmt = (format ||
       (filePath.toLowerCase().endsWith('.pdf') ? 'pdf' : 'docx')) as 'docx' | 'pdf'
 
@@ -1061,21 +1159,6 @@ ${t('sample.md.more')}
       const defaultName = baseName || doc.meta?.title || t('app.untitled')
       target = await backend.saveFileDialog(defaultName, fmt)
       if (!target) return // 用户取消
-    }
-
-    // Excel 文件走原生 xlsx 写盘（保留值/格式/合并/行列增删），绕开 UDM 中转
-    if (/\.xlsx?$/i.test(filePath) && tab === 'spreadsheet') {
-      try {
-        await backend.writeXLSX(target, JSON.stringify({ sheets: sheetSnapshot || [] }))
-        syncActivePath(target)
-        const name = target.split(/[\\/]/).pop() || target
-        showToast(t('app.saved', { name }))
-      } catch (e: any) {
-        showToast(t('app.saveFailed', { msg: e.message }))
-      } finally {
-        setLoading(false)
-      }
-      return
     }
 
     setLoading(true)
@@ -1271,6 +1354,11 @@ ${t('sample.md.more')}
   const saveable = tab === 'document' || tab === 'spreadsheet' || tab === 'slide' || tab === 'markdown' || tab === 'html'
 
   const fileItems: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
+    // 新建各种文件类型（内存创建，首次保存时才落盘）
+    { icon: '📝', label: t('app.newDocument'), onClick: () => handleNewFile('document') },
+    { icon: '📊', label: t('app.newSpreadsheet'), onClick: () => handleNewFile('spreadsheet') },
+    { icon: '📽', label: t('app.newSlide'), onClick: () => handleNewFile('slide') },
+    { icon: '🗒', label: t('app.newMarkdown'), onClick: () => handleNewFile('markdown') },
     { icon: '📂', label: t('app.openFile'), onClick: handleOpenFile, shortcut: 'Ctrl+O' },
     {
       icon: '🪟',
@@ -1624,7 +1712,7 @@ ${t('sample.md.more')}
               key={activeWindowId ?? 'about'}
               document={doc}
               spellErrors={spellErrors}
-              onChange={(d) => setDoc(d)}
+              onChange={handleDocChange}
               onSpellCheck={triggerSpellCheck}
               zoom={docZoom}
               onZoomChange={setDocZoom}
@@ -1633,7 +1721,7 @@ ${t('sample.md.more')}
             />
           )}
           {tab === 'spreadsheet' && <SpreadsheetEditor key={`${activeWindowId}-${sheetEpoch}`} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} onSheetsChange={setSheetSnapshot} />}
-          {tab === 'slide' && <SlideEditor key={`${activeWindowId}-${slideEpoch}`} initialSlides={slideInitial || undefined} onSlidesChange={setSlideSnapshot} />}
+          {tab === 'slide' && <SlideEditor key={`${activeWindowId}-${slideEpoch}`} initialSlides={slideInitial || undefined} onSlidesChange={handleSlideSnapshot} />}
           {tab === 'markdown' && (
             <MarkdownHtmlEditor
               key={activeWindowId ?? 'md'}

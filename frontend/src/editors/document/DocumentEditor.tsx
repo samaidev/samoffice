@@ -1260,6 +1260,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const newDoc = udmToProseMirror(document, schema)
     const newState = EditorState.create({ doc: newDoc, plugins: view.state.plugins })
     view.updateState(newState)
+    // 新文档加载后同步右侧批注栏（udm.comments 中的批注经 convert 已变回 comment_mark）
+    try { setComments(extractComments(newDoc)) } catch (e) { /* ignore */ }
     if (onSpellCheckRef.current) onSpellCheckRef.current(newDoc.textContent)
   }, [document])
 
@@ -2231,7 +2233,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
   const insertImage = () => {
-    const input = window.window.window.document.createElement('input')
+    // 注意：组件作用域内 document 是 UDM Document prop，DOM 对象须用 window.document
+    const input = window.document.createElement('input')
     input.type = 'file'
     input.accept = 'image/*'
     input.onchange = () => {

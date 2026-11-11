@@ -19,19 +19,36 @@ interface Cell {
   // 被合并覆盖的单元格用 hiddenBy = "r-c" 标记（指向左上角）
   mergeRange?: { rowSpan: number; colSpan: number }
   hiddenBy?: string
+  // valign 垂直对齐 / wrap 自动换行（与后端 io.go cellJSON 对应，excelize Alignment）
+  valign?: 'top' | 'middle' | 'bottom'
+  wrap?: boolean
 }
 interface Selection {
   r1: number; c1: number; r2: number; c2: number
   mode: 'cell' | 'row' | 'col'
 }
+// 浮动图片（前端态）：src 为 dataURL；快照回传时转为 base64/ext（与 io.go imageJSON 对应）
+interface SheetImage { row: number; col: number; src: string; width: number; height: number }
+// 单个 sheet 快照（与后端 io.go sheetJSON 对应：列宽 / 冻结 / 浮动图片）
+interface SheetSnapshot {
+  name: string; rows?: number; cols?: number; cells: Record<string, Cell>
+  // colWidths：0 基列号 → 像素宽（默认 80px 不写入）
+  colWidths?: Record<number, number>
+  // freeze：冻结窗格锚点单元格名（如 "C3"），空表示未冻结
+  freeze?: string
+  // images：浮动图片（base64 不含 data: 前缀）
+  images?: { row: number; col: number; base64: string; ext: string; width: number; height: number }[]
+}
+// 快照回传类型（rows/cols 必填，另带 sheet 级元数据）
+interface SheetSnapshotOut extends SheetSnapshot { rows: number; cols: number }
 interface Props {
   initialRows?: number
   initialCols?: number
   title?: string
   // 外部传入的工作簿数据（如打开 xlsx 时），每个元素对应一个 sheet
-  initialSheets?: { name: string; rows?: number; cols?: number; cells: Record<string, Cell> }[]
+  initialSheets?: SheetSnapshot[]
   // 编辑或切换 sheet 时把完整工作簿快照回传（供保存为 xlsx 使用）
-  onSheetsChange?: (snapshot: { name: string; rows: number; cols: number; cells: Record<string, Cell> }[]) => void
+  onSheetsChange?: (snapshot: SheetSnapshotOut[]) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'data' | 'view'
@@ -55,6 +72,24 @@ function RibbonGroup({ label, children }: any) {
       <div className="text-[10px] font-medium pb-0.5 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{label}</div>
     </div>
   )
+}
+
+// 解析冻结窗格锚点字符串（如 "C3"）为 0 基行列；非法或 A1（无冻结）返回 null
+function parseFreeze(s?: string | null): { r: number; c: number } | null {
+  if (!s) return null
+  const m = s.trim().toUpperCase().match(/^([A-Z]+)(\d+)$/)
+  if (!m) return null
+  const c = colToNum(m[1]) - 1
+  const r = parseInt(m[2], 10) - 1
+  if (isNaN(r) || isNaN(c) || r < 0 || c < 0 || (r === 0 && c === 0)) return null
+  return { r, c }
+}
+// dataURL → { base64, ext }（快照回传后端用；base64 不含 data: 前缀）
+function dataURLToBase64(src: string): { base64: string; ext: string } {
+  const m = src.match(/^data:image\/([a-z0-9.+-]+);base64,([\s\S]*)$/)
+  if (!m) return { base64: '', ext: 'png' }
+  const ext = m[1] === 'jpg' ? 'jpeg' : m[1]
+  return { base64: m[2], ext }
 }
 
 // === SVG 图表渲染组件 ===
@@ -346,11 +381,42 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
   const [sheets, setSheets] = useState(initialSheetList)
   const activeId = sheets.find(s => s.active)?.id ?? 1
+  // 每个 sheet 的列宽（0 基列号 → px）、行高（仅当前会话生效，不持久化）、浮动图片与冻结锚点
+  const [colWidths, setColWidths] = useState<Record<number, Record<number, number>>>(() => {
+    const init: Record<number, Record<number, number>> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => { if (s.colWidths && Object.keys(s.colWidths).length) init[i + 1] = { ...s.colWidths } })
+    return init
+  })
+  const [rowHeights, setRowHeights] = useState<Record<number, Record<number, number>>>({})
+  const [sheetImages, setSheetImages] = useState<Record<number, SheetImage[]>>(() => {
+    const init: Record<number, SheetImage[]> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => {
+      const imgs = (s.images || []).filter(im => im && im.base64).map(im => ({ row: im.row, col: im.col, src: `data:image/${im.ext || 'png'};base64,${im.base64}`, width: im.width, height: im.height }))
+      if (imgs.length) init[i + 1] = imgs
+    })
+    return init
+  })
+  const [sheetFreeze, setSheetFreeze] = useState<Record<number, string>>(() => {
+    const init: Record<number, string> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => { if (s.freeze) init[i + 1] = s.freeze })
+    return init
+  })
+  // 当前选中的浮动图片索引（Delete 键删除）
+  const [selImage, setSelImage] = useState<number | null>(null)
+  // 底部查找替换条（Ctrl+F 呼出）
+  const [findBar, setFindBar] = useState<{ find: string; replace: string } | null>(null)
+  const curColWidths = colWidths[activeId] || {}
+  const curRowHeights = rowHeights[activeId] || {}
+  const curImages = sheetImages[activeId] || []
+  // 列左缘 x（行标题列显示时含 48px 列宽）与行顶 y（px），用于冻结定位与浮动图片定位
+  const colLeft = (c: number) => { let x = showHeadings ? 48 : 0; for (let i = 0; i < c; i++) x += curColWidths[i] || 80; return x }
+  const rowH = (r: number) => curRowHeights[r] || 28
+  const rowTop = (r: number) => { let y = 0; for (let i = 0; i < r; i++) y += rowH(i); return y }
   // 编辑后把当前 sheet 内容同步回 sheetData，保证切换 sheet 不丢数据
   useEffect(() => {
     setSheetData(sd => ({ ...sd, [activeId]: data }))
   }, [data, activeId])
-  // 把完整工作簿快照回传父组件（用于保存为 xlsx，含边框/合并/填充）
+  // 把完整工作簿快照回传父组件（用于保存为 xlsx，含边框/合并/填充/列宽/冻结/图片）
   useEffect(() => {
     if (!onSheetsChange) return
     const snapshot = sheets.map(s => ({
@@ -358,10 +424,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       rows,
       cols,
       cells: sheetData[s.id] || {},
+      // 列宽只回传与默认 80px 不同的列，空表不携带该字段
+      colWidths: Object.fromEntries(Object.entries(colWidths[s.id] || {}).filter(([, w]) => w !== 80)),
+      freeze: sheetFreeze[s.id] || undefined,
+      images: (sheetImages[s.id] || []).map(im => {
+        const { base64, ext } = dataURLToBase64(im.src)
+        return { row: im.row, col: im.col, base64, ext, width: im.width, height: im.height }
+      }).filter(im => im.base64),
     }))
     onSheetsChange(snapshot)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetData, sheets, rows, cols])
+  }, [sheetData, sheets, rows, cols, colWidths, sheetImages, sheetFreeze])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [showChartPanel, setShowChartPanel] = useState(false)
@@ -391,8 +464,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [showGrid, setShowGrid] = useState(true)
   const [showHeadings, setShowHeadings] = useState(true)
   const [showFormulaBar, setShowFormulaBar] = useState(true)
-  // 冻结窗格：冻结到当前活动单元格上方/左侧（真实 sticky 实现）
-  const [freezeAt, setFreezeAt] = useState<{ r: number; c: number } | null>(null)
+  // 冻结窗格：冻结到当前活动单元格上方/左侧（真实 sticky 实现）；初始值从打开的 xlsx 读取
+  const [freezeAt, setFreezeAt] = useState<{ r: number; c: number } | null>(() => parseFreeze(initialSheets?.[0]?.freeze))
   const frozen = freezeAt !== null
   // 行分组（组/取消组）：折叠区间行
   const [rowGroups, setRowGroups] = useState<{ start: number; end: number; collapsed: boolean }[]>([])
@@ -408,15 +481,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const lastCondRef = useRef<null | (() => void)>(null)
   const lastImportRef = useRef<null | (() => void)>(null)
 
-  // Escape 关闭所有弹出面板
+  // Escape 关闭查找条与所有弹出面板
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (findBar) { setFindBar(null); e.preventDefault(); return }
       if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [anyPanelOpen])
+  }, [anyPanelOpen, findBar])
 
   // === 全局快捷键：撤销/重做、复制/剪切/粘贴、字体、清除、创建表、导航 ===
   useEffect(() => {
@@ -429,6 +503,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       // 撤销 / 重做（始终拦截，对标 Excel）
       if (mod && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
       if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return }
+
+      // 查找替换（Ctrl+F 呼出底部查找条）
+      if (mod && key === 'f') { e.preventDefault(); setFindBar({ find: '', replace: '' }); return }
 
       // 复制 / 剪切 / 粘贴
       if (mod && key === 'c') { e.preventDefault(); copyCells(false); return }
@@ -443,8 +520,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       // 创建表（Excel 的 Ctrl+L）
       if (mod && key === 'l') { e.preventDefault(); createTable(); return }
 
-      // 清除内容（Delete / Backspace，仅在非输入框时）
-      if (!mod && (key === 'delete' || key === 'backspace') && !inInput) { e.preventDefault(); clearCellsContent(); return }
+      // 清除内容（Delete / Backspace，仅在非输入框时）；选中浮动图片时优先删图
+      if (!mod && (key === 'delete' || key === 'backspace') && !inInput) {
+        e.preventDefault()
+        if (selImage !== null) { removeImage(selImage); return }
+        clearCellsContent(); return
+      }
 
       // 单元格导航（方向键 / Tab / Enter），仅在非输入框时拦截
       if (!mod && !inInput) {
@@ -463,7 +544,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, selection, clipboard, rows, cols, data, sheets, past, future])
+  }, [active, selection, clipboard, rows, cols, data, sheets, past, future, selImage])
 
   // 鼠标在表格外松开时也结束选区拖拽
   useEffect(() => {
@@ -502,6 +583,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       case 'thousands': return n.toLocaleString('en-US')
       case 'thousands2': return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       case 'int': return String(Math.round(n))
+      case 'currency': return '¥' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      case 'date': return v // 日期值原样显示（打开文件时已是日期字符串，不做序列号换算）
       default: return v
     }
   }
@@ -528,7 +611,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if (cell.formula) {
         const res = evalFormula(cell.formula, data)
         const sres = res === '' ? '' : (typeof res === 'number' ? String(res) : res)
-        if (sres !== cell.value) {
+        // 重算保护：求值结果为 #NAME?/#ERROR 等错误值且单元格已有缓存显示值时，
+        // 不改写 value（保留原显示值，避免覆盖后端算好的结果）
+        if (typeof sres === 'string' && sres.startsWith('#') && cell.value !== '') {
+          next[key] = cell
+        } else if (sres !== cell.value) {
           next[key] = { ...cell, value: sres }
           changed = true
         } else {
@@ -651,6 +738,118 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         }
       return nd
     })
+  }
+  // 清除选区格式（保留 value/formula/valid/合并信息）：字体/填充/边框/对齐/数字格式等
+  const clearSelectionFormat = () => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++)
+        for (let c = c1; c <= c2; c++) {
+          const k = `${r}-${c}`
+          const cell = nd[k]
+          if (!cell) continue
+          nd[k] = {
+            ...cell,
+            bold: undefined, italic: undefined, under: undefined, strike: undefined,
+            color: undefined, bg: undefined, border: undefined, borderColor: undefined,
+            align: undefined, fmt: undefined, fontSize: undefined, fontFamily: undefined,
+            valign: undefined, wrap: undefined,
+          }
+        }
+      return nd
+    })
+  }
+  // 手动重算全部公式（「刷新」按钮）：与自动重算同一套错误值保护
+  const recalcAll = () => {
+    setData(d => {
+      const nd = { ...d }
+      let changed = false
+      for (const key of Object.keys(nd)) {
+        const cell = nd[key]
+        if (!cell.formula) continue
+        const res = evalFormula(cell.formula, d)
+        const sres = res === '' ? '' : (typeof res === 'number' ? String(res) : res)
+        if (typeof sres === 'string' && sres.startsWith('#') && cell.value !== '') continue
+        if (sres !== cell.value) { nd[key] = { ...cell, value: sres }; changed = true }
+      }
+      return changed ? nd : d
+    })
+  }
+  // 推断函数/自动求和的目标引用：多格选区直接用选区；单格时取活动列上方连续数字区
+  const inferFuncRange = (): string => {
+    const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+    const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+    if (r1 !== r2 || c1 !== c2) {
+      if (c1 === c2) return `${colName(c1)}${r1 + 1}:${colName(c1)}${r2 + 1}`
+      if (r1 === r2) return `${colName(c1)}${r1 + 1}:${colName(c2)}${r1 + 1}`
+      return selToRef(selection)
+    }
+    // 单格：活动列上方连续数字区域（不含活动格自身）
+    let top = active.r
+    while (top - 1 >= 0) {
+      const v = (getCell(top - 1, active.c).value ?? '').trim()
+      if (v === '' || isNaN(Number(v))) break
+      top--
+    }
+    if (top >= active.r) return `${colName(active.c)}${active.r + 1}`
+    return `${colName(active.c)}${top + 1}:${colName(active.c)}${active.r}`
+  }
+  // 自动求和 Σ：在活动单元格写入真公式 =SUM(...)（不写静态值）
+  const insertAutoSum = () => {
+    const ref = inferFuncRange()
+    if (!ref) return
+    setCellFmt(active.r, active.c, { formula: `=SUM(${ref})`, value: '' })
+  }
+  // ƒx 函数面板：写对应公式（=AVERAGE(...) 等）而非静态值
+  const applySheetFunc = (fn: string) => {
+    const ref = inferFuncRange()
+    if (!ref) return
+    setCellFmt(active.r, active.c, { formula: `=${fn}(${ref})`, value: '' })
+    setShowFuncPanel(false)
+  }
+  // 全部替换：仅替换字面值单元格（公式单元格不直接改文本），一次历史记录可整体撤销
+  const replaceAllMatches = () => {
+    if (!findBar || !findBar.find) return
+    pushHistory()
+    const q = findBar.find, rep = findBar.replace
+    setData(d => {
+      const nd = { ...d }
+      for (const key in nd) {
+        const cell = nd[key]
+        if (cell.formula) continue
+        const v = cell.value ?? ''
+        if (v.includes(q)) nd[key] = { ...cell, value: v.split(q).join(rep) }
+      }
+      return nd
+    })
+  }
+  // 删除浮动图片（选中后 Delete 或点 ×）
+  const removeImage = (idx: number) => {
+    setSheetImages(m => ({ ...m, [activeId]: (m[activeId] || []).filter((_, i) => i !== idx) }))
+    setSelImage(null)
+  }
+  // 表头右缘拖拽调整列宽（mousemove 实时更新，40~600px）
+  const colResizeRef = useRef<{ c: number; startX: number; startW: number } | null>(null)
+  const startColResize = (e: React.MouseEvent, c: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    colResizeRef.current = { c, startX: e.clientX, startW: curColWidths[c] || 80 }
+    const onMove = (ev: MouseEvent) => {
+      const st = colResizeRef.current
+      if (!st) return
+      const w = Math.max(40, Math.min(600, st.startW + ev.clientX - st.startX))
+      setColWidths(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [st.c]: w } }))
+    }
+    const onUp = () => {
+      colResizeRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
   // 创建表（Ctrl+L）：为选区添加表头加粗 + 细边框 + 隔行底色
   const createTable = () => {
@@ -786,35 +985,93 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
 
   // === 插入 / 删除 行列（重排所有单元格坐标） ===
+  // 行列增删后迁移合并信息：按旧 key → 新 key 映射重建 mergeRange 与 hiddenBy。
+  // 左上角或右下角被删除的合并区域整体拆分，避免错位损坏。
+  const migrateMerges = (oldD: Record<string, Cell>, nd: Record<string, Cell>, keyMap: Record<string, string>) => {
+    // 1) 收集旧合并区域（左上角 key + 跨度）
+    const merges: { tl: string; rowSpan: number; colSpan: number }[] = []
+    for (const key in oldD) {
+      const mr = oldD[key].mergeRange
+      if (mr) merges.push({ tl: key, rowSpan: mr.rowSpan, colSpan: mr.colSpan })
+    }
+    if (!merges.length) return
+    // 2) 清掉新数据里残留的旧标记（对象沿用旧引用，需重建这些单元格）
+    for (const key in nd) {
+      const cell = nd[key]
+      if (cell.mergeRange || cell.hiddenBy) nd[key] = { ...cell, mergeRange: undefined, hiddenBy: undefined }
+    }
+    // 3) 重建：两端都能映射到新 key 才保留，跨度按新端点重算
+    for (const mg of merges) {
+      const parts = mg.tl.split('-').map(Number)
+      const endKey = `${parts[0] + mg.rowSpan - 1}-${parts[1] + mg.colSpan - 1}`
+      const ntl = keyMap[mg.tl]
+      const nend = keyMap[endKey]
+      if (!ntl || !nend) continue
+      const [nr1, nc1] = ntl.split('-').map(Number)
+      const [nr2, nc2] = nend.split('-').map(Number)
+      if (nr2 < nr1 || nc2 < nc1) continue
+      nd[ntl] = { ...(nd[ntl] || { value: '' }), mergeRange: { rowSpan: nr2 - nr1 + 1, colSpan: nc2 - nc1 + 1 } }
+      for (let r = nr1; r <= nr2; r++)
+        for (let c = nc1; c <= nc2; c++) {
+          if (r === nr1 && c === nc1) continue
+          const k = `${r}-${c}`
+          nd[k] = { ...(nd[k] || { value: '' }), hiddenBy: ntl }
+        }
+    }
+  }
   const rebuildRows = (d: Record<string, Cell>, fromRow: number, count: number): Record<string, Cell> => {
     // count>0 插入；count<0 删除，删除以 fromRow 起始的 |count| 行
     const nd: Record<string, Cell> = {}
+    const keyMap: Record<string, string> = {}
     const removeCount = count < 0 ? -count : 0
     for (const key in d) {
       const [r, c] = key.split('-').map(Number)
       let nr = r
       if (count > 0) { if (r >= fromRow) nr = r + count }
       else { if (r >= fromRow + removeCount) nr = r - removeCount; else if (r >= fromRow) continue }
-      nd[`${nr}-${c}`] = d[key]
+      const nk = `${nr}-${c}`
+      keyMap[key] = nk
+      nd[nk] = d[key]
     }
+    // 迁移合并区域与 hiddenBy 引用（按位移映射 key），避免合并信息错位
+    migrateMerges(d, nd, keyMap)
     return nd
   }
   const rebuildCols = (d: Record<string, Cell>, fromCol: number, count: number): Record<string, Cell> => {
     const nd: Record<string, Cell> = {}
+    const keyMap: Record<string, string> = {}
     const removeCount = count < 0 ? -count : 0
     for (const key in d) {
       const [r, c] = key.split('-').map(Number)
       let nc = c
       if (count > 0) { if (c >= fromCol) nc = c + count }
       else { if (c >= fromCol + removeCount) nc = c - removeCount; else if (c >= fromCol) continue }
-      nd[`${r}-${nc}`] = d[key]
+      const nk = `${r}-${nc}`
+      keyMap[key] = nk
+      nd[nk] = d[key]
     }
+    migrateMerges(d, nd, keyMap)
     return nd
+  }
+  // 行/列增删后按位移调整尺寸表（列宽或行高）
+  const shiftSizes = (m: Record<number, number>, from: number, count: number): Record<number, number> => {
+    if (!count) return m
+    const out: Record<number, number> = {}
+    const rc = count < 0 ? -count : 0
+    for (const k in m) {
+      const i = Number(k)
+      let ni = i
+      if (count > 0) { if (i >= from) ni = i + count }
+      else { if (i >= from + rc) ni = i - rc; else if (i >= from) continue }
+      out[ni] = m[k]
+    }
+    return out
   }
   const insertRows = (at: number, count: number) => {
     pushHistory()
     setData(d => rebuildRows(d, at, count))
     setRows(r => r + count)
+    setRowHeights(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, count) }))
     commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
     setActive({ r: at, c: active.c })
   }
@@ -822,6 +1079,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     pushHistory()
     setData(d => rebuildRows(d, at, -count))
     setRows(r => Math.max(1, r - count))
+    setRowHeights(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, -count) }))
     commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
     setActive({ r: at, c: active.c })
   }
@@ -829,6 +1087,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     pushHistory()
     setData(d => rebuildCols(d, at, count))
     setCols(c => c + count)
+    setColWidths(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, count) }))
     commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
     setActive({ r: active.r, c: at })
   }
@@ -836,6 +1095,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     pushHistory()
     setData(d => rebuildCols(d, at, -count))
     setCols(c => Math.max(1, c - count))
+    setColWidths(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, -count) }))
     commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
     setActive({ r: active.r, c: at })
   }
@@ -941,33 +1201,78 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }
     setData(nd)
   }
-  const switchSheet = (id: number) => { setSheetData(sd => ({ ...sd, [activeId]: data })); setData(sheetData[id] || {}); setSheets(s => s.map(x => ({ ...x, active: x.id === id }))); setPast([]); setFuture([]) }
+  const switchSheet = (id: number) => {
+    setSheetData(sd => ({ ...sd, [activeId]: data }))
+    // 保存当前 sheet 冻结锚点并恢复目标 sheet 的
+    setSheetFreeze(m => ({ ...m, [activeId]: freezeAt ? `${colName(freezeAt.c)}${freezeAt.r + 1}` : '' }))
+    setData(sheetData[id] || {})
+    setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
+    setPast([]); setFuture([])
+    setFreezeAt(parseFreeze(sheetFreeze[id]))
+    setSelImage(null)
+  }
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
+  // 删除工作表（至少保留 1 个；删除当前表时活动标签回退到相邻表）
+  const deleteSheet = (id: number) => {
+    if (sheets.length <= 1) { alert(tf('sheet.lastSheetWarn', '至少需要保留一个工作表')); return }
+    const target = sheets.find(s => s.id === id)
+    if (!target) return
+    if (!window.confirm(tf('sheet.deleteSheetConfirm', `确定删除工作表「${target.name}」吗？`, { name: target.name }))) return
+    const remaining = sheets.filter(s => s.id !== id)
+    setSheets(remaining)
+    setSheetData(m => { const nm = { ...m }; delete nm[id]; return nm })
+    setColWidths(m => { const nm = { ...m }; delete nm[id]; return nm })
+    setRowHeights(m => { const nm = { ...m }; delete nm[id]; return nm })
+    setSheetImages(m => { const nm = { ...m }; delete nm[id]; return nm })
+    setSheetFreeze(m => { const nm = { ...m }; delete nm[id]; return nm })
+    if (id === activeId) {
+      const next = remaining[0]
+      setData(sheetData[next.id] || {})
+      setFreezeAt(parseFreeze(sheetFreeze[next.id]))
+    }
+    setPast([]); setFuture([]); setSelImage(null)
+  }
   const activeSheet = sheets.find(s => s.active) || sheets[0]
 
   // 排序：保留整行单元格对象（样式/公式/格式），数值感知，一次历史记录
   const sortRangeByCol = (asc: boolean, col: number, headerRow: boolean) => {
+    const start = headerRow ? 1 : 0
+    // 排序区域内含合并单元格时整行搬运会错位损坏布局：先提示并自动拆分
+    let hasMerge = false
+    for (const key in data) {
+      if (data[key].mergeRange || data[key].hiddenBy) {
+        const r = Number(key.split('-')[0])
+        if (r >= start) { hasMerge = true; break }
+      }
+    }
+    if (hasMerge && !window.confirm(tf('sheet.sortMergeWarn', '排序区域内含合并单元格，将先拆分合并再排序，是否继续？'))) return
     pushHistory()
     setData(d => {
-      const start = headerRow ? 1 : 0
+      // 先拆分区域内所有合并（merge/hidden 指针不随行搬运）
+      const stripped: Record<string, Cell> = { ...d }
+      for (const key in stripped) {
+        const cell = stripped[key]
+        if ((cell.mergeRange || cell.hiddenBy) && Number(key.split('-')[0]) >= start)
+          stripped[key] = { ...cell, mergeRange: undefined, hiddenBy: undefined }
+      }
       const idx: number[] = []
       for (let r = start; r < rows; r++) idx.push(r)
-      const numeric = idx.every(r => { const v = (d[`${r}-${col}`]?.value ?? '').trim(); return v === '' || !isNaN(Number(v)) })
+      const numeric = idx.every(r => { const v = (stripped[`${r}-${col}`]?.value ?? '').trim(); return v === '' || !isNaN(Number(v)) })
       idx.sort((a, b) => {
-        const va = (d[`${a}-${col}`]?.value ?? '').trim()
-        const vb = (d[`${b}-${col}`]?.value ?? '').trim()
+        const va = (stripped[`${a}-${col}`]?.value ?? '').trim()
+        const vb = (stripped[`${b}-${col}`]?.value ?? '').trim()
         let cmp: number
         if (numeric) cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0)
         else cmp = va.localeCompare(vb, 'zh-Hans-CN')
         return asc ? cmp : -cmp
       })
-      const nd: Record<string, Cell> = { ...d }
+      const nd: Record<string, Cell> = { ...stripped }
       idx.forEach((srcRow, i) => {
         const dstRow = start + i
         if (srcRow === dstRow) return
         for (let c = 0; c < cols; c++) {
           const k = `${srcRow}-${c}`
-          if (d[k]) nd[`${dstRow}-${c}`] = d[k]
+          if (stripped[k]) nd[`${dstRow}-${c}`] = stripped[k]
           else delete nd[`${dstRow}-${c}`]
         }
       })
@@ -1011,6 +1316,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     { id: 'home', label: t('sheet.ribbon.home') }, { id: 'insert', label: t('sheet.ribbon.insert') }, { id: 'data', label: t('sheet.ribbon.data') }, { id: 'view', label: t('sheet.ribbon.view') },
   ]
 
+  // 查找匹配集合（查找条打开且有关键词时高亮所有匹配单元格）
+  const findKeys = (() => {
+    const s = new Set<string>()
+    if (!findBar || !findBar.find) return s
+    const q = findBar.find.toLowerCase()
+    for (const key in data) {
+      const cell = data[key]
+      if ((cell.value || '').toLowerCase().includes(q) || (cell.formula || '').toLowerCase().includes(q)) s.add(key)
+    }
+    return s
+  })()
+
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--color-bg-alt)', position: 'relative' }}>
       {/* Ribbon Tab 栏 — 可横向滚动，右侧信息固定 */}
@@ -1036,6 +1353,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           <RibbonGroup label={t('sheet.cell')}>
             <RibbonButton icon="⧉" label={t('sheet.copy')} onClick={() => copyCells(false)} onMouseDown={(e: any) => e.preventDefault()} />
             <RibbonButton icon="📋" label={t('sheet.paste')} onClick={() => pasteCells()} disabled={!clipboard} onMouseDown={(e: any) => e.preventDefault()} />
+          </RibbonGroup>
+          {/* 撤销 / 重做（对接既有历史栈） */}
+          <RibbonGroup label={tf('sheet.history', '历史')}>
+            <RibbonButton icon="↩" label={tf('sheet.undo', '撤销')} onClick={() => undo()} disabled={!past.length} data-testid="excel-undo-btn" title={tf('sheet.undoTitle', '撤销上一步 (Ctrl+Z)')} />
+            <RibbonButton icon="↪" label={tf('sheet.redo', '重做')} onClick={() => redo()} disabled={!future.length} data-testid="excel-redo-btn" title={tf('sheet.redoTitle', '重做 (Ctrl+Y)')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.font')}>
             <RibbonButton icon="B" label={t('sheet.bold')} onClick={() => setCellFmtRange({ bold: !getCell(active.r, active.c).bold })} active={getCell(active.r, active.c).bold} />
@@ -1063,6 +1385,20 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 </div>
               )}
             </div>
+            {/* 字体族 / 字号下拉（写 cell.fontFamily / cell.fontSize，作用于选区） */}
+            <select value={getCell(active.r, active.c).fontFamily || ''} onChange={e => setCellFmtRange({ fontFamily: e.target.value || undefined })}
+              className="text-xs px-1 py-1 rounded border max-w-[92px]" title={tf('sheet.fontFamily', '字体')}
+              style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>
+              <option value="">{tf('sheet.fontDefault', '默认字体')}</option>
+              {['微软雅黑', '宋体', '黑体', '楷体', 'Arial', 'Times New Roman', 'Consolas'].map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <select value={getCell(active.r, active.c).fontSize ? String(getCell(active.r, active.c).fontSize) : ''} onChange={e => setCellFmtRange({ fontSize: e.target.value ? Number(e.target.value) : undefined })}
+              className="text-xs px-1 py-1 rounded border w-[62px]" title={tf('sheet.fontSize', '字号')}
+              style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>
+              <option value="">{tf('sheet.sizeDefault', '字号')}</option>
+              {[10, 11, 12, 14, 16, 18, 20, 24, 28, 36].map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <RibbonButton icon="🧹" label={tf('sheet.clearFormat', '清除格式')} onClick={() => clearSelectionFormat()} title={tf('sheet.clearFormatTitle', '清除选区格式（保留内容）')} />
           </RibbonGroup>
           <RibbonGroup label={tf('sheet.border', '边框')}>
             <RibbonButton icon="▫" label={tf('sheet.borderThin', '细线')} onClick={() => setCellFmtRange({ border: 'thin', borderColor: '#000000' })} title={tf('sheet.borderThin', '细线边框')} />
@@ -1078,6 +1414,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <RibbonButton icon="⬅" label={t('sheet.alignLeft')} onClick={() => setCellFmtRange({ align: 'left' })} active={getCell(active.r, active.c).align === 'left'} />
             <RibbonButton icon="⬌" label={t('sheet.alignCenter')} onClick={() => setCellFmtRange({ align: 'center' })} active={getCell(active.r, active.c).align === 'center'} />
             <RibbonButton icon="➡" label={t('sheet.alignRight')} onClick={() => setCellFmtRange({ align: 'right' })} active={getCell(active.r, active.c).align === 'right'} />
+            {/* 垂直对齐（顶/中/底）与自动换行（写 cell.valign / cell.wrap） */}
+            <RibbonButton icon="⤒" label={tf('sheet.valignTop', '顶对齐')} onClick={() => setCellFmtRange({ valign: 'top' })} active={getCell(active.r, active.c).valign === 'top'} />
+            <RibbonButton icon="⇕" label={tf('sheet.valignMiddle', '垂直居中')} onClick={() => setCellFmtRange({ valign: 'middle' })} active={getCell(active.r, active.c).valign === 'middle'} />
+            <RibbonButton icon="⤓" label={tf('sheet.valignBottom', '底对齐')} onClick={() => setCellFmtRange({ valign: 'bottom' })} active={getCell(active.r, active.c).valign === 'bottom'} />
+            <RibbonButton icon="⏎" label={tf('sheet.wrapText', '换行')} onClick={() => setCellFmtRange({ wrap: !getCell(active.r, active.c).wrap })} active={!!getCell(active.r, active.c).wrap} title={tf('sheet.wrapTextTitle', '自动换行')} />
           </RibbonGroup>
           <RibbonGroup label={tf('sheet.merge', '合并')}>
             <RibbonButton icon="⊟" label={tf('sheet.mergeCenter', '合并居中')} onClick={() => {
@@ -1095,13 +1436,31 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <RibbonButton icon="⊞" label={tf('sheet.split', '拆分')} onClick={() => splitCell(active.r, active.c)} active={isMerged(active.r, active.c)} title={tf('sheet.splitTitle', '拆分单元格')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.number')}>
-            {/* 数字格式：只改格式不改值（修复旧的破坏性改值：值×100 加 % / 丢精度） */}
-            <RibbonButton icon="%" label={t('sheet.percent')} onClick={() => setCellFmtRange({ fmt: getCell(active.r, active.c).fmt === 'percent' ? undefined : 'percent' })} active={getCell(active.r, active.c).fmt === 'percent'} title="0%" />
-            <RibbonButton icon="0.0" label={t('sheet.decimal')} onClick={() => setCellFmtRange({ fmt: getCell(active.r, active.c).fmt === '0.00' ? undefined : '0.00' })} active={getCell(active.r, active.c).fmt === '0.00'} title="0.00" />
+            {/* 数字格式下拉：只改格式不改值；token 与后端 io.go fmtToken/numFmtFromToken 对应 */}
+            <select value={getCell(active.r, active.c).fmt || ''} onChange={e => setCellFmtRange({ fmt: e.target.value || undefined })}
+              className="text-xs px-1 py-1 rounded border w-[98px]" title={tf('sheet.numFmt', '数字格式')}
+              style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>
+              <option value="">{tf('sheet.fmtGeneral', '常规')}</option>
+              <option value="int">{tf('sheet.fmtInt', '整数')}</option>
+              <option value="thousands">{tf('sheet.fmtThousands', '千分位')}</option>
+              <option value="thousands2">{tf('sheet.fmtThousands2', '千分位2')}</option>
+              <option value="0.00">0.00</option>
+              <option value="percent">{t('sheet.percent')}</option>
+              <option value="percent2">{tf('sheet.fmtPercent2', '百分比2')}</option>
+              <option value="currency">{tf('sheet.fmtCurrency', '货币')}</option>
+              <option value="date">{tf('sheet.fmtDate', '日期')}</option>
+            </select>
+            {/* 自动求和 Σ：对选区或活动列上方连续数字区域写真公式 =SUM(...) */}
+            <RibbonButton icon="Σ" label={tf('sheet.autoSum', '求和')} onClick={() => insertAutoSum()} title={tf('sheet.autoSumTitle', '对上方连续数字区域或选区写入 =SUM 公式')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.cellOps')}>
             <RibbonButton icon="↧+" label={t('sheet.addRow')} onClick={() => setRows(r => r + 1)} />
             <RibbonButton icon="↦+" label={t('sheet.addColumn')} onClick={() => setCols(c => c + 1)} />
+            {/* 在活动位置插入/删除行列（复用既有 insert/delete 逻辑，含合并/样式迁移） */}
+            <RibbonButton icon="⤵" label={tf('sheet.insertRow', '插入行')} onClick={() => insertRows(active.r, 1)} title={tf('sheet.insertRowAt', '在当前行上方插入')} />
+            <RibbonButton icon="⤴" label={tf('sheet.deleteRow', '删除行')} onClick={() => deleteRows(active.r, 1)} title={tf('sheet.deleteRowAt', '删除当前行')} />
+            <RibbonButton icon="⇥" label={tf('sheet.insertCol', '插入列')} onClick={() => insertCols(active.c, 1)} title={tf('sheet.insertColAt', '在当前列左侧插入')} />
+            <RibbonButton icon="⇤" label={tf('sheet.deleteCol', '删除列')} onClick={() => deleteCols(active.c, 1)} title={tf('sheet.deleteColAt', '删除当前列')} />
           </RibbonGroup>
         </>)}
         {ribbonTab === 'insert' && (<>
@@ -1149,6 +1508,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.illustration')}>
+            {/* 真实浮动图片：选中文件后锚定当前活动格，网格上绝对定位渲染，可选中删除，保存时写回 xlsx */}
             <RibbonButton icon="🖼" label={t('sheet.image')} onClick={() => {
               const input = document.createElement('input')
               input.type = 'file'
@@ -1157,22 +1517,34 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 const file = input.files?.[0]
                 if (!file) return
                 const reader = new FileReader()
-                reader.onload = () => { setCell(active.r, active.c, `[img]${reader.result}`) }
+                reader.onload = () => {
+                  const src = String(reader.result)
+                  const img = new Image()
+                  img.onload = () => {
+                    // 显示尺寸上限 320px（最长边），保持比例
+                    let w = img.width || 200, h = img.height || 150
+                    const scale = Math.min(1, 320 / Math.max(w, h))
+                    w = Math.round(w * scale); h = Math.round(h * scale)
+                    setSheetImages(m => ({ ...m, [activeId]: [...(m[activeId] || []), { row: active.r, col: active.c, src, width: w, height: h }] }))
+                  }
+                  img.src = src
+                }
                 reader.readAsDataURL(file)
               }
               input.click()
-            }} />
+            }} title={tf('sheet.imageTitle', '插入浮动图片（锚定当前单元格）')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.function')}>
             <div className="relative">
               <RibbonButton icon="ƒx" label={t('sheet.function')} onClick={() => openPanel('func')} />
               {showFuncPanel && (
                 <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 160, zIndex: 50 }}>
-                  <button onClick={() => { let sum = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) sum += v } setCell(active.r, active.c, String(sum)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.sum')}</button>
-                  <button onClick={() => { let sum = 0; let n = 0; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v)) { sum += v; n++ } } setCell(active.r, active.c, n > 0 ? String(sum / n) : '0'); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.average')}</button>
-                  <button onClick={() => { let n = 0; for (let r = 0; r < rows; r++) { if (getCell(r, active.c).value) n++ } setCell(active.r, active.c, String(n)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.count')}</button>
-                  <button onClick={() => { let max = -Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v > max) max = v } setCell(active.r, active.c, String(max)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.max')}</button>
-                  <button onClick={() => { let min = Infinity; for (let r = 0; r < rows; r++) { const v = parseFloat(getCell(r, active.c).value); if (!isNaN(v) && v < min) min = v } setCell(active.r, active.c, String(min)); setShowFuncPanel(false) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.min')}</button>
+                  {/* 写真公式（=SUM/…），由公式引擎求值，不再写静态值 */}
+                  <button onClick={() => applySheetFunc('SUM')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.sum')}</button>
+                  <button onClick={() => applySheetFunc('AVERAGE')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.average')}</button>
+                  <button onClick={() => applySheetFunc('COUNT')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.count')}</button>
+                  <button onClick={() => applySheetFunc('MAX')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.max')}</button>
+                  <button onClick={() => applySheetFunc('MIN')} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>{t('sheet.min')}</button>
                 </div>
               )}
             </div>
@@ -1249,7 +1621,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               }
               input.click()
             }} title={t('sheet.fromCsvTitle')} />
-            <RibbonButton icon="🔄" label={t('sheet.refresh')} onClick={() => alert(t('sheet.refresh'))} title={t('sheet.refreshTitle')} />
+            <RibbonButton icon="🔄" label={t('sheet.refresh')} onClick={() => recalcAll()} title={tf('sheet.refreshRecalc', '重新计算全部公式')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.conditionalFormat')}>
             <div className="relative">
@@ -1276,7 +1648,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           {/* MS Office 风格窗口 */}
           <RibbonGroup label={t('sheet.window')}>
             {/* 冻结窗格：以当前活动单元格为界，上方行 + 左侧列真实冻结（sticky） */}
-            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => { setFreezeAt(frozen ? null : { r: active.r, c: active.c }); }} active={frozen} title={tf('sheet.freezeTitle2', '冻结到当前单元格上方/左侧')} />
+            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => {
+              const next = frozen ? null : { r: active.r, c: active.c }
+              setFreezeAt(next)
+              // 同步写入 sheet 级冻结锚点（保存 xlsx 时持久化）
+              setSheetFreeze(m => ({ ...m, [activeId]: next ? `${colName(next.c)}${next.r + 1}` : '' }))
+            }} active={frozen} title={tf('sheet.freezeTitle2', '冻结到当前单元格上方/左侧')} />
             <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('sheet.newWindowTitle')} />
           </RibbonGroup>
           {/* MS Office 风格显示 */}
@@ -1400,6 +1777,22 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       </div>
       )}
 
+      {/* 查找替换条（Ctrl+F 呼出；高亮匹配单元格 + 全部替换） */}
+      {findBar && (
+        <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs flex-wrap" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
+          <span style={{ color: 'var(--color-text-muted)' }}>🔍</span>
+          <input autoFocus value={findBar.find} onChange={e => setFindBar({ ...findBar, find: e.target.value })}
+            placeholder={tf('sheet.findPlaceholder', '查找内容')} className="border rounded px-2 py-1"
+            style={{ width: 150, background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }} />
+          <span style={{ color: 'var(--color-text-muted)' }}>{findKeys.size} {tf('sheet.findMatches', '个匹配')}</span>
+          <input value={findBar.replace} onChange={e => setFindBar({ ...findBar, replace: e.target.value })}
+            placeholder={tf('sheet.replacePlaceholder', '替换为')} className="border rounded px-2 py-1"
+            style={{ width: 150, background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }} />
+          <button onClick={replaceAllMatches} className="btn btn-primary btn-sm">{tf('sheet.replaceAll', '全部替换')}</button>
+          <button onClick={() => setFindBar(null)} className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }}>{tf('sheet.findClose', '关闭')}</button>
+        </div>
+      )}
+
       {/* 表格主体（工作簿视图：分页参考线 / 页边距参考线叠加显示） */}
       <div className="flex-1 overflow-auto p-2 sm:p-3 relative" style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
         ...(viewMode === 'pageBreak' ? {
@@ -1413,17 +1806,26 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {viewMode === 'pageBreak' ? t('sheet.pageBreakPreview') : t('sheet.pageLayout')}
           </div>
         )}
+        <div className="relative">
         <table className="border-collapse text-sm" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {showHeadings && (
           <thead>
             <tr>
               <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}></th>
-              {Array.from({ length: cols }).map((_, c) => (
+              {Array.from({ length: cols }).map((_, c) => {
+                const w = curColWidths[c] || 80
+                return (
                 <th key={c}
                   className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 z-10 transition-colors cursor-pointer select-none`}
-                  style={{ background: selection.mode === 'col' && selection.c1 === c ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', minWidth: '80px' }}
-                  onClick={() => selectCol(c)} title={tf('sheet.selectCol', '选择整列')}>{colName(c)}</th>
-              ))}
+                  style={{ background: selection.mode === 'col' && selection.c1 === c ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
+                  onClick={() => selectCol(c)} title={tf('sheet.selectCol', '选择整列')}>
+                  {colName(c)}
+                  {/* 右缘拖拽调整列宽 */}
+                  <span className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize" title={tf('sheet.resizeCol', '拖拽调整列宽')}
+                    onMouseDown={e => startColResize(e, c)} />
+                </th>
+                )
+              })}
             </tr>
           </thead>
           )}
@@ -1434,12 +1836,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               if (filterRows && !filterRows.has(r)) return null
               const gr = groupStartOf(r)
               const isFrozenRow = frozen && r < freezeAt!.r
-              const frozenTop = 32 + r * 28 // 表头 h-8(32px) + 每行 h-7(28px)
+              const frozenTop = 32 + rowTop(r) // 表头 h-8(32px) + 上方各行实际高度
+              const rowHpx = rowH(r)
               return (
-              <tr key={r}>
+              <tr key={r} style={rowHpx !== 28 ? { height: rowHpx } : undefined}>
                 {showHeadings && (
                 <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow ? 'sticky z-30' : ''}`}
-                  style={{ background: selection.mode === 'row' && selection.r1 === r ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined }}
+                  style={{ background: selection.mode === 'row' && selection.r1 === r ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
                   onClick={() => selectRow(r)} title={tf('sheet.selectRow', '选择整行')}>
                   {gr && (
                     <button onClick={e => { e.stopPropagation(); setRowGroups(g => g.map(x => x === gr ? { ...x, collapsed: !x.collapsed } : x)) }}
@@ -1460,17 +1863,23 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   const bw = cell.border === 'thick' ? '3px' : cell.border === 'medium' ? '2px' : cell.border === 'thin' ? '1px' : undefined
                   const isFrozenCell = frozen && (c < freezeAt!.c)
                   const gridOff = !showGrid
+                  const cw = curColWidths[c] || 80
+                  // 查找高亮：无填充色时用琥珀色底标记匹配（关闭查找条即消失）
+                  const findHit = findKeys.has(`${r}-${c}`)
+                  const valignMap: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
                   return (
                     <td key={c} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
-                      background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (cell.bg || '#ffffff'),
+                      background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
                       borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)'),
                       borderWidth: bw,
-                      minWidth: '80px',
-                      left: isFrozenCell ? (c === 0 ? 48 : 48 + c * 80) : undefined,
+                      width: `${cw}px`,
+                      minWidth: `${cw}px`,
+                      verticalAlign: cell.valign ? valignMap[cell.valign] : undefined,
+                      left: isFrozenCell ? colLeft(c) : undefined,
                     }}
-                      onMouseDown={() => { selectCell(r, c); setDragging(true) }}
+                      onMouseDown={() => { selectCell(r, c); setSelImage(null); setDragging(true) }}
                       onMouseEnter={() => { if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c)) }}
                       onMouseUp={() => setDragging(false)}
                       onClick={() => selectCell(r, c)}
@@ -1482,11 +1891,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                       {isActive && <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 0 2px var(--color-primary)' }}></div>}
                       {(() => {
                         const v = cell.value
-                        if (v && v.startsWith('[img]')) {
-                          return <img src={v.slice(5)} alt="" className="w-full h-full object-contain pointer-events-none" />
-                        }
                         const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
                         const common = { color: cell.color || '#1f2937', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' as const : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }
+                        if (cell.wrap) {
+                          // 自动换行：textarea 可换行显示与编辑（不固定高度，随内容撑开）
+                          return <textarea value={isActive ? v : fmtDisplay(cell)} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.altKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); selectCell(Math.min(rows - 1, r + 1), c) }
+                            else if (e.key === 'Escape') { (e.target as HTMLTextAreaElement).blur() }
+                          }} rows={1} className="w-full px-2 outline-none bg-transparent resize-none" style={{ ...common as any, whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
+                        }
                         if (cell.valid) {
                           // 数据验证下拉：打开文件时读入 / 面板设置，保存时写回 xlsx
                           const opts = cell.valid.split(',').map(x => x.trim()).filter(Boolean)
@@ -1508,6 +1921,24 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             })}
           </tbody>
         </table>
+        {/* 浮动图片层：锚定单元格，随列宽/行高定位；点击选中，Delete 删除 */}
+        {curImages.map((im, idx) => (
+          <img key={idx} src={im.src} alt="" draggable={false}
+            style={{
+              position: 'absolute',
+              left: colLeft(im.col) + 2,
+              top: rowTop(im.row) + 2,
+              width: im.width || 'auto',
+              height: im.height || 'auto',
+              maxWidth: 'none',
+              outline: selImage === idx ? '2px solid var(--color-primary)' : 'none',
+              cursor: 'pointer',
+              zIndex: 35,
+            }}
+            onMouseDown={e => { e.stopPropagation(); setSelImage(idx) }}
+            title={tf('sheet.imageSelectedHint', '点击选中，Delete 删除')} />
+        ))}
+        </div>
       </div>
 
       {/* 右键上下文菜单 */}
@@ -1529,6 +1960,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {ctxItem(tf('sheet.copy', '复制'), '⧉', () => copyCells(false))}
             {ctxItem(tf('sheet.paste', '粘贴'), '📋', () => pasteCells(), !clipboard)}
             {sep}
+            {ctxItem(tf('sheet.clearContent', '清除内容'), '⌫', () => clearCellsContent())}
             {ctxItem(tf('sheet.insertRowAbove', '在上方插入行'), '↥', () => insertRows(sr.r1, 1))}
             {ctxItem(tf('sheet.insertRowBelow', '在下方插入行'), '↧', () => insertRows(sr.r2 + 1, 1))}
             {ctxItem(tf('sheet.insertColLeft', '在左侧插入列'), '↤', () => insertCols(sr.c1, 1))}
@@ -1536,6 +1968,20 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {sep}
             {ctxItem(tf('sheet.deleteRows', '删除行'), '🗑', () => deleteRows(sr.r1, sr.r2 - sr.r1 + 1))}
             {ctxItem(tf('sheet.deleteCols', '删除列'), '🗑', () => deleteCols(sr.c1, sr.c2 - sr.c1 + 1))}
+            {sep}
+            {/* 行高 / 列宽（prompt 输入 px；行高仅当前会话生效，列宽保存时写回 xlsx） */}
+            {ctxItem(tf('sheet.rowHeight', '行高'), '↕', () => {
+              const v = prompt(tf('sheet.rowHeightPrompt', '输入行高(px，28 为默认)：'), String(rowH(menu.r)))
+              if (v === null) return
+              const h = Math.max(20, Math.min(400, Number(v) || 28))
+              setRowHeights(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.r]: h } }))
+            })}
+            {ctxItem(tf('sheet.colWidth', '列宽'), '↔', () => {
+              const v = prompt(tf('sheet.colWidthPrompt', '输入列宽(px，80 为默认)：'), String(curColWidths[menu.c] || 80))
+              if (v === null) return
+              const w = Math.max(40, Math.min(600, Number(v) || 80))
+              setColWidths(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.c]: w } }))
+            })}
             {sep}
             {!selIsMerged && ctxItem(tf('sheet.merge', '合并单元格'), '▦', () => mergeCells(sr.r1, sr.c1, sr.r2, sr.c2))}
             {selIsMerged && ctxItem(tf('sheet.unmerge', '拆分单元格'), '▫', () => splitCell(Math.min(selection.r1, selection.r2), Math.min(selection.c1, selection.c2)))}
@@ -1558,13 +2004,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         </div>
       )}
 
-      {/* Sheet 标签栏 */}
+      {/* Sheet 标签栏（双击重命名；右侧 + 新建 / 🗑 删除当前表） */}
       <div className="px-2 py-1 flex items-center gap-1 overflow-x-auto flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)' }}>
         {sheets.map(s => (
-          <button key={s.id} onClick={() => switchSheet(s.id)} className={`px-3 py-1 text-xs rounded-t-md transition-all whitespace-nowrap ${s.active ? 'font-semibold' : 'opacity-60 hover:opacity-100'}`}
+          <button key={s.id} onClick={() => switchSheet(s.id)}
+            onDoubleClick={() => { const name = prompt(tf('sheet.renamePrompt', '重命名工作表：'), s.name); if (name && name.trim()) renameSheet(s.id, name.trim()) }}
+            title={tf('sheet.renameHint', '双击重命名')}
+            className={`px-3 py-1 text-xs rounded-t-md transition-all whitespace-nowrap ${s.active ? 'font-semibold' : 'opacity-60 hover:opacity-100'}`}
             style={{ background: s.active ? 'var(--color-primary-light)' : 'transparent', color: s.active ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: s.active ? '2px solid var(--color-primary)' : '2px solid transparent' }}>{s.name}</button>
         ))}
         <button onClick={addSheet} className="px-2 py-1 text-xs rounded transition-colors hover:opacity-70" style={{ color: 'var(--color-text-muted)' }} title={t('sheet.newSheet')}>+</button>
+        <button onClick={() => deleteSheet(activeId)} className="px-2 py-1 text-xs rounded transition-colors hover:opacity-70" style={{ color: 'var(--color-text-muted)' }} title={tf('sheet.deleteSheet', '删除当前工作表')}>🗑</button>
       </div>
 
       {/* 底部状态栏 */}

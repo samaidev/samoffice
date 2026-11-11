@@ -125,6 +125,8 @@ export interface Text {
   highlight?: string
   // 字符间距（如 "1px" / "0.5em"），Go 写器输出 w:spacing
   letterSpacing?: string
+  // 批注锚点：指向 udm.comments 中的批注 id（docx 解析自 w:commentReference）
+  commentId?: string
 }
 
 export interface Hyperlink {

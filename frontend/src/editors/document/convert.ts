@@ -1,5 +1,5 @@
 import { Schema, Mark, Node } from 'prosemirror-model'
-import type { Document, Block, Inline, PageNumberConfig } from '../../types/udm'
+import type { Document, Block, Inline, PageNumberConfig, Comment } from '../../types/udm'
 
 // 段落/标题的格式化属性键（统一存于 UDM 的 props 中，确保 Go 往返与 docx 导出保留）
 const PARA_PROP_KEYS = [
@@ -30,7 +30,7 @@ function applyParaAttrsFromProps(b: any, base: any): any {
 
 // UDM → ProseMirror 转换
 export function udmToProseMirror(udm: Document, schema: Schema): Node {
-  const blocks: Node[] = (udm.blocks || []).map((b) => blockToPM(b, schema))
+  const blocks: Node[] = (udm.blocks || []).map((b) => blockToPM(b, schema, udm.comments))
   const attrs: any = {}
   if (udm.pageNumber) {
     attrs.pageNumber = udm.pageNumber
@@ -38,16 +38,16 @@ export function udmToProseMirror(udm: Document, schema: Schema): Node {
   return schema.node('doc', attrs, blocks)
 }
 
-function blockToPM(b: Block, schema: Schema): Node {
+function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
   const t = blockType(b)
   switch (t) {
     case 'heading': {
       const h = b as any
-      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '', style: h.style || '', align: h.align || '' }), inlineToPM(h.inline, schema))
+      return schema.node('heading', applyParaAttrsFromProps(h, { level: h.level, id: h.id || '', style: h.style || '', align: h.align || '' }), inlineToPM(h.inline, schema, comments))
     }
     case 'paragraph': {
       const p = b as any
-      return schema.node('paragraph', applyParaAttrsFromProps(p, { style: p.style || '', align: p.align || '', id: p.id || '' }), inlineToPM(p.inline, schema))
+      return schema.node('paragraph', applyParaAttrsFromProps(p, { style: p.style || '', align: p.align || '', id: p.id || '' }), inlineToPM(p.inline, schema, comments))
     }
     case 'codeBlock': {
       const c = b as any
@@ -59,7 +59,7 @@ function blockToPM(b: Block, schema: Schema): Node {
         schema.node(
           'list_item',
           {},
-          (Array.isArray(item) ? item : [item]).map((ib: any) => blockToPM(ib, schema)),
+          (Array.isArray(item) ? item : [item]).map((ib: any) => blockToPM(ib, schema, comments)),
         )
       )
       return schema.node(
@@ -79,7 +79,7 @@ function blockToPM(b: Block, schema: Schema): Node {
     case 'textbox': {
       const tb = b as any
       // 内部块递归转为 PM 节点
-      const inner = (Array.isArray(tb.inline) ? tb.inline : []).map((ib: Block) => blockToPM(ib, schema))
+      const inner = (Array.isArray(tb.inline) ? tb.inline : []).map((ib: Block) => blockToPM(ib, schema, comments))
       return schema.node('text_box', {
         bgColor: tb.bgColor || '#fef3c7',
         borderColor: tb.borderColor || '#f59e0b',
@@ -104,7 +104,7 @@ function blockToPM(b: Block, schema: Schema): Node {
         schema.node(
           'footnote_item',
           { num: Number(item.num) || 1 },
-          inlineToPM(Array.isArray(item.inline) ? item.inline : (item.inline ? [item.inline] : []), schema),
+          inlineToPM(Array.isArray(item.inline) ? item.inline : (item.inline ? [item.inline] : []), schema, comments),
         ),
       )
       return schema.node('footnote_section', {}, items)
@@ -114,9 +114,9 @@ function blockToPM(b: Block, schema: Schema): Node {
       const cellToPM = (cell: any) => {
         let content: Node[]
         if (cell.blocks && cell.blocks.length) {
-          content = cell.blocks.map((ib: Block) => blockToPM(ib, schema))
+          content = cell.blocks.map((ib: Block) => blockToPM(ib, schema, comments))
         } else if (cell.inline && cell.inline.length) {
-          content = [schema.node('paragraph', {}, inlineToPM(cell.inline, schema))]
+          content = [schema.node('paragraph', {}, inlineToPM(cell.inline, schema, comments))]
         } else {
           content = [schema.node('paragraph', {})]
         }
@@ -160,7 +160,7 @@ function blockType(b: Block): string {
   return 'paragraph'
 }
 
-function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
+function inlineToPM(inlines: Inline[] | undefined, schema: Schema, comments?: Comment[]): Node[] {
   if (!inlines || inlines.length === 0) return []
   const result: Node[] = []
   for (const inline of inlines) {
@@ -179,7 +179,7 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
     } else if ('url' in inline) {
       const h = inline as any
       const mark = schema.marks.link.create({ href: h.url })
-      const inner = inlineToPM(Array.isArray(h.text) ? h.text : (h.text ? [h.text] : []), schema)
+      const inner = inlineToPM(Array.isArray(h.text) ? h.text : (h.text ? [h.text] : []), schema, comments)
       inner.forEach((n) => {
         if (n.isText) result.push(schema.text(n.text!, [mark]))
         else result.push(n)
@@ -213,6 +213,16 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema): Node[] {
       if (t.color) marks.push(schema.marks.textColor.create({ color: t.color }))
       if (t.highlight) marks.push(schema.marks.highlight.create({ color: t.highlight }))
       if (t.content) result.push(schema.text(t.content, marks))
+      // 批注锚点：在该文本后插入 comment_mark 原子节点；
+      // 批注作者/正文从 udm.comments 按 id 查找（docx 解析时正文存于 comments）
+      if (t.commentId) {
+        const c = comments?.find((cm) => cm.id === t.commentId)
+        result.push(schema.nodes.comment_mark.create({
+          id: t.commentId,
+          author: c?.author || 'User',
+          text: c?.content || '',
+        }))
+      }
     }
   }
   return result
@@ -226,6 +236,19 @@ export function proseMirrorToUDM(doc: Node, opts?: { pageNumber?: PageNumberConf
     if (b) blocks.push(b)
   })
   const out: Document = { meta: { title: 'Untitled' }, blocks }
+  // 批注：从 PM 文档收集 comment_mark 同步到 udm.comments（emitDoc/保存共用此路径，
+  // docx 导出据此写 word/comments.xml）
+  const comments: Comment[] = []
+  doc.descendants((node: any) => {
+    if (node.type.name === 'comment_mark') {
+      comments.push({
+        id: String(node.attrs.id || ''),
+        author: node.attrs.author || 'User',
+        content: node.attrs.text || '',
+      })
+    }
+  })
+  if (comments.length) out.comments = comments
   if (opts && opts.pageNumber) out.pageNumber = opts.pageNumber
   return out
 }
@@ -328,6 +351,10 @@ function pmToInline(node: Node): Inline[] {
       } else if (child.type.name === 'inlineImage') {
         // 内联图片：保留 src 与尺寸
         result.push({ src: child.attrs.src, width: Number(child.attrs.width) || 0, height: Number(child.attrs.height) || 0 } as any)
+      } else if (child.type.name === 'comment_mark') {
+        // 批注标记：输出为带 commentId 的空文本；评论正文由 proseMirrorToUDM
+        // 收集进 document.comments（docx 导出写 comments.xml）
+        result.push({ content: '', commentId: String(child.attrs.id || '') } as any)
       }
       return
     }
