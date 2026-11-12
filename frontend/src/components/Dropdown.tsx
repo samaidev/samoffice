@@ -102,8 +102,11 @@ export function Dropdown({ value, onChange, options, className, style, title, pl
               e.nativeEvent.stopImmediatePropagation()
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
             }}
+            onKeyPress={(e) => { e.nativeEvent.stopImmediatePropagation() }}
             onKeyUp={(e) => { e.nativeEvent.stopImmediatePropagation() }}
             onInput={(e) => { e.nativeEvent.stopImmediatePropagation() }}
+            onBeforeInput={(e) => { // WebView2 兜底：彻底隔离任何沿 DOM 冒泡的输入事件
+              (e as unknown as Event).stopImmediatePropagation?.() }}
             onBlur={() => { inputFocused.current = false; onInputBlur?.() }}
             className="dropdown-input"
             style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', color: 'inherit', outline: 'none', fontSize: 'inherit', textAlign: 'left' }}

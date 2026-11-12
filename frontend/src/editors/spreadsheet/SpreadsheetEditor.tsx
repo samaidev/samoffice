@@ -403,6 +403,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   })
   // 当前选中的浮动图片索引（Delete 键删除）
   const [selImage, setSelImage] = useState<number | null>(null)
+  // === Excel 标准交互：单元格编辑态 / 公式引用选择 / 网格键盘焦点 ===
+  // editCell 非空表示正在编辑该单元格（Excel 模型：单击只选中，输入/F2/双击才进入编辑）
+  const [editCell, setEditCell] = useState<{ r: number; c: number; buf: string } | null>(null)
+  const [formulaBarFocused, setFormulaBarFocused] = useState(false)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const editInputRef = useRef<HTMLElement | null>(null)
+  const fbInputRef = useRef<HTMLInputElement | null>(null)
+  // Shift+方向键/Shift+点击 扩展选区时的固定锚点（Excel 行为）
+  const navAnchorRef = useRef<{ r: number; c: number }>({ r: 0, c: 0 })
+  // 公式引用选择拖拽：mousedown 插入 A1，拖到 B2 时扩展为 A1:B2
+  const refDragRef = useRef<{ r: number; c: number; pos: number; len: number } | null>(null)
+  // 公式编辑焦点载体：'cell'=单元格内输入框，'bar'=公式栏（决定点选引用时光标位置取自哪个输入框）
+  const editViaRef = useRef<'cell' | 'bar'>('cell')
   // 底部查找替换条（Ctrl+F 呼出）
   const [findBar, setFindBar] = useState<{ find: string; replace: string } | null>(null)
   const curColWidths = colWidths[activeId] || {}
@@ -500,25 +513,38 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       const mod = e.ctrlKey || e.metaKey
       const key = e.key.toLowerCase()
 
-      // 撤销 / 重做（始终拦截，对标 Excel）
-      if (mod && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
-      if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return }
+      // 撤销 / 重做（对标 Excel；输入框内交给原生撤销，避免破坏输入法/输入框自身状态）
+      if (!inInput && mod && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
+      if (!inInput && mod && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return }
 
-      // 查找替换（Ctrl+F 呼出底部查找条）
+      // 查找替换（Ctrl+F / Ctrl+H 呼出底部查找条）
       if (mod && key === 'f') { e.preventDefault(); setFindBar({ find: '', replace: '' }); return }
+      if (mod && key === 'h') { e.preventDefault(); setFindBar({ find: '', replace: '' }); return }
 
-      // 复制 / 剪切 / 粘贴
-      if (mod && key === 'c') { e.preventDefault(); copyCells(false); return }
-      if (mod && key === 'x') { e.preventDefault(); copyCells(true); return }
-      if (mod && key === 'v') { e.preventDefault(); pasteCells(); return }
+      // 复制 / 剪切 / 粘贴（输入框内使用原生复制，便于复制单元格内文本与公式）
+      if (!inInput && mod && key === 'c') { e.preventDefault(); copyCells(false); return }
+      if (!inInput && mod && key === 'x') { e.preventDefault(); copyCells(true); return }
+      if (!inInput && mod && key === 'v') {
+        e.preventDefault()
+        // 对齐 Excel：优先粘贴系统剪贴板的 TSV 文本（可从外部 Excel/记事本粘贴），
+        // 失败（无权限/非文本）时回退到内部剪贴板（保留样式与公式）
+        ;(async () => {
+          try {
+            const txt = await navigator.clipboard?.readText?.()
+            if (txt && txt.length && pasteText(txt)) return
+          } catch { /* 无系统剪贴板读取权限，走内部剪贴板 */ }
+          pasteCells()
+        })()
+        return
+      }
 
       // 字体格式 加粗 / 斜体 / 下划线
-      if (mod && key === 'b') { e.preventDefault(); setCellFmtRange({ bold: !getCell(active.r, active.c).bold }); return }
-      if (mod && key === 'i') { e.preventDefault(); setCellFmtRange({ italic: !getCell(active.r, active.c).italic }); return }
-      if (mod && key === 'u') { e.preventDefault(); setCellFmtRange({ under: !getCell(active.r, active.c).under }); return }
+      if (!inInput && mod && key === 'b') { e.preventDefault(); setCellFmtRange({ bold: !getCell(active.r, active.c).bold }); return }
+      if (!inInput && mod && key === 'i') { e.preventDefault(); setCellFmtRange({ italic: !getCell(active.r, active.c).italic }); return }
+      if (!inInput && mod && key === 'u') { e.preventDefault(); setCellFmtRange({ under: !getCell(active.r, active.c).under }); return }
 
       // 创建表（Excel 的 Ctrl+L）
-      if (mod && key === 'l') { e.preventDefault(); createTable(); return }
+      if (!inInput && mod && key === 'l') { e.preventDefault(); createTable(); return }
 
       // 清除内容（Delete / Backspace，仅在非输入框时）；选中浮动图片时优先删图
       if (!mod && (key === 'delete' || key === 'backspace') && !inInput) {
@@ -540,18 +566,25 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         if (e.key === 'ArrowRight') { e.preventDefault(); move(0, 1); return }
         if (e.key === 'Tab') { e.preventDefault(); move(0, e.shiftKey ? -1 : 1); return }
         if (e.key === 'Enter') { e.preventDefault(); move(1, 0); return }
+        // 兜底（网格焦点因 React 卸载编辑输入框短暂落在 body 时仍可继续键入）：
+        // 可打印字符进入单元格编辑、F2 编辑，与 Excel 行为一致
+        if (e.key === 'F2') { e.preventDefault(); startEdit(active.r, active.c); return }
+        if (e.key.length === 1 && !e.altKey) { e.preventDefault(); startEdit(active.r, active.c, e.key); return }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [active, selection, clipboard, rows, cols, data, sheets, past, future, selImage])
 
-  // 鼠标在表格外松开时也结束选区拖拽
+  // 鼠标在表格外松开时也结束选区拖拽（并结束公式引用拖拽）
   useEffect(() => {
-    const onUp = () => { if (dragging) setDragging(false) }
+    const onUp = () => { if (dragging) setDragging(false); refDragRef.current = null }
     window.addEventListener('mouseup', onUp)
     return () => window.removeEventListener('mouseup', onUp)
   }, [dragging])
+
+  // 挂载后把焦点交给网格容器，方向键/输入即编辑立即可用（Excel 行为）
+  useEffect(() => { gridRef.current?.focus() }, [])
 
   // 点击空白处关闭右键菜单
   useEffect(() => {
@@ -679,15 +712,241 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const selectCell = (r: number, c: number) => {
     setActive({ r, c })
-    // 若点击位置已经在当前单元格选区范围内，则保持选区不变（便于整体复制/格式刷），
-    // 仅点击选区外部时才重置为单个单元格
-    const s = selection
-    if (s.mode === 'cell') {
-      const r1 = Math.min(s.r1, s.r2), r2 = Math.max(s.r1, s.r2)
-      const c1 = Math.min(s.c1, s.c2), c2 = Math.max(s.c1, s.c2)
-      if (r >= r1 && r <= r2 && c >= c1 && c <= c2) return
-    }
+    // 对齐 MS Excel：任何普通单击都收拢为单格选区（区域内点击不保留旧区域），
+    // 配合渲染层“区域外框 + 活动格细框”修复“同时选中单格与整个区域”的视觉问题。
+    // 整块复制/格式刷请拖拽选区或用 Shift+方向键/Shift+点击扩展。
+    navAnchorRef.current = { r, c }
     commitSelection({ r1: r, c1: c, r2: r, c2: c, mode: 'cell' })
+  }
+
+  // === 单元格编辑态（Excel 模型）===
+  const startEdit = (r: number, c: number, initial?: string) => {
+    const cell = getCell(r, c)
+    const raw = cell.formula || cell.value || ''
+    setActive({ r, c })
+    editViaRef.current = 'cell'
+    setEditCell({ r, c, buf: initial !== undefined ? initial : raw })
+    setTimeout(() => {
+      const el = editInputRef.current as HTMLInputElement | null
+      if (el) {
+        el.focus()
+        const n = (initial ?? raw).length
+        try { el.setSelectionRange(n, n) } catch { /* select/textarea */ }
+      }
+    }, 0)
+  }
+  const commitEdit = (move?: { dr: number; dc: number }) => {
+    if (!editCell) return
+    const { r, c, buf } = editCell
+    if (buf.startsWith('=')) setCellFmt(r, c, { formula: buf, value: '' })
+    else setCellFmt(r, c, { formula: '', value: buf })
+    setEditCell(null)
+    if (move) {
+      const nr = Math.max(0, Math.min(rows - 1, r + move.dr))
+      const nc = Math.max(0, Math.min(cols - 1, c + move.dc))
+      selectCell(nr, nc)
+    }
+    setTimeout(() => gridRef.current?.focus(), 0)
+  }
+  const cancelEdit = () => { setEditCell(null); setTimeout(() => gridRef.current?.focus(), 0) }
+  // 单元格编辑态按键：Enter/Tab 提交并移动（Shift 反向），Escape 取消还原旧值；
+  // 自动换行单元格内 Alt+Enter 手动换行。所有已处理按键 stopPropagation，防止冒泡到网格/全局快捷键。
+  const onEditKeyDown = (e: React.KeyboardEvent, isArea: boolean) => {
+    const key = e.key
+    if (key === 'Enter') {
+      if (isArea && e.altKey) { e.stopPropagation(); return } // textarea 内 Alt+Enter 手动换行（默认行为）
+      e.preventDefault(); e.stopPropagation()
+      commitEdit({ dr: e.shiftKey ? -1 : 1, dc: 0 })
+      return
+    }
+    if (key === 'Tab') { e.preventDefault(); e.stopPropagation(); commitEdit({ dr: 0, dc: e.shiftKey ? -1 : 1 }); return }
+    if (key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit(); return }
+    // 方向键在编辑态内移动光标（Excel F2 编辑模式），不拦截
+  }
+  // 公式引用选择模式：编辑中的内容以 = 开头（单元格内或公式栏）时，点击单元格插入其引用
+  const refModeActive = !!(
+    (editCell && editCell.buf.trim().startsWith('=')) ||
+    (formulaBarFocused && (getCell(active.r, active.c).formula || getCell(active.r, active.c).value || '').trim().startsWith('='))
+  )
+  // 在编辑焦点（单元格输入框或公式栏）的光标处插入单元格引用；拖拽时把上一次引用扩展为矩形区域
+  const insertCellRef = (r: number, c: number, extend: boolean) => {
+    const st = refDragRef.current
+    let pos: number, oldLen: number, text: string
+    if (extend && st) {
+      pos = st.pos; oldLen = st.len
+      text = selToRef({ r1: st.r, c1: st.c, r2: r, c2: c, mode: 'cell' })
+    } else {
+      text = colName(c) + (r + 1)
+      // 光标位置取自当前编辑载体（单元格输入框或公式栏）
+      pos = editViaRef.current === 'bar' && fbInputRef.current
+        ? (fbInputRef.current.selectionStart ?? 0)
+        : editCell ? ((editInputRef.current as HTMLInputElement | null)?.selectionStart ?? editCell.buf.length)
+        : (fbInputRef.current?.selectionStart ?? 0)
+      oldLen = 0
+    }
+    refDragRef.current = { r: extend && st ? st.r : r, c: extend && st ? st.c : c, pos, len: text.length }
+    const caretTo = pos + text.length
+    if (editCell) {
+      const buf = editCell.buf.slice(0, pos) + text + editCell.buf.slice(pos + oldLen)
+      setEditCell({ ...editCell, buf })
+      setTimeout(() => { const el = (editViaRef.current === 'bar' ? fbInputRef.current : (editInputRef.current as HTMLInputElement | null)); if (el) { try { (el as HTMLInputElement).setSelectionRange(caretTo, caretTo) } catch { /* ignore */ } } }, 0)
+    } else if (active) {
+      const ac = getCell(active.r, active.c)
+      const cur = ac.formula || ac.value || ''
+      const v = cur.slice(0, pos) + text + cur.slice(pos + oldLen)
+      setCellFmt(active.r, active.c, { formula: v.startsWith('=') ? v : '=' + v, value: '' })
+      setTimeout(() => { const el = fbInputRef.current; if (el) { try { el.setSelectionRange(caretTo, caretTo) } catch { /* ignore */ } } }, 0)
+    }
+  }
+  // Ctrl+方向键：跳到数据区边缘（相邻有数据→连续数据末端；无→下一个非空或表边界）
+  const edgeOf = (r: number, c: number, dr: number, dc: number) => {
+    const occupied = (rr: number, cc: number) => { const v = getCell(rr, cc); return !!(v.value || v.formula) }
+    let nr = r, nc = c
+    const inb = () => nr >= 0 && nr < rows && nc >= 0 && nc < cols
+    if (inb() && occupied(nr + dr, nc + dc)) {
+      nr += dr; nc += dc
+      while (inb() && occupied(nr + dr, nc + dc)) { nr += dr; nc += dc }
+      return { r: nr, c: nc }
+    }
+    nr += dr; nc += dc
+    while (inb() && !occupied(nr, nc)) { nr += dr; nc += dc }
+    if (!inb()) return { r: Math.max(0, Math.min(rows - 1, nr)), c: Math.max(0, Math.min(cols - 1, nc)) }
+    return { r: nr, c: nc }
+  }
+  const usedBounds = () => {
+    let maxR = 0, maxC = 0
+    for (const key in data) {
+      const cell = data[key]
+      if (!cell.value && !cell.formula) continue
+      const [rr, cc] = key.split('-').map(Number)
+      if (rr > maxR) maxR = rr
+      if (cc > maxC) maxC = cc
+    }
+    return { r: maxR, c: maxC }
+  }
+  // Shift+方向键 / Shift+点击：从锚点扩展选区（锚点不随扩展移动，Excel 行为）
+  const extendTo = (r: number, c: number) => {
+    const a = navAnchorRef.current
+    setActive({ r, c })
+    commitSelection({ r1: a.r, c1: a.c, r2: r, c2: c, mode: 'cell' })
+  }
+  // Ctrl+D / Ctrl+R：向下/向右填充（复制选区首行/首列的完整单元格对象，含样式与公式）
+  const fillDown = () => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let c = c1; c <= c2; c++) {
+        const src = d[`${r1}-${c}`]
+        if (!src) continue
+        for (let r = r1 + 1; r <= r2; r++) nd[`${r}-${c}`] = { ...src }
+      }
+      return nd
+    })
+  }
+  const fillRight = () => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+      for (let r = r1; r <= r2; r++) {
+        const src = d[`${r}-${c1}`]
+        if (!src) continue
+        for (let c = c1 + 1; c <= c2; c++) nd[`${r}-${c}`] = { ...src }
+      }
+      return nd
+    })
+  }
+  // Ctrl+PageUp/PageDown：切换工作表
+  const switchSheetById = (id: number) => {
+    if (id === activeId || !sheets.some(s => s.id === id)) return
+    setSheetData(sd => ({ ...sd, [activeId]: data }))
+    setData(sheetData[id] || {})
+    setFreezeAt(parseFreeze(sheetFreeze[id]))
+    setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
+  }
+  // === 网格键盘处理（容器持有焦点时；对齐 MS Excel 快捷键）===
+  const onGridKeyDown = (e: React.KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey
+    const tgt = e.target as HTMLElement
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT')) return
+    const key = e.key
+    // === 编辑态竞态保护 ===
+    // startEdit 通过 setTimeout 把焦点切到单元格输入框；在焦点切换生效前的窗口期里，
+    // 按键会到达网格容器。Excel 行为：Enter/Tab 提交并移动，Escape 取消，可打印字符追加，方向键提交并移动。
+    if (editCell) {
+      if (key === 'Enter' || key === 'Tab') {
+        e.preventDefault(); e.stopPropagation()
+        commitEdit(key === 'Enter' ? { dr: e.shiftKey ? -1 : 1, dc: 0 } : { dr: 0, dc: e.shiftKey ? -1 : 1 })
+        return
+      }
+      if (key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit(); return }
+      const edDR = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : 0
+      const edDC = key === 'ArrowLeft' ? -1 : key === 'ArrowRight' ? 1 : 0
+      if (edDR || edDC) { e.preventDefault(); e.stopPropagation(); commitEdit({ dr: edDR, dc: edDC }); return }
+      if (key.length === 1 && !e.altKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); setEditCell({ ...editCell, buf: editCell.buf + key }); return }
+      return
+    }
+    const move = (dr: number, dc: number) => {
+      const nr = Math.max(0, Math.min(rows - 1, active.r + dr))
+      const nc = Math.max(0, Math.min(cols - 1, active.c + dc))
+      selectCell(nr, nc)
+    }
+    const arrowDR = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : 0
+    const arrowDC = key === 'ArrowLeft' ? -1 : key === 'ArrowRight' ? 1 : 0
+    const isArrow = key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight'
+    if (mod && isArrow) {
+      e.preventDefault(); e.stopPropagation()
+      if (e.shiftKey) { const p = edgeOf(active.r, active.c, arrowDR, arrowDC); extendTo(p.r, p.c) }
+      else { const p = edgeOf(active.r, active.c, arrowDR, arrowDC); selectCell(p.r, p.c) }
+      return
+    }
+    if (mod && key === 'a') { e.preventDefault(); e.stopPropagation(); navAnchorRef.current = { r: 0, c: 0 }; setActive({ r: 0, c: 0 }); commitSelection({ r1: 0, c1: 0, r2: rows - 1, c2: cols - 1, mode: 'cell' }); return }
+    if (mod && key === 'd') { e.preventDefault(); e.stopPropagation(); fillDown(); return }
+    if (mod && key === 'r') { e.preventDefault(); e.stopPropagation(); fillRight(); return }
+    if (mod && key === ' ') { e.preventDefault(); e.stopPropagation(); selectCol(active.c); return }
+    if (!mod && e.shiftKey && key === ' ') { e.preventDefault(); e.stopPropagation(); selectRow(active.r); return }
+    if (mod && (key === 'PageDown' || key === 'PageUp')) {
+      e.preventDefault(); e.stopPropagation()
+      const sorted = [...sheets].sort((x, y) => x.id - y.id)
+      const idx = Math.max(0, sorted.findIndex(s => s.id === activeId))
+      const next = sorted[key === 'PageDown' ? Math.min(sorted.length - 1, idx + 1) : Math.max(0, idx - 1)]
+      if (next) switchSheetById(next.id)
+      return
+    }
+    if (mod && key === ';') {
+      e.preventDefault(); e.stopPropagation()
+      const now = new Date()
+      pushHistory()
+      setCellFmt(active.r, active.c, { formula: '', value: e.shiftKey ? now.toTimeString().slice(0, 5) : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` })
+      return
+    }
+    // Alt+= 自动求和（Excel 快捷键）
+    if (e.altKey && key === '=') { e.preventDefault(); e.stopPropagation(); insertAutoSum(); return }
+    // Home / End（含 Ctrl 组合跳 A1 / 数据区末尾）——必须在 `if (mod) return` 之前处理
+    if (key === 'Home') { e.preventDefault(); e.stopPropagation(); if (mod || e.ctrlKey) selectCell(0, 0); else selectCell(active.r, 0); return }
+    if (key === 'End') {
+      e.preventDefault(); e.stopPropagation()
+      if (mod || e.ctrlKey) { const ub = usedBounds(); selectCell(ub.r, ub.c) }
+      else { let nc = active.c; for (let c = cols - 1; c > active.c; c--) { const cell = getCell(active.r, c); if (cell.value || cell.formula) { nc = c; break } } selectCell(active.r, nc) }
+      return
+    }
+    if (mod) return // 其余 Ctrl 组合（C/V/X/Z/Y/F/B/I/U/L…）交给 window 全局处理器
+    if (e.shiftKey && isArrow) { e.preventDefault(); e.stopPropagation(); extendTo(Math.max(0, Math.min(rows - 1, active.r + arrowDR)), Math.max(0, Math.min(cols - 1, active.c + arrowDC))); return }
+    if (isArrow) { e.preventDefault(); e.stopPropagation(); move(arrowDR, arrowDC); return }
+    if (key === 'Tab') { e.preventDefault(); e.stopPropagation(); move(0, e.shiftKey ? -1 : 1); return }
+    if (key === 'Enter') { e.preventDefault(); e.stopPropagation(); move(e.shiftKey ? -1 : 1, 0); return }
+    if (key === 'PageDown' || key === 'PageUp') { e.preventDefault(); e.stopPropagation(); const d = key === 'PageDown' ? 20 : -20; if (e.shiftKey) extendTo(Math.max(0, Math.min(rows - 1, active.r + d)), active.c); else move(d, 0); return }
+    if (key === 'F2') { e.preventDefault(); e.stopPropagation(); startEdit(active.r, active.c); return }
+    if (key === 'Escape') {
+      // Excel 行为：Esc 先收拢多格选区为活动格单格选区；其余（关查找条/面板）交给 window Esc 处理器
+      const multi = selection.mode !== 'cell' || selection.r1 !== selection.r2 || selection.c1 !== selection.c2
+      if (multi && !findBar) { e.preventDefault(); e.stopPropagation(); selectCell(active.r, active.c); return }
+      return
+    }
+    if (key.length === 1 && !e.altKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); startEdit(active.r, active.c, key); return }
   }
   const selectRange = (r1: number, c1: number, r2: number, c2: number) =>
     commitSelection({ r1, c1, r2, c2, mode: 'cell' })
@@ -982,6 +1241,27 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       return nd
     })
     if (isCut) setClipboard(null)
+  }
+  // 把外部 TSV 文本按活动格为起点粘贴（支持从 Excel/记事本/微信等复制的内容），返回是否成功
+  const pasteText = (txt: string): boolean => {
+    if (!txt) return false
+    pushHistory()
+    const baseR = active.r, baseC = active.c
+    const lines = txt.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n')
+    setData(d => {
+      const nd = { ...d }
+      lines.forEach((line, ri) => {
+        line.split('\t').forEach((val, ci) => {
+          const r = baseR + ri, c = baseC + ci
+          if (r >= rows || c >= cols) return
+          const existing = d[`${r}-${c}`] || { value: '' }
+          if (val.startsWith('=')) nd[`${r}-${c}`] = { ...existing, formula: val, value: '' }
+          else nd[`${r}-${c}`] = { ...existing, formula: '', value: val }
+        })
+      })
+      return nd
+    })
+    return true
   }
 
   // === 插入 / 删除 行列（重排所有单元格坐标） ===
@@ -1733,13 +2013,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         <span style={{ color: 'var(--color-text-muted)' }}>fx</span>
         {(() => {
           const ac = active ? getCell(active.r, active.c) : ({ value: '' } as Cell)
-          const display = ac.formula || ac.value
+          const editingHere = !!(editCell && active && editCell.r === active.r && editCell.c === active.c)
+          const display = editingHere ? editCell!.buf : (ac.formula || ac.value)
           return (
             <input
+              ref={fbInputRef}
               value={display}
+              onFocus={() => { setFormulaBarFocused(true); if (editCell) editViaRef.current = 'bar' }}
+              onBlur={() => setFormulaBarFocused(false)}
               onChange={e => {
                 const v = e.target.value
                 if (!active) return
+                if (editingHere && editCell) { setEditCell({ ...editCell, buf: v }); return }
                 // 输入形如 "=函数名(" 且括号内为空时，自动用当前/上一次选区填充引用范围
                 const m = v.match(/^=\s*[A-Za-z]+\(\s*$/)
                 if (m) {
@@ -1759,6 +2044,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               }}
               onKeyDown={e => {
                 if (e.key === 'Enter') {
+                  e.preventDefault()
+                  if (editingHere) { commitEdit({ dr: 1, dc: 0 }); return }
                   const v = (e.target as HTMLInputElement).value
                   if (!active) return
                   if (v.startsWith('=')) {
@@ -1766,6 +2053,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   } else {
                     setCellFmt(active.r, active.c, { formula: '', value: v })
                   }
+                  ;(e.target as HTMLInputElement).blur()
+                  gridRef.current?.focus()
+                } else if (e.key === 'Escape' && editingHere) {
+                  e.preventDefault(); cancelEdit()
                 }
               }}
               className="flex-1 border-transparent focus:border-indigo-500 px-2 py-1 rounded font-mono text-xs"
@@ -1806,7 +2097,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {viewMode === 'pageBreak' ? t('sheet.pageBreakPreview') : t('sheet.pageLayout')}
           </div>
         )}
-        <div className="relative">
+        {/* 网格容器持有键盘焦点（Excel 模型）：方向键/回车/输入即编辑等由 onGridKeyDown 统一处理 */}
+        <div className="relative" ref={gridRef} tabIndex={0} onKeyDown={onGridKeyDown} style={{ outline: 'none' }}>
         <table className="border-collapse text-sm" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {showHeadings && (
           <thead>
@@ -1858,6 +2150,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   // 跳过被合并覆盖的单元格
                   if (cell.hiddenBy) return null
                   const isActive = active.r === r && active.c === c
+                  const isEditing = editCell?.r === r && editCell?.c === c
                   const mergeRange = cell.mergeRange
                   const sel = inSelection(r, c)
                   const bw = cell.border === 'thick' ? '3px' : cell.border === 'medium' ? '2px' : cell.border === 'thin' ? '1px' : undefined
@@ -1867,51 +2160,85 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   // 查找高亮：无填充色时用琥珀色底标记匹配（关闭查找条即消失）
                   const findHit = findKeys.has(`${r}-${c}`)
                   const valignMap: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
+                  // === Excel 式选区渲染（修复“区域+首格同时被选中”的视觉叠加）===
+                  // 区域内：浅蓝填充；活动格保持原底色（白/自身填充色）+ 1px 细框；
+                  // 整块选区外框：2px 主色，通过四至边界单元格的 inset box-shadow 拼出。
+                  const selR1 = Math.min(selection.r1, selection.r2), selR2 = Math.max(selection.r1, selection.r2)
+                  const selC1 = Math.min(selection.c1, selection.c2), selC2 = Math.max(selection.c1, selection.c2)
+                  const cellInSel = selection.mode === 'row' ? r === selection.r1 : selection.mode === 'col' ? c === selection.c1 : (r >= selR1 && r <= selR2 && c >= selC1 && c <= selC2)
+                  const singleSel = selection.mode === 'cell' && selR1 === selR2 && selC1 === selC2
+                  const shadowParts: string[] = []
+                  if (sel && cellInSel) {
+                    const edgeT = selection.mode === 'col' ? r === 0 : r === selR1
+                    const edgeB = selection.mode === 'col' ? r === rows - 1 : r === selR2
+                    const edgeL = selection.mode === 'row' ? c === 0 : c === selC1
+                    const edgeR = selection.mode === 'row' ? c === cols - 1 : c === selC2
+                    if (edgeT) shadowParts.push('inset 0 2px 0 0 var(--color-primary)')
+                    if (edgeB) shadowParts.push('inset 0 -2px 0 0 var(--color-primary)')
+                    if (edgeL) shadowParts.push('inset 2px 0 0 0 var(--color-primary)')
+                    if (edgeR) shadowParts.push('inset -2px 0 0 0 var(--color-primary)')
+                  }
+                  if (isActive && sel && cellInSel && !singleSel) shadowParts.push('inset 0 0 0 1px var(--color-primary)')
                   return (
                     <td key={c} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
-                      background: sel ? (isActive ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.12)') : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
+                      background: sel && cellInSel ? (isActive ? (cell.bg || '#ffffff') : 'rgba(59,130,246,0.12)') : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
                       borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)'),
                       borderWidth: bw,
                       width: `${cw}px`,
                       minWidth: `${cw}px`,
                       verticalAlign: cell.valign ? valignMap[cell.valign] : undefined,
                       left: isFrozenCell ? colLeft(c) : undefined,
+                      boxShadow: shadowParts.length ? shadowParts.join(', ') : undefined,
                     }}
-                      onMouseDown={() => { selectCell(r, c); setSelImage(null); setDragging(true) }}
-                      onMouseEnter={() => { if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c)) }}
-                      onMouseUp={() => setDragging(false)}
-                      onClick={() => selectCell(r, c)}
+                      onMouseDown={e => {
+                        // 公式引用点选：编辑以 = 开头的内容时，点击单元格插入其引用（Excel 行为）
+                        if (refModeActive) { e.preventDefault(); insertCellRef(r, c, e.shiftKey || !!refDragRef.current); return }
+                        if (e.shiftKey) { e.preventDefault(); extendTo(r, c); gridRef.current?.focus(); return }
+                        selectCell(r, c); setSelImage(null); setDragging(true); gridRef.current?.focus()
+                      }}
+                      onMouseEnter={() => {
+                        if (refModeActive && refDragRef.current) { insertCellRef(r, c, true); return }
+                        if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c))
+                      }}
+                      onMouseUp={() => { setDragging(false); refDragRef.current = null }}
+                      onDoubleClick={e => { if (refModeActive) return; e.preventDefault(); startEdit(r, c) }}
                       onContextMenu={e => {
                         e.preventDefault()
                         if (!inSelection(r, c)) selectCell(r, c)
                         setMenu({ x: e.clientX, y: e.clientY, r, c })
                       }}>
-                      {isActive && <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 0 2px var(--color-primary)' }}></div>}
                       {(() => {
                         const v = cell.value
                         const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
                         const common = { color: cell.color || '#1f2937', fontWeight: cell.bold ? 700 : 400, fontStyle: cell.italic ? 'italic' as const : undefined, textAlign: cell.align || (mergeRange ? 'center' : 'left'), textDecoration: decoration || undefined, fontSize: cell.fontSize ? `${cell.fontSize}px` : undefined, fontFamily: cell.fontFamily || undefined }
-                        if (cell.wrap) {
-                          // 自动换行：textarea 可换行显示与编辑（不固定高度，随内容撑开）
-                          return <textarea value={isActive ? v : fmtDisplay(cell)} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
-                            if (e.key === 'Enter' && !e.altKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); selectCell(Math.min(rows - 1, r + 1), c) }
-                            else if (e.key === 'Escape') { (e.target as HTMLTextAreaElement).blur() }
-                          }} rows={1} className="w-full px-2 outline-none bg-transparent resize-none" style={{ ...common as any, whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
+                        // === 编辑态：仅正在编辑的单元格渲染输入控件（Excel 模型）===
+                        if (isEditing && editCell) {
+                          if (cell.wrap) {
+                            return <textarea ref={editInputRef as any} value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, true)} rows={1} className="w-full px-2 outline-none bg-transparent resize-none" style={{ ...common as any, whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
+                          }
+                          if (cell.valid) {
+                            const opts = cell.valid.split(',').map(x => x.trim()).filter(Boolean)
+                            return <select ref={editInputRef as any} value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, false)} className="w-full h-7 px-1 outline-none bg-transparent" style={common as any}>
+                              {!opts.includes(editCell.buf) && <option value={editCell.buf}>{editCell.buf || ' '}</option>}
+                              {opts.map(o => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          }
+                          return <input ref={editInputRef as any} type="text" value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, false)} className="w-full h-7 px-2 outline-none bg-transparent" style={common as any} />
                         }
-                        if (cell.valid) {
-                          // 数据验证下拉：打开文件时读入 / 面板设置，保存时写回 xlsx
-                          const opts = cell.valid.split(',').map(x => x.trim()).filter(Boolean)
-                          return <select value={v} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} className="w-full h-7 px-1 outline-none bg-transparent" style={common as any}>
-                            {!opts.includes(v) && <option value={v}>{v || ' '}</option>}
-                            {opts.map(o => <option key={o} value={o}>{o}</option>)}
-                          </select>
-                        }
-                        return <input type="text" value={isActive ? v : fmtDisplay(cell)} onChange={e => setCell(r, c, e.target.value)} onFocus={() => selectCell(r, c)} onKeyDown={e => {
-                          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); selectCell(Math.min(rows - 1, r + 1), c) }
-                          else if (e.key === 'Escape') { (e.target as HTMLInputElement).blur() }
-                        }} className="w-full h-7 px-2 outline-none bg-transparent" style={common as any} />
+                        // === 显示态：纯 span 展示（不抢占键盘焦点，方向键/回车/输入由网格统一处理）===
+                        const display = fmtDisplay(cell)
+                        return (
+                          <>
+                            <span className="block w-full px-2 outline-none bg-transparent" style={{ ...common as any, lineHeight: `${rowH(r)}px`, minHeight: rowH(r), whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{display}</span>
+                            {isActive && cell.valid && (
+                              <span title={tf('sheet.editCell', '双击或输入编辑')} onMouseDown={e => { e.preventDefault(); e.stopPropagation(); startEdit(r, c) }}
+                                className="absolute right-0 top-0 h-full w-4 flex items-center justify-center text-[9px] cursor-pointer"
+                                style={{ color: 'var(--color-text-muted)' }}>▾</span>
+                            )}
+                          </>
+                        )
                       })()}
                     </td>
                   )

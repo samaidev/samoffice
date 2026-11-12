@@ -657,6 +657,43 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     }
     updateShape(selectedEl.index, patch)
   }
+  // === 字号数字输入（对齐 MS PPT：可直接键入 pt 值回车生效）===
+  // 画布 808px 对应页面宽 deckW(EMU)，shape.fontSize 存画布 px，艺术字 fontSize 存 pt 直存
+  const pxToPtUI = (px: number) => Math.round(px * 72 * deckW / (914400 * 808))
+  const ptToPxUI = (pt: number) => Math.max(6, Math.round(pt * 914400 * 808 / (72 * deckW)))
+  // 当前选中元素的字号（pt 显示值）；未选择或混合字号时返回空串
+  const activeFontSizePt = (() => {
+    if (!selectedEl) return ''
+    if (selectedEl.type === 'art') {
+      const at = current.artTexts[selectedEl.index]
+      return at?.fontSize ? String(Math.round(at.fontSize)) : ''
+    }
+    const sh = current.shapes[selectedEl.index]
+    if (!sh) return ''
+    const sizes = new Set<number>()
+    if (sh.fontSize) sizes.add(sh.fontSize)
+    ;(sh.paras || []).forEach(p => (p.runs || []).forEach(r => { if (r.fontSize) sizes.add(r.fontSize) }))
+    if (sizes.size === 1) return String(pxToPtUI([...sizes][0]))
+    return ''
+  })()
+  // 将 pt 字号应用到选中元素（shape 同步顶层与全部 run，艺术字直存 pt）
+  const applyFontSizePt = (pt: number) => {
+    if (!selectedEl) { alert(t('slide.selectElementFirst')) ; return }
+    const npt = Math.max(8, Math.min(400, Math.round(pt)))
+    if (selectedEl.type === 'art') { updateArtText(selectedEl.index, { fontSize: npt }); return }
+    const sh = current.shapes[selectedEl.index]
+    if (!sh) return
+    const px = ptToPxUI(npt)
+    const hasRunSizes = !!(sh.paras && sh.paras.some(p => (p.runs || []).some(r => r.fontSize)))
+    const patch: Partial<ShapeItem> = {}
+    if (hasRunSizes) {
+      patch.paras = sh.paras!.map(p => ({ ...p, runs: (p.runs || []).map(r => ({ ...r, fontSize: r.fontSize ? px : r.fontSize })) }))
+      if (sh.fontSize) patch.fontSize = px
+    } else {
+      patch.fontSize = px
+    }
+    updateShape(selectedEl.index, patch)
+  }
 
   // 艺术字操作
   const addArtText = (preset: any) => {
@@ -1166,6 +1203,20 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 </div>
               )}
             </div>
+            {/* 字号输入框：可直接键入 pt 数字回车生效（对齐 MS PPT），下拉提供常用字号 */}
+            <Dropdown
+              className="text-xs rounded-md px-2 ribbon-input"
+              style={{ width: 64, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+              editable
+              inputMode="numeric"
+              inputValue={activeFontSizePt}
+              placeholder="18"
+              onInputChange={(raw) => { const n = parseFloat(raw.trim()); if (!isNaN(n) && n > 0) applyFontSizePt(n) }}
+              value={activeFontSizePt}
+              onChange={(v) => { const n = parseFloat(v); if (!isNaN(n) && n > 0) applyFontSizePt(n) }}
+              options={[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96].map(n => ({ label: String(n), value: String(n) }))}
+              title={t('slide.fontSize')}
+            />
             {/* 字号调整：放大 / 缩小（同步顶层与所有 run） */}
             <RibbonButton icon="A+" label={t('slide.fontSizeUp')} onClick={() => bumpFontSize(2)} />
             <RibbonButton icon="A-" label={t('slide.fontSizeDown')} onClick={() => bumpFontSize(-2)} />

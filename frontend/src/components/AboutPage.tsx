@@ -10,6 +10,13 @@ export function AboutPage() {
       <div className="max-w-3xl mx-auto px-6 py-12">
         {/* Hero */}
         <div className="text-center mb-12">
+          <img
+            src="/logo.png"
+            alt="SamOffice Logo"
+            className="w-20 h-20 rounded-2xl mx-auto mb-4"
+            style={{ boxShadow: '0 6px 20px rgba(217, 119, 87, 0.35)' }}
+            draggable={false}
+          />
           <div
             className="inline-flex items-center gap-2 px-3 py-1 rounded-full mb-4"
             style={{

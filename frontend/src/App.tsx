@@ -1445,14 +1445,7 @@ ${t('sample.md.more')}
       >
         {/* LOGO + 名称 */}
         <div className="font-bold text-sm sm:text-base flex items-center gap-1.5 flex-shrink-0 py-2 pl-1">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold flex-shrink-0"
-            style={{
-              background: 'rgba(255,255,255,0.25)',
-              backdropFilter: 'blur(8px)',
-              border: '1px solid rgba(255,255,255,0.2)'
-            }}
-          >S</div>
+          <img src="/logo64.png" alt="SamOffice" className="w-7 h-7 rounded-lg flex-shrink-0" style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.25)' }} draggable={false} />
           <span className="hidden sm:inline tracking-tight">SamOffice</span>
         </div>
 

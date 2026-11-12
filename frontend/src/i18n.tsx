@@ -680,6 +680,8 @@ const dict: Record<string, { en: string; zh: string }> = {
   'slide.font': { en: 'Font', zh: '字体' },
   'slide.fontSizeUp': { en: 'Increase Font Size', zh: '增大字号' },
   'slide.fontSizeDown': { en: 'Decrease Font Size', zh: '减小字号' },
+  'slide.fontSize': { en: 'Font Size (pt)', zh: '字号 (pt)' },
+  'slide.selectElementFirst': { en: 'Please select an element first', zh: '请先选择元素' },
   'slide.bold': { en: 'Bold', zh: '加粗' },
   'slide.color': { en: 'Color', zh: '颜色' },
   'slide.paragraph': { en: 'Paragraph', zh: '段落' },
