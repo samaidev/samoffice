@@ -15,6 +15,7 @@ import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, 
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign } from './tableCommands'
 import { columnResizing, tableEditing, CellSelection } from 'prosemirror-tables'
 import { useI18n } from '../../i18n'
+import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
 import { PrintDialog } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
 import { Ruler } from '../../components/Ruler'
@@ -161,9 +162,10 @@ function SelectionMiniToolbar(props: {
         className="text-xs rounded-md px-1 ribbon-input"
         style={{ width: 62, height: 26, fontSize: 12 }}
         editable
-        inputMode="numeric"
+        inputMode="text"
         inputValue={activeFontSize.replace(/px$/, '')}
         value={activeFontSize}
+        onInputChange={(raw: string) => { const r = resolveFontSizeInput(raw); if (r) setFontSize(r) }}
         onChange={(v: string) => setFontSize(v)}
         options={fontSizeOptions}
         title={t('doc.fontSize')}
@@ -451,7 +453,7 @@ function extractFootnotes(doc: any): FootnoteData[] {
 }
 
 export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange, backend, onToast }: Props) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 补充系统已安装字体。
   // 注意：queryLocalFonts 在 WebView2 下返回的 family 多为英文/音译名（如 SimSun），
@@ -493,10 +495,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     { name: t('doc.font.default'), value: '' },
     ...dedupedFonts.sort().slice(0, FONT_CAP).map(f => ({ name: f, value: f, fontFamily: f })),
   ]
-  const FONT_SIZES = [
-    { name: t('doc.size.small'), value: '12px' }, { name: t('doc.size.body'), value: '15px' },
-    { name: t('doc.size.medium'), value: '18px' }, { name: t('doc.size.large'), value: '24px' }, { name: t('doc.size.heading'), value: '32px' },
-  ]
+  // 字号下拉：中文语言显示 MS Word 中文字号（初号～八号），英文显示数值；
+  // 值仍是 px 字符串（与内部 fontSize mark 一致）
+  const FONT_SIZES = lang === 'zh'
+    ? CN_FONT_SIZES.map(s => ({ name: s.name, value: `${s.px}px`, title: `${s.name}（${s.pt}pt / ${s.px}px）` }))
+    : [
+        { name: '12', value: '12px' }, { name: '15', value: '15px' },
+        { name: '18', value: '18px' }, { name: '24', value: '24px' }, { name: '32', value: '32px' },
+      ]
 
   const editorRef = useRef<HTMLDivElement>(null)
   const pageRef = useRef<HTMLDivElement>(null)
@@ -2628,8 +2634,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   onInputChange={(raw) => {
                     const v = raw.trim()
                     if (v === '') { setFontSize(''); return }
-                    const num = parseFloat(v)
-                    if (!isNaN(num) && num > 0) setFontSize(`${num}px`)
+                    // 支持中文字号名（初号/小四…）或纯数字（视为 px）
+                    const resolved = resolveFontSizeInput(v)
+                    if (resolved) { setFontSize(resolved); return }
                   }}
                   onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
                   value={activeFontSize}

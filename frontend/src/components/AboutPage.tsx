@@ -166,7 +166,7 @@ export function AboutPage() {
         </section>
 
         <div className="text-center mt-8 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-          <p>SamOffice v0.4.0 · Made with ❤️ by SamAI Group</p>
+          <p>SamOffice v0.5.0 · Made with ❤️ by SamAI Group</p>
           <p className="mt-1">
             <a href="https://samai.cc" target="_blank" rel="noopener noreferrer" className="hover:underline">
               samai.cc

@@ -1,7 +1,11 @@
 ; SamOffice 安装包脚本（Inno Setup 6.3+ / 7.x）
+; 版本号可由 CI 注入：iscc /DMyAppVersion=0.5.0 packaging/windows/SamOffice.iss
+; 未注入时使用默认值。路径全部相对仓库根，本地/CI 通用。
 ; 安装界面支持英文/简体中文；默认安装到用户目录，装完创建桌面快捷方式
+#ifndef MyAppVersion
+#define MyAppVersion "0.5.0"
+#endif
 #define MyAppName "SamOffice"
-#define MyAppVersion "0.4.0"
 #define MyAppExeName "samoffice.exe"
 
 [Setup]
@@ -14,7 +18,7 @@ PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputDir=dist
 OutputBaseFilename=SamOffice-setup-{#MyAppVersion}
-SetupIconFile=C:\Users\Administrator\samoffice\build\windows\icon.ico
+SetupIconFile=..\..\build\windows\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
@@ -29,7 +33,8 @@ Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "C:\Users\Administrator\samoffice\samoffice.exe"; DestDir: "{app}"; Flags: ignoreversion
+; exe 由 CI 在仓库根构建（samoffice.exe），路径相对 .iss 所在目录
+Source: "..\..\samoffice.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon

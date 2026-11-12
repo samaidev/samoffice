@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
+import { CN_FONT_SIZES } from '../../lib/cnFontSizes'
 import { PrintDialog } from '../../components/PrintDialog'
 
 interface Cell {
@@ -27,6 +28,12 @@ interface Selection {
   r1: number; c1: number; r2: number; c2: number
   mode: 'cell' | 'row' | 'col'
 }
+// 筛选/排序对话框里的一个排序级别
+interface SortLevel { col: number; asc: boolean }
+// 自动筛选：headerRow 表头行；filters[列号] = 该列允许值集合（空对象=无列被筛选）
+interface AutoFilterState { headerRow: number; filters: Record<number, string[]> }
+// 空白值在筛选集合里的特殊键
+const BLANK_KEY = '\u0000blank'
 // 浮动图片（前端态）：src 为 dataURL；快照回传时转为 base64/ext（与 io.go imageJSON 对应）
 interface SheetImage { row: number; col: number; src: string; width: number; height: number }
 // 单个 sheet 快照（与后端 io.go sheetJSON 对应：列宽 / 冻结 / 浮动图片）
@@ -90,6 +97,108 @@ function dataURLToBase64(src: string): { base64: string; ext: string } {
   if (!m) return { base64: '', ext: 'png' }
   const ext = m[1] === 'jpg' ? 'jpeg' : m[1]
   return { base64: m[2], ext }
+}
+
+// === 筛选下拉面板（对齐 MS Excel 列头筛选）===
+// 排序按钮 + 搜索框 + 全选 + 值多选列表；确定后按值集合筛选（非破坏性）
+function FilterDropdown({ values, initial, labels, onSort, onApply, onCancel }: {
+  values: string[]
+  initial: string[]
+  labels: { asc: string; desc: string; blank: string; all: string; search: string; ok: string; cancel: string }
+  onSort: (asc: boolean) => void
+  onApply: (checked: string[]) => void
+  onCancel: () => void
+}) {
+  const [q, setQ] = useState('')
+  const [checked, setChecked] = useState<Set<string>>(() => new Set(initial))
+  const shown = values.filter(v => v === BLANK_KEY || !q || v.toLowerCase().includes(q.toLowerCase()))
+  const allShownChecked = shown.length > 0 && shown.every(v => checked.has(v))
+  const toggle = (v: string) => setChecked(prev => { const n = new Set(prev); if (n.has(v)) n.delete(v); else n.add(v); return n })
+  const toggleAll = () => setChecked(prev => {
+    const n = new Set(prev)
+    if (allShownChecked) shown.forEach(v => n.delete(v))
+    else shown.forEach(v => n.add(v))
+    return n
+  })
+  return (
+    <div className="absolute top-full right-0 ribbon-popup" style={{ zIndex: 70, width: 208, cursor: 'default' }} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+      <div className="flex gap-1 mb-2">
+        <button className="btn btn-sm flex-1" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={() => onSort(true)}>↑ {labels.asc}</button>
+        <button className="btn btn-sm flex-1" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={() => onSort(false)}>↓ {labels.desc}</button>
+      </div>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder={labels.search} autoFocus
+        className="text-xs mb-2 border rounded px-2 py-1" style={{ width: '100%', background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }} />
+      <label className="flex items-center gap-1.5 text-xs mb-1 cursor-pointer" style={{ color: 'var(--color-text)', fontWeight: 600 }}>
+        <input type="checkbox" checked={allShownChecked} onChange={toggleAll} />
+        {labels.all}
+      </label>
+      <div className="max-h-44 overflow-y-auto mb-2 border rounded" style={{ borderColor: 'var(--color-border)' }}>
+        {shown.map(v => (
+          <label key={v} className="flex items-center gap-1.5 text-xs py-0.5 px-1 cursor-pointer hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>
+            <input type="checkbox" checked={checked.has(v)} onChange={() => toggle(v)} />
+            <span className="truncate" title={v === BLANK_KEY ? labels.blank : v}>{v === BLANK_KEY ? labels.blank : v}</span>
+          </label>
+        ))}
+        {!shown.length && <div className="text-xs py-2 text-center" style={{ color: 'var(--color-text-muted)' }}>—</div>}
+      </div>
+      <div className="flex gap-1">
+        <button className="btn btn-primary btn-sm flex-1" onClick={() => onApply([...checked])}>{labels.ok}</button>
+        <button className="btn btn-sm flex-1" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={onCancel}>{labels.cancel}</button>
+      </div>
+    </div>
+  )
+}
+
+// === 排序对话框（对齐 MS Excel 多级排序）===
+function SortDialog({ cols, colName, headerText, initLevels, initHasHeader, labels, onClose, onApply }: {
+  cols: number
+  colName: (c: number) => string
+  headerText: (c: number) => string
+  initLevels: { col: number; asc: boolean }[]
+  initHasHeader: boolean
+  labels: { title: string; major: string; add: string; del: string; header: string; ok: string; cancel: string; asc: string; desc: string }
+  onClose: () => void
+  onApply: (levels: { col: number; asc: boolean }[], hasHeader: boolean) => void
+}) {
+  const [lv, setLv] = useState(initLevels)
+  const [hdr, setHdr] = useState(initHasHeader)
+  const colOpts = Array.from({ length: cols }, (_, c) => ({ v: c, label: `${colName(c)}${hdr && headerText(c) ? ' - ' + headerText(c).slice(0, 12) : ''}` }))
+  const selStyle = { background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' } as const
+  return (
+    <div className="fixed inset-0 flex items-center justify-center" style={{ zIndex: 95, background: 'rgba(0,0,0,0.35)' }} onMouseDown={onClose}>
+      <div className="rounded-lg shadow-xl border p-4" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', width: 440, maxWidth: '92vw' }} onMouseDown={e => e.stopPropagation()}>
+        <div className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text)' }}>{labels.title}</div>
+        {lv.map((l, i) => (
+          <div key={i} className="flex items-center gap-1.5 mb-2">
+            <span className="text-xs flex-shrink-0" style={{ color: 'var(--color-text-muted)', width: 64 }}>{i === 0 ? labels.major : `${labels.major} ${i + 1}`}</span>
+            <select value={l.col} onChange={e => setLv(p => p.map((x, j) => j === i ? { ...x, col: Number(e.target.value) } : x))}
+              className="text-xs px-1 py-1 rounded border flex-1 min-w-0" style={selStyle}>
+              {colOpts.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+            <select value={l.asc ? '1' : '0'} onChange={e => setLv(p => p.map((x, j) => j === i ? { ...x, asc: e.target.value === '1' } : x))}
+              className="text-xs px-1 py-1 rounded border flex-shrink-0" style={{ ...selStyle, width: 76 }}>
+              <option value="1">{labels.asc}</option>
+              <option value="0">{labels.desc}</option>
+            </select>
+            {lv.length > 1 && (
+              <button className="toolbar-btn flex-shrink-0" title={labels.del} style={{ width: 26, height: 26 }}
+                onClick={() => setLv(p => p.filter((_, j) => j !== i))}>✕</button>
+            )}
+          </div>
+        ))}
+        <button className="btn btn-sm mb-3" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }}
+          onClick={() => setLv(p => [...p, { col: 0, asc: true }])}>{labels.add}</button>
+        <label className="flex items-center gap-1.5 text-xs mb-3 cursor-pointer" style={{ color: 'var(--color-text)' }}>
+          <input type="checkbox" checked={hdr} onChange={e => setHdr(e.target.checked)} />
+          {labels.header}
+        </label>
+        <div className="flex justify-end gap-2">
+          <button className="btn btn-primary btn-sm" onClick={() => onApply(lv, hdr)}>{labels.ok}</button>
+          <button className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={onClose}>{labels.cancel}</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // === SVG 图表渲染组件 ===
@@ -335,7 +444,7 @@ function evalFormula(expr: string, data: Record<string, Cell>): number | string 
 }
 
 export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, initialSheets, onSheetsChange }: Props) {
-  const { t, tf } = useI18n()
+  const { t, tf, lang } = useI18n()
 
   // 初始 sheet 标签：有外部数据时按传入的 sheet 名，否则给默认两个空 sheet
   const initialSheetList = initialSheets && initialSheets.length
@@ -370,12 +479,20 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   })
   const [active, setActive] = useState<{ r: number; c: number }>({ r: 0, c: 0 })
   const [selection, setSelection] = useState<Selection>({ r1: 0, c1: 0, r2: 0, c2: 0, mode: 'cell' })
+  // 多区域选择（对齐 MS Excel Ctrl+点选/Ctrl+拖拽）：主选区 + 附加区域
+  const [extraAreas, setExtraAreas] = useState<Selection[]>([])
   const [lastSelection, setLastSelection] = useState<Selection>({ r1: 0, c1: 0, r2: 0, c2: 0, mode: 'cell' })
   // 撤销 / 重做历史栈（针对当前工作表单元格数据）
   const [past, setPast] = useState<Record<string, Cell>[]>([])
   const [future, setFuture] = useState<Record<string, Cell>[]>([])
   const HISTORY_LIMIT = 100
   const [dragging, setDragging] = useState(false)
+  // Ctrl+拖拽追加区域 / 行列头拖拽多选的拖拽状态
+  const ctrlDragRef = useRef<{ r: number; c: number } | null>(null)
+  const rowDragRef = useRef<{ anchor: number; additive: boolean } | null>(null)
+  const colDragRef = useRef<{ anchor: number; additive: boolean } | null>(null)
+  const rowAnchorRef = useRef(0)
+  const colAnchorRef = useRef(0)
   const [colorMode, setColorMode] = useState<'font' | 'fill' | 'border'>('font')
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null)
   const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
@@ -482,8 +599,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const frozen = freezeAt !== null
   // 行分组（组/取消组）：折叠区间行
   const [rowGroups, setRowGroups] = useState<{ start: number; end: number; collapsed: boolean }[]>([])
-  // 筛选：仅隐藏不匹配的行（非破坏性）
-  const [filterRows, setFilterRows] = useState<Set<number> | null>(null)
+  // 自动筛选（对齐 MS Excel）：列头下拉 → 按值集合筛选（非破坏性，仅隐藏不匹配行）
+  const [autoFilter, setAutoFilter] = useState<AutoFilterState | null>(null)
+  const [filterMenuCol, setFilterMenuCol] = useState<number | null>(null)
+  // 排序对话框（MS Excel 多级排序）
+  const [sortDialog, setSortDialog] = useState<null | { levels: SortLevel[]; hasHeader: boolean }>(null)
   // 自定义视图（localStorage 命名视图：缩放/网格线/标题/公式栏/冻结）
   const [customViewNames, setCustomViewNames] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('sam-xlsx-views') || '[]') } catch { return [] }
@@ -576,15 +696,34 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return () => window.removeEventListener('keydown', onKey)
   }, [active, selection, clipboard, rows, cols, data, sheets, past, future, selImage])
 
-  // 鼠标在表格外松开时也结束选区拖拽（并结束公式引用拖拽）
+  // 鼠标在表格外松开时也结束选区拖拽（并结束公式引用/多区域/行列头拖拽）
   useEffect(() => {
-    const onUp = () => { if (dragging) setDragging(false); refDragRef.current = null }
+    const onUp = () => {
+      if (dragging) setDragging(false)
+      refDragRef.current = null
+      ctrlDragRef.current = null
+      rowDragRef.current = null
+      colDragRef.current = null
+    }
     window.addEventListener('mouseup', onUp)
     return () => window.removeEventListener('mouseup', onUp)
   }, [dragging])
 
   // 挂载后把焦点交给网格容器，方向键/输入即编辑立即可用（Excel 行为）
   useEffect(() => { gridRef.current?.focus() }, [])
+
+  // 点击任意处关闭筛选下拉（面板内部已 stopPropagation；Escape 也关闭）
+  useEffect(() => {
+    if (filterMenuCol === null) return
+    const onDown = () => setFilterMenuCol(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFilterMenuCol(null) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [filterMenuCol])
 
   // 点击空白处关闭右键菜单
   useEffect(() => {
@@ -661,45 +800,68 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (changed) setData(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
-  // 对当前选区内所有单元格批量应用格式（字体色 / 填充 / 边框 / 加粗等）
+  // === 多区域选择（对齐 MS Excel）：主选区 selection + 附加区域 extraAreas ===
+  const normArea = (a: Selection): Selection => ({
+    r1: Math.min(a.r1, a.r2), r2: Math.max(a.r1, a.r2),
+    c1: Math.min(a.c1, a.c2), c2: Math.max(a.c1, a.c2), mode: a.mode,
+  })
+  const areaHas = (a: Selection, r: number, c: number): boolean => {
+    const n = normArea(a)
+    if (a.mode === 'row') return r >= n.r1 && r <= n.r2
+    if (a.mode === 'col') return c >= n.c1 && c <= n.c2
+    return r >= n.r1 && r <= n.r2 && c >= n.c1 && c <= n.c2
+  }
+  const allAreas = (): Selection[] => (extraAreas.length ? [selection, ...extraAreas] : [selection])
+  const inSelection = (r: number, c: number) => allAreas().some(a => areaHas(a, r, c))
+  // 行/列头高亮：任意 行/列 模式区域覆盖即高亮
+  const rowInAnyArea = (r: number) => allAreas().some(a => a.mode === 'row' && r >= Math.min(a.r1, a.r2) && r <= Math.max(a.r1, a.r2))
+  const colInAnyArea = (c: number) => allAreas().some(a => a.mode === 'col' && c >= Math.min(a.c1, a.c2) && c <= Math.max(a.c1, a.c2))
+  // 对所有选中区域的每个单元格执行 fn（格式/清除等批量操作用）
+  const forEachSelCell = (fn: (r: number, c: number) => void) => {
+    for (const a of allAreas()) {
+      const n = normArea(a)
+      if (a.mode === 'row') { for (let r = n.r1; r <= n.r2; r++) for (let c = 0; c < cols; c++) fn(r, c) }
+      else if (a.mode === 'col') { for (let c = n.c1; c <= n.c2; c++) for (let r = 0; r < rows; r++) fn(r, c) }
+      else { for (let r = n.r1; r <= n.r2; r++) for (let c = n.c1; c <= n.c2; c++) fn(r, c) }
+    }
+  }
+  // 拖拽中更新最后一个附加区域（Ctrl+拖拽新区域的临时区域固定在末尾）
+  const updateLastExtraArea = (a: Selection) => setExtraAreas(prev => {
+    if (!prev.length) return [a]
+    const cp = prev.slice(0, -1)
+    cp.push(a)
+    return cp
+  })
+  // 统一更新选区并记录上一次选区（供公式自动填充引用使用）
+  // additive=true（Ctrl+点选/拖拽）时把区域并入附加区域；重复追加同一单格/整行/整列则取消选中
+  const commitSelection = (s: Selection, additive = false) => {
+    if (additive) {
+      const n = normArea(s)
+      const same = (a: Selection) => { const m = normArea(a); return m.mode === n.mode && m.r1 === n.r1 && m.r2 === n.r2 && m.c1 === n.c1 && m.c2 === n.c2 }
+      // 与主选区完全一致 → 收拢为单格（Excel 取消语义）
+      if (same(selection) && !extraAreas.length) { setSelection({ r1: n.r1, c1: n.c1, r2: n.r1, c2: n.c1, mode: 'cell' }); setExtraAreas([]); return }
+      setExtraAreas(prev => {
+        const idx = prev.findIndex(same)
+        if (idx >= 0) { const cp = [...prev]; cp.splice(idx, 1); return cp }
+        return [...prev, n]
+      })
+      return
+    }
+    setLastSelection(selection)
+    setSelection(s)
+    setExtraAreas([])
+  }
+  // 对当前选区内（含全部附加区域）所有单元格批量应用格式（字体色/填充/边框/加粗等）
   const setCellFmtRange = (fmt: Partial<Cell>) => {
     pushHistory()
     setData(d => {
-    const nd = { ...d }
-    const apply = (r: number, c: number) => {
-      const existing = nd[`${r}-${c}`] || { value: '' }
-      nd[`${r}-${c}`] = { ...existing, ...fmt }
-    }
-    if (selection.mode === 'row') {
-      const r = selection.r1
-      for (let c = 0; c < cols; c++) apply(r, c)
-    } else if (selection.mode === 'col') {
-      const c = selection.c1
-      for (let r = 0; r < rows; r++) apply(r, c)
-    } else {
-      const r1 = Math.min(selection.r1, selection.r2)
-      const r2 = Math.max(selection.r1, selection.r2)
-      const c1 = Math.min(selection.c1, selection.c2)
-      const c2 = Math.max(selection.c1, selection.c2)
-      for (let r = r1; r <= r2; r++)
-        for (let c = c1; c <= c2; c++) apply(r, c)
-    }
-    return nd
-  })
-  }
-  const inSelection = (r: number, c: number) => {
-    if (selection.mode === 'row') return selection.r1 === r
-    if (selection.mode === 'col') return selection.c1 === c
-    const r1 = Math.min(selection.r1, selection.r2)
-    const r2 = Math.max(selection.r1, selection.r2)
-    const c1 = Math.min(selection.c1, selection.c2)
-    const c2 = Math.max(selection.c1, selection.c2)
-    return r >= r1 && r <= r2 && c >= c1 && c <= c2
-  }
-  // 统一更新选区并记录上一次选区（供公式自动填充引用使用）
-  const commitSelection = (s: Selection) => {
-    setLastSelection(selection)
-    setSelection(s)
+      const nd = { ...d }
+      forEachSelCell((r, c) => {
+        const existing = nd[`${r}-${c}`] || { value: '' }
+        nd[`${r}-${c}`] = { ...existing, ...fmt }
+      })
+      return nd
+    })
   }
   // 将选区转换为 A1 表示法（如 S2:S43）；单格返回 S2
   const selToRef = (s: Selection): string => {
@@ -712,9 +874,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const selectCell = (r: number, c: number) => {
     setActive({ r, c })
-    // 对齐 MS Excel：任何普通单击都收拢为单格选区（区域内点击不保留旧区域），
-    // 配合渲染层“区域外框 + 活动格细框”修复“同时选中单格与整个区域”的视觉问题。
-    // 整块复制/格式刷请拖拽选区或用 Shift+方向键/Shift+点击扩展。
+    // 对齐 MS Excel：普通单击收拢为单格选区并清空附加区域；
+    // Ctrl+点选/拖拽 追加区域，Shift+方向键/点击 扩展主选区。
     navAnchorRef.current = { r, c }
     commitSelection({ r1: r, c1: c, r2: r, c2: c, mode: 'cell' })
   }
@@ -866,6 +1027,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setData(sheetData[id] || {})
     setFreezeAt(parseFreeze(sheetFreeze[id]))
     setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
+    setExtraAreas([])
   }
   // === 网格键盘处理（容器持有焦点时；对齐 MS Excel 快捷键）===
   const onGridKeyDown = (e: React.KeyboardEvent) => {
@@ -941,8 +1103,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (key === 'PageDown' || key === 'PageUp') { e.preventDefault(); e.stopPropagation(); const d = key === 'PageDown' ? 20 : -20; if (e.shiftKey) extendTo(Math.max(0, Math.min(rows - 1, active.r + d)), active.c); else move(d, 0); return }
     if (key === 'F2') { e.preventDefault(); e.stopPropagation(); startEdit(active.r, active.c); return }
     if (key === 'Escape') {
-      // Excel 行为：Esc 先收拢多格选区为活动格单格选区；其余（关查找条/面板）交给 window Esc 处理器
-      const multi = selection.mode !== 'cell' || selection.r1 !== selection.r2 || selection.c1 !== selection.c2
+      // Excel 行为：Esc 先收拢多格/多区域选区为活动格单格选区；其余（关查找条/面板）交给 window Esc 处理器
+      const multi = selection.mode !== 'cell' || selection.r1 !== selection.r2 || selection.c1 !== selection.c2 || extraAreas.length > 0
       if (multi && !findBar) { e.preventDefault(); e.stopPropagation(); selectCell(active.r, active.c); return }
       return
     }
@@ -950,14 +1112,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const selectRange = (r1: number, c1: number, r2: number, c2: number) =>
     commitSelection({ r1, c1, r2, c2, mode: 'cell' })
-  const selectRow = (r: number) => {
-    setActive({ r, c: selection.c1 })
-    commitSelection({ r1: r, c1: selection.c1, r2: r, c2: selection.c1, mode: 'row' })
+  // 选中整行（支持区间：拖拽/Shift 扩展时 r1≠r2）；additive=true 时 Ctrl 多选
+  const selectRowSpan = (r1: number, r2: number, additive = false) => {
+    setActive({ r: additive ? active.r : r1, c: active.c })
+    commitSelection({ r1, r2, c1: 0, c2: cols - 1, mode: 'row' }, additive)
   }
-  const selectCol = (c: number) => {
-    setActive({ r: selection.r1, c })
-    commitSelection({ r1: selection.r1, c1: c, r2: selection.r1, c2: c, mode: 'col' })
+  const selectRow = (r: number) => selectRowSpan(r, r)
+  const selectColSpan = (c1: number, c2: number, additive = false) => {
+    setActive({ r: active.r, c: additive ? active.c : c1 })
+    commitSelection({ r1: 0, r2: rows - 1, c1, c2, mode: 'col' }, additive)
   }
+  const selectCol = (c: number) => selectColSpan(c, c)
 
   // === 撤销 / 重做 ===
   // 在用户编辑动作前调用：记录当前数据快照
@@ -983,41 +1148,35 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setFuture(future.slice(0, -1))
     setData(next)
   }
-  // 清除选区内容（保留格式）：Delete / Backspace 快捷键
+  // 清除选区内容（保留格式）：Delete / Backspace 快捷键；作用于全部选中区域
   const clearCellsContent = () => {
     pushHistory()
     setData(d => {
       const nd = { ...d }
-      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
-      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
-      for (let r = r1; r <= r2; r++)
-        for (let c = c1; c <= c2; c++) {
-          const k = `${r}-${c}`
-          nd[k] = { ...(nd[k] || { value: '' }), value: '', formula: '' }
-        }
+      forEachSelCell((r, c) => {
+        const k = `${r}-${c}`
+        nd[k] = { ...(nd[k] || { value: '' }), value: '', formula: '' }
+      })
       return nd
     })
   }
-  // 清除选区格式（保留 value/formula/valid/合并信息）：字体/填充/边框/对齐/数字格式等
+  // 清除选区格式（保留 value/formula/valid/合并信息）；作用于全部选中区域
   const clearSelectionFormat = () => {
     pushHistory()
     setData(d => {
       const nd = { ...d }
-      const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
-      const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
-      for (let r = r1; r <= r2; r++)
-        for (let c = c1; c <= c2; c++) {
-          const k = `${r}-${c}`
-          const cell = nd[k]
-          if (!cell) continue
-          nd[k] = {
-            ...cell,
-            bold: undefined, italic: undefined, under: undefined, strike: undefined,
-            color: undefined, bg: undefined, border: undefined, borderColor: undefined,
-            align: undefined, fmt: undefined, fontSize: undefined, fontFamily: undefined,
-            valign: undefined, wrap: undefined,
-          }
+      forEachSelCell((r, c) => {
+        const k = `${r}-${c}`
+        const cell = nd[k]
+        if (!cell) return
+        nd[k] = {
+          ...cell,
+          bold: undefined, italic: undefined, under: undefined, strike: undefined,
+          color: undefined, bg: undefined, border: undefined, borderColor: undefined,
+          align: undefined, fmt: undefined, fontSize: undefined, fontFamily: undefined,
+          valign: undefined, wrap: undefined,
         }
+      })
       return nd
     })
   }
@@ -1192,8 +1351,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
 
   // === 复制 / 剪切 / 粘贴 ===
   const selRect = () => {
-    if (selection.mode === 'row') return { r1: selection.r1, c1: 0, r2: selection.r1, c2: cols - 1 }
-    if (selection.mode === 'col') return { r1: 0, c1: selection.c1, r2: rows - 1, c2: selection.c1 }
+    if (selection.mode === 'row') return { r1: Math.min(selection.r1, selection.r2), c1: 0, r2: Math.max(selection.r1, selection.r2), c2: cols - 1 }
+    if (selection.mode === 'col') return { r1: 0, c1: Math.min(selection.c1, selection.c2), r2: rows - 1, c2: Math.max(selection.c1, selection.c2) }
     return {
       r1: Math.min(selection.r1, selection.r2),
       c1: Math.min(selection.c1, selection.c2),
@@ -1490,6 +1649,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setPast([]); setFuture([])
     setFreezeAt(parseFreeze(sheetFreeze[id]))
     setSelImage(null)
+    // 筛选/排序对话框/多区域是工作表级状态，切换时重置
+    setAutoFilter(null); setFilterMenuCol(null); setSortDialog(null); setExtraAreas([])
   }
   const renameSheet = (id: number, name: string) => setSheets(s => s.map(x => x.id === id ? { ...x, name } : x))
   // 删除工作表（至少保留 1 个；删除当前表时活动标签回退到相邻表）
@@ -1514,41 +1675,73 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const activeSheet = sheets.find(s => s.active) || sheets[0]
 
-  // 排序：保留整行单元格对象（样式/公式/格式），数值感知，一次历史记录
-  const sortRangeByCol = (asc: boolean, col: number, headerRow: boolean) => {
-    const start = headerRow ? 1 : 0
-    // 排序区域内含合并单元格时整行搬运会错位损坏布局：先提示并自动拆分
+  // === 排序 / 筛选（对齐 MS Excel）===
+  // 从活动单元格向上找“当前连续数据区”的首行（作为表头行候选）
+  const detectHeaderRow = () => {
+    const rowHasData = (rr: number) => { for (let c = 0; c < cols; c++) { const cell = data[`${rr}-${c}`]; if (cell && (cell.value || cell.formula)) return true } return false }
+    if (active.r < 0) return 0
+    let r = active.r
+    // 活动行无数据（如停在数据区下方的空行）：向上找最近的数据行再找区域顶部
+    if (!rowHasData(r)) {
+      let rr = r
+      while (rr > 0 && !rowHasData(rr)) rr--
+      if (!rowHasData(rr)) return 0
+      r = rr
+    }
+    while (r > 0 && rowHasData(r - 1)) r--
+    return r
+  }
+  // 值比较：数值感知（供筛选列表排序）
+  const compareValues = (va: string, vb: string, numeric: boolean): number => {
+    if (numeric) {
+      const na = parseFloat(va), nb = parseFloat(vb)
+      if (!isNaN(na) && !isNaN(nb)) return na - nb
+    }
+    return va.localeCompare(vb, 'zh-Hans-CN')
+  }
+  // 多级排序：levels 依次比较；整行搬运（样式/公式跟随），区域内合并先拆分
+  const applySortLevels = (levels: SortLevel[], startRow: number, endRow: number) => {
+    if (!levels.length || endRow < startRow) return
     let hasMerge = false
     for (const key in data) {
       if (data[key].mergeRange || data[key].hiddenBy) {
         const r = Number(key.split('-')[0])
-        if (r >= start) { hasMerge = true; break }
+        if (r >= startRow && r <= endRow) { hasMerge = true; break }
       }
     }
     if (hasMerge && !window.confirm(tf('sheet.sortMergeWarn', '排序区域内含合并单元格，将先拆分合并再排序，是否继续？'))) return
     pushHistory()
     setData(d => {
-      // 先拆分区域内所有合并（merge/hidden 指针不随行搬运）
       const stripped: Record<string, Cell> = { ...d }
       for (const key in stripped) {
         const cell = stripped[key]
-        if ((cell.mergeRange || cell.hiddenBy) && Number(key.split('-')[0]) >= start)
+        if ((cell.mergeRange || cell.hiddenBy) && Number(key.split('-')[0]) >= startRow && Number(key.split('-')[0]) <= endRow)
           stripped[key] = { ...cell, mergeRange: undefined, hiddenBy: undefined }
       }
       const idx: number[] = []
-      for (let r = start; r < rows; r++) idx.push(r)
-      const numeric = idx.every(r => { const v = (stripped[`${r}-${col}`]?.value ?? '').trim(); return v === '' || !isNaN(Number(v)) })
+      for (let r = startRow; r <= endRow; r++) idx.push(r)
+      // 数值感知：某列全为数字/空才按数值比较
+      const numericOf = (col: number) => idx.every(r => { const v = (stripped[`${r}-${col}`]?.value ?? '').trim(); return v === '' || !isNaN(Number(v)) })
+      // MS Excel 规则：空白始终沉底（不随升降序翻转）；多级依次比较，同级稳定
       idx.sort((a, b) => {
-        const va = (stripped[`${a}-${col}`]?.value ?? '').trim()
-        const vb = (stripped[`${b}-${col}`]?.value ?? '').trim()
-        let cmp: number
-        if (numeric) cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0)
-        else cmp = va.localeCompare(vb, 'zh-Hans-CN')
-        return asc ? cmp : -cmp
+        for (let i = 0; i < levels.length; i++) {
+          const lv = levels[i]
+          const va = (stripped[`${a}-${lv.col}`]?.value ?? '').trim()
+          const vb = (stripped[`${b}-${lv.col}`]?.value ?? '').trim()
+          if (va === '' && vb === '') continue
+          if (va === '') return 1
+          if (vb === '') return -1
+          const numeric = numericOf(lv.col)
+          let cmp: number
+          if (numeric) { const na = parseFloat(va), nb = parseFloat(vb); cmp = isNaN(na) || isNaN(nb) ? va.localeCompare(vb, 'zh-Hans-CN') : na - nb }
+          else cmp = va.localeCompare(vb, 'zh-Hans-CN')
+          if (cmp !== 0) return lv.asc ? cmp : -cmp
+        }
+        return a - b // 稳定排序：保持原相对顺序
       })
       const nd: Record<string, Cell> = { ...stripped }
       idx.forEach((srcRow, i) => {
-        const dstRow = start + i
+        const dstRow = startRow + i
         if (srcRow === dstRow) return
         for (let c = 0; c < cols; c++) {
           const k = `${srcRow}-${c}`
@@ -1559,8 +1752,72 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       return nd
     })
   }
-  // 兼容旧调用（升序，跳过首行）
-  const sortByCol = (asc: boolean) => sortRangeByCol(asc, active.c, true)
+  // 快速排序（A→Z / Z→A / 筛选下拉内排序）：
+  // 选区跨多行时只排序选区行；否则排序当前数据区（表头行之下）
+  const quickSort = (asc: boolean, colArg?: number) => {
+    const col = colArg !== undefined ? colArg : (selection.mode === 'col' ? Math.min(selection.c1, selection.c2) : active.c)
+    const multiRowSel = selection.mode === 'cell' && selection.r1 !== selection.r2
+    if (multiRowSel) {
+      const top = Math.min(selection.r1, selection.r2), bot = Math.max(selection.r1, selection.r2)
+      const hr = detectHeaderRow()
+      const start = top === hr && bot > top ? top + 1 : top
+      applySortLevels([{ col, asc }], start, bot)
+    } else {
+      applySortLevels([{ col, asc }], detectHeaderRow() + 1, rows - 1)
+    }
+  }
+  // 兼容旧调用（升序，跳过表头）
+  const sortByCol = (asc: boolean) => quickSort(asc)
+
+  // === 自动筛选（对齐 MS Excel 列头下拉）===
+  const toggleAutoFilter = () => {
+    if (autoFilter) { setAutoFilter(null); setFilterMenuCol(null); return }
+    setAutoFilter({ headerRow: detectHeaderRow(), filters: {} })
+  }
+  const clearAllFilters = () => setAutoFilter(af => (af ? { ...af, filters: {} } : af))
+  const anyFilterActive = !!autoFilter && Object.keys(autoFilter.filters).length > 0
+  // 某列的候选值（含空白占位），数值感知排序（数字→文本→空白）
+  const filterValues = (col: number): string[] => {
+    const hr = autoFilter?.headerRow ?? 0
+    const set = new Set<string>()
+    for (let r = hr + 1; r < rows; r++) {
+      const v = (data[`${r}-${col}`]?.value ?? '').trim()
+      set.add(v === '' ? BLANK_KEY : v)
+    }
+    const allNumeric = [...set].every(v => v === BLANK_KEY || !isNaN(Number(v)))
+    return [...set].sort((a, b) => {
+      if (a === BLANK_KEY) return 1
+      if (b === BLANK_KEY) return -1
+      if (allNumeric) { const na = parseFloat(a), nb = parseFloat(b); if (!isNaN(na) && !isNaN(nb)) return na - nb }
+      return a.localeCompare(b, 'zh-Hans-CN')
+    })
+  }
+  // 应用某列筛选：全选=清除该列筛选
+  const applyColumnFilter = (col: number, checked: string[]) => {
+    setAutoFilter(af => {
+      if (!af) return af
+      const filters = { ...af.filters }
+      if (checked.length >= filterValues(col).length) delete filters[col]
+      else filters[col] = checked
+      return { ...af, filters }
+    })
+    setFilterMenuCol(null)
+  }
+  // 被筛选隐藏的行（任一被筛列的值不在允许集合内即隐藏；表头行始终显示）
+  const filterHiddenRows = (() => {
+    const s = new Set<number>()
+    if (!autoFilter) return s
+    const fcols = Object.keys(autoFilter.filters).map(Number)
+    if (!fcols.length) return s
+    for (let r = autoFilter.headerRow + 1; r < rows; r++) {
+      for (const c of fcols) {
+        const v = (data[`${r}-${c}`]?.value ?? '').trim()
+        const key = v === '' ? BLANK_KEY : v
+        if (!autoFilter.filters[c].includes(key)) { s.add(r); break }
+      }
+    }
+    return s
+  })()
 
   // === 条件格式：对活动列应用，一次历史记录；记录最近一次操作供“重新应用” ===
   const applyCond = (kind: 'aboveAvg' | 'belowAvg' | 'top10' | 'dataBar' | 'colorScale') => {
@@ -1606,6 +1863,23 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if ((cell.value || '').toLowerCase().includes(q) || (cell.formula || '').toLowerCase().includes(q)) s.add(key)
     }
     return s
+  })()
+
+  // 状态栏统计（对齐 MS Excel）：全部选中区域的 非空计数/数值计数/求和/平均值（被筛选隐藏的行不计入）
+  const selStats = (() => {
+    let count = 0, numCount = 0, sum = 0
+    for (const key in data) {
+      const cell = data[key]
+      const v = (cell.value ?? '').trim()
+      if (v === '') continue
+      const [r, c] = key.split('-').map(Number)
+      if (!inSelection(r, c) || filterHiddenRows.has(r) || collapsedRows.has(r)) continue
+      count++
+      const n = Number(v)
+      if (!isNaN(n) && isFinite(n)) { numCount++; sum += n }
+    }
+    const fmtNum = (x: number) => { const r = Math.round(x * 100) / 100; return String(r) }
+    return { count, numCount, sum: fmtNum(sum), avg: numCount ? fmtNum(sum / numCount) : '' }
   })()
 
   return (
@@ -1672,11 +1946,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               <option value="">{tf('sheet.fontDefault', '默认字体')}</option>
               {['微软雅黑', '宋体', '黑体', '楷体', 'Arial', 'Times New Roman', 'Consolas'].map(f => <option key={f} value={f}>{f}</option>)}
             </select>
+            {/* 字号下拉：中文语言显示 MS Excel 中文字号（初号～八号，值为 px），英文显示数值 */}
             <select value={getCell(active.r, active.c).fontSize ? String(getCell(active.r, active.c).fontSize) : ''} onChange={e => setCellFmtRange({ fontSize: e.target.value ? Number(e.target.value) : undefined })}
-              className="text-xs px-1 py-1 rounded border w-[62px]" title={tf('sheet.fontSize', '字号')}
+              className="text-xs px-1 py-1 rounded border w-[74px]" title={tf('sheet.fontSize', '字号')}
               style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>
               <option value="">{tf('sheet.sizeDefault', '字号')}</option>
-              {[10, 11, 12, 14, 16, 18, 20, 24, 28, 36].map(s => <option key={s} value={s}>{s}</option>)}
+              {(lang === 'zh'
+                ? CN_FONT_SIZES.map(s => ({ v: s.px, label: `${s.name} ${s.px}` }))
+                : [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48].map(s => ({ v: s, label: String(s) }))
+              ).map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+              {/* 当前字号不在预置列表时补一项，保证回显 */}
+              {(() => { const cur = getCell(active.r, active.c).fontSize; if (!cur) return null; const inList = lang === 'zh' ? CN_FONT_SIZES.some(s => s.px === cur) : [8,9,10,11,12,14,16,18,20,24,28,36,48].includes(cur); return inList ? null : <option value={cur}>{cur}</option> })()}
             </select>
             <RibbonButton icon="🧹" label={tf('sheet.clearFormat', '清除格式')} onClick={() => clearSelectionFormat()} title={tf('sheet.clearFormatTitle', '清除选区格式（保留内容）')} />
           </RibbonGroup>
@@ -1832,33 +2112,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         </>)}
         {ribbonTab === 'data' && (<>
           <RibbonGroup label={t('sheet.sortFilter')}>
-            <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => sortRangeByCol(true, active.c, true)} title={tf('sheet.sortAscTitle', '按当前列升序（保留样式）')} />
-            <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => sortRangeByCol(false, active.c, true)} title={tf('sheet.sortDescTitle', '按当前列降序（保留样式）')} />
-            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => {
-              // 非破坏性筛选：只隐藏不匹配的行，不改任何单元格内容/颜色，可一键清除
-              const v = prompt(tf('sheet.filterPrompt', '输入筛选关键词：'))
-              if (v === null) return
-              if (v === '') { setFilterRows(null); return }
-              const hit = new Set<number>()
-              for (let r = 0; r < rows; r++) if ((getCell(r, active.c).value || '').includes(v)) hit.add(r)
-              if (!hit.size) { alert(tf('sheet.filterNoMatch', '无匹配行')); return }
-              setFilterRows(hit)
-            }} active={!!filterRows} title={t('sheet.filterTitle')} />
-            {/* MS Office 风格排序对话框 */}
+            <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => quickSort(true)} title={tf('sheet.sortAscTitle', '按当前列升序（保留样式）')} />
+            <RibbonButton icon="↓" label={t('sheet.sortDesc')} onClick={() => quickSort(false)} title={tf('sheet.sortDescTitle', '按当前列降序（保留样式）')} />
+            {/* 自动筛选：开启后列头出现筛选下拉（值列表多选，对齐 MS Excel） */}
+            <RibbonButton icon="🔍" label={t('sheet.filter')} onClick={() => toggleAutoFilter()} active={!!autoFilter} title={tf('sheet.filterToggleTitle', '切换自动筛选（列头出现下拉箭头）')} />
+            {/* MS Office 风格多级排序对话框 */}
             <RibbonButton icon="⇅" label={t('sheet.customSort')} onClick={() => {
-              const col = prompt(tf('sheet.customSortPrompt2', '输入排序列（如 A）：'), colName(active.c))
-              if (!col) return
-              const m = col.trim().toUpperCase().match(/^([A-Z]+)$/)
-              if (!m) { alert(tf('sheet.customSortBad', '请输入列字母，如 A 或 AB')); return }
-              let ci = 0
-              for (const ch of m[1]) ci = ci * 26 + (ch.charCodeAt(0) - 64)
-              ci -= 1
-              if (ci < 0 || ci >= cols) { alert(tf('sheet.customSortBad', '列超出范围')); return }
-              const dir = prompt(tf('sheet.customSortDir', '输入排序方向：1=升序，0=降序'), '1')
-              if (dir === null) return
-              sortRangeByCol(dir.trim() !== '0', ci, true)
+              setSortDialog({ levels: [{ col: active.c, asc: true }], hasHeader: true })
             }} title={t('sheet.customSortTitle')} />
-            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => setFilterRows(null)} disabled={!filterRows} title={t('sheet.clearFilterTitle')} />
+            <RibbonButton icon="🖽" label={t('sheet.clearFilter')} onClick={() => { clearAllFilters(); setFilterMenuCol(null) }} disabled={!anyFilterActive} title={t('sheet.clearFilterTitle')} />
             <RibbonButton icon="🔂" label={t('sheet.reapply')} onClick={() => { if (lastCondRef.current) lastCondRef.current(); else alert(tf('sheet.reapplyNone', '还没有可重放的条件格式')) }} title={t('sheet.reapplyTitle')} />
           </RibbonGroup>
           {/* MS Office 风格数据工具 */}
@@ -2009,7 +2271,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       {/* 公式栏 */}
       {showFormulaBar && (
       <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
-        <div className="font-mono font-semibold px-2 py-0.5 rounded" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)', minWidth: '50px', textAlign: 'center' }}>{colName(active.c)}{active.r + 1}</div>
+        <div className="font-mono font-semibold px-2 py-0.5 rounded" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary)', minWidth: '50px', textAlign: 'center' }}>{selToRef(selection)}{extraAreas.length ? ` +${extraAreas.length}` : ''}</div>
         <span style={{ color: 'var(--color-text-muted)' }}>fx</span>
         {(() => {
           const ac = active ? getCell(active.r, active.c) : ({ value: '' } as Cell)
@@ -2106,15 +2368,63 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}></th>
               {Array.from({ length: cols }).map((_, c) => {
                 const w = curColWidths[c] || 80
+                const colSel = colInAnyArea(c)
+                const hasColFilter = !!autoFilter && autoFilter.filters[c] !== undefined
                 return (
                 <th key={c}
-                  className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 z-10 transition-colors cursor-pointer select-none`}
-                  style={{ background: selection.mode === 'col' && selection.c1 === c ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
-                  onClick={() => selectCol(c)} title={tf('sheet.selectCol', '选择整列')}>
+                  className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 transition-colors cursor-pointer select-none`}
+                  style={{ zIndex: filterMenuCol === c ? 45 : 10, background: colSel ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
+                  onMouseDown={e => {
+                    // 对齐 MS Excel：Ctrl+点击 追加/取消列选区（可拖拽扩展）；Shift+点击 从锚点扩展
+                    if (e.ctrlKey || e.metaKey) {
+                      e.preventDefault()
+                      const exIdx = extraAreas.findIndex(a => a.mode === 'col' && Math.min(a.c1, a.c2) === Math.max(a.c1, a.c2) && a.c1 === c)
+                      if (exIdx >= 0) setExtraAreas(arr => arr.filter((_, i) => i !== exIdx))
+                      else setExtraAreas(arr => [...arr, { r1: 0, r2: rows - 1, c1: c, c2: c, mode: 'col' }])
+                      colDragRef.current = { anchor: c, additive: true }
+                      return
+                    }
+                    if (e.shiftKey) { e.preventDefault(); selectColSpan(Math.min(colAnchorRef.current, c), Math.max(colAnchorRef.current, c)); return }
+                    e.preventDefault()
+                    colAnchorRef.current = c
+                    selectColSpan(c, c)
+                    colDragRef.current = { anchor: c, additive: false }
+                  }}
+                  onMouseEnter={() => {
+                    const d = colDragRef.current
+                    if (!d) return
+                    if (d.additive) updateLastExtraArea({ r1: 0, r2: rows - 1, c1: Math.min(d.anchor, c), c2: Math.max(d.anchor, c), mode: 'col' })
+                    else selectColSpan(Math.min(d.anchor, c), Math.max(d.anchor, c))
+                  }}
+                  title={tf('sheet.selectCol', '选择整列')}>
                   {colName(c)}
                   {/* 右缘拖拽调整列宽 */}
                   <span className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize" title={tf('sheet.resizeCol', '拖拽调整列宽')}
                     onMouseDown={e => startColResize(e, c)} />
+                  {/* 自动筛选下拉按钮（对齐 MS Excel 列头漏斗/箭头） */}
+                  {autoFilter && (
+                    <span
+                      className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded-sm text-[9px] leading-none"
+                      style={{ background: hasColFilter ? 'var(--color-primary)' : 'var(--color-surface)', color: hasColFilter ? '#fff' : 'var(--color-text-muted)', border: '1px solid var(--color-border)' }}
+                      title={tf('sheet.filterMenuTitle', '筛选')}
+                      onMouseDown={e => { e.stopPropagation(); e.preventDefault() }}
+                      onClick={e => { e.stopPropagation(); setFilterMenuCol(filterMenuCol === c ? null : c) }}
+                    >▼</span>
+                  )}
+                  {filterMenuCol === c && (
+                    <FilterDropdown
+                      values={filterValues(c)}
+                      initial={hasColFilter ? autoFilter!.filters[c] : filterValues(c)}
+                      labels={{
+                        asc: t('sheet.sortAsc'), desc: t('sheet.sortDesc'),
+                        blank: tf('sheet.filterBlank', '(空白)'), all: tf('sheet.filterSelectAll', '全选'),
+                        search: tf('sheet.filterSearch', '搜索'), ok: tf('sheet.filterOk', '确定'), cancel: tf('sheet.filterCancel', '取消'),
+                      }}
+                      onSort={asc => { setFilterMenuCol(null); quickSort(asc, c) }}
+                      onApply={keys => applyColumnFilter(c, keys)}
+                      onCancel={() => setFilterMenuCol(null)}
+                    />
+                  )}
                 </th>
                 )
               })}
@@ -2125,7 +2435,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {Array.from({ length: rows }).map((_, r) => {
               // 分组折叠的行 / 筛选掉的行不渲染（非破坏性）
               if (collapsedRows.has(r)) return null
-              if (filterRows && !filterRows.has(r)) return null
+              if (filterHiddenRows.has(r)) return null
               const gr = groupStartOf(r)
               const isFrozenRow = frozen && r < freezeAt!.r
               const frozenTop = 32 + rowTop(r) // 表头 h-8(32px) + 上方各行实际高度
@@ -2134,8 +2444,30 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               <tr key={r} style={rowHpx !== 28 ? { height: rowHpx } : undefined}>
                 {showHeadings && (
                 <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow ? 'sticky z-30' : ''}`}
-                  style={{ background: selection.mode === 'row' && selection.r1 === r ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
-                  onClick={() => selectRow(r)} title={tf('sheet.selectRow', '选择整行')}>
+                  style={{ background: rowInAnyArea(r) ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
+                  onMouseDown={e => {
+                    // 对齐 MS Excel：Ctrl+点击 追加/取消行选区；Shift+点击 从锚点扩展；按下拖动连续多选
+                    if (e.ctrlKey || e.metaKey) {
+                      e.preventDefault()
+                      const exIdx = extraAreas.findIndex(a => a.mode === 'row' && Math.min(a.r1, a.r2) === Math.max(a.r1, a.r2) && a.r1 === r)
+                      if (exIdx >= 0) setExtraAreas(arr => arr.filter((_, i) => i !== exIdx))
+                      else setExtraAreas(arr => [...arr, { r1: r, c1: 0, r2: r, c2: cols - 1, mode: 'row' }])
+                      rowDragRef.current = { anchor: r, additive: true }
+                      return
+                    }
+                    if (e.shiftKey) { e.preventDefault(); selectRowSpan(Math.min(rowAnchorRef.current, r), Math.max(rowAnchorRef.current, r)); return }
+                    e.preventDefault()
+                    rowAnchorRef.current = r
+                    selectRowSpan(r, r)
+                    rowDragRef.current = { anchor: r, additive: false }
+                  }}
+                  onMouseEnter={() => {
+                    const d = rowDragRef.current
+                    if (!d) return
+                    if (d.additive) updateLastExtraArea({ r1: Math.min(d.anchor, r), c1: 0, r2: Math.max(d.anchor, r), c2: cols - 1, mode: 'row' })
+                    else selectRowSpan(Math.min(d.anchor, r), Math.max(d.anchor, r))
+                  }}
+                  title={tf('sheet.selectRow', '选择整行')}>
                   {gr && (
                     <button onClick={e => { e.stopPropagation(); setRowGroups(g => g.map(x => x === gr ? { ...x, collapsed: !x.collapsed } : x)) }}
                       className="w-4 h-4 mr-0.5 rounded-sm text-[9px] leading-none inline-flex items-center justify-center"
@@ -2160,30 +2492,38 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   // 查找高亮：无填充色时用琥珀色底标记匹配（关闭查找条即消失）
                   const findHit = findKeys.has(`${r}-${c}`)
                   const valignMap: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
-                  // === Excel 式选区渲染（修复“区域+首格同时被选中”的视觉叠加）===
-                  // 区域内：浅蓝填充；活动格保持原底色（白/自身填充色）+ 1px 细框；
-                  // 整块选区外框：2px 主色，通过四至边界单元格的 inset box-shadow 拼出。
-                  const selR1 = Math.min(selection.r1, selection.r2), selR2 = Math.max(selection.r1, selection.r2)
-                  const selC1 = Math.min(selection.c1, selection.c2), selC2 = Math.max(selection.c1, selection.c2)
-                  const cellInSel = selection.mode === 'row' ? r === selection.r1 : selection.mode === 'col' ? c === selection.c1 : (r >= selR1 && r <= selR2 && c >= selC1 && c <= selC2)
-                  const singleSel = selection.mode === 'cell' && selR1 === selR2 && selC1 === selC2
+                  // === Excel 式选区渲染（支持多区域）===
+                  // 每个选中区域独立外框（2px 主色 inset shadow 拼边）；区域内浅蓝填充；
+                  // 活动格保持原底色（白/自身填充色）+ 1px 细框。修复“框选正确但更多格子被激活覆盖”的问题：
+                  // 只有真正落在选中区域内的格子才着色。
+                  const singleSel = selection.mode === 'cell' && selection.r1 === selection.r2 && selection.c1 === selection.c2 && extraAreas.length === 0
                   const shadowParts: string[] = []
-                  if (sel && cellInSel) {
-                    const edgeT = selection.mode === 'col' ? r === 0 : r === selR1
-                    const edgeB = selection.mode === 'col' ? r === rows - 1 : r === selR2
-                    const edgeL = selection.mode === 'row' ? c === 0 : c === selC1
-                    const edgeR = selection.mode === 'row' ? c === cols - 1 : c === selC2
-                    if (edgeT) shadowParts.push('inset 0 2px 0 0 var(--color-primary)')
-                    if (edgeB) shadowParts.push('inset 0 -2px 0 0 var(--color-primary)')
-                    if (edgeL) shadowParts.push('inset 2px 0 0 0 var(--color-primary)')
-                    if (edgeR) shadowParts.push('inset -2px 0 0 0 var(--color-primary)')
+                  for (const a of allAreas()) {
+                    const n = normArea(a)
+                    let hit = false
+                    let eT = false, eB = false, eL = false, eR = false
+                    if (a.mode === 'row') {
+                      if (r < n.r1 || r > n.r2) continue
+                      hit = true; eT = r === n.r1; eB = r === n.r2; eL = c === 0; eR = c === cols - 1
+                    } else if (a.mode === 'col') {
+                      if (c < n.c1 || c > n.c2) continue
+                      hit = true; eT = r === 0; eB = r === rows - 1; eL = c === n.c1; eR = c === n.c2
+                    } else {
+                      if (r < n.r1 || r > n.r2 || c < n.c1 || c > n.c2) continue
+                      hit = true; eT = r === n.r1; eB = r === n.r2; eL = c === n.c1; eR = c === n.c2
+                    }
+                    if (!hit) continue
+                    if (eT) shadowParts.push('inset 0 2px 0 0 var(--color-primary)')
+                    if (eB) shadowParts.push('inset 0 -2px 0 0 var(--color-primary)')
+                    if (eL) shadowParts.push('inset 2px 0 0 0 var(--color-primary)')
+                    if (eR) shadowParts.push('inset -2px 0 0 0 var(--color-primary)')
                   }
-                  if (isActive && sel && cellInSel && !singleSel) shadowParts.push('inset 0 0 0 1px var(--color-primary)')
+                  if (isActive && sel && !singleSel) shadowParts.push('inset 0 0 0 1px var(--color-primary)')
                   return (
                     <td key={c} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
-                      background: sel && cellInSel ? (isActive ? (cell.bg || '#ffffff') : 'rgba(59,130,246,0.12)') : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
+                      background: sel ? (isActive ? (cell.bg || '#ffffff') : 'rgba(59,130,246,0.12)') : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
                       borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)'),
                       borderWidth: bw,
                       width: `${cw}px`,
@@ -2195,11 +2535,29 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                       onMouseDown={e => {
                         // 公式引用点选：编辑以 = 开头的内容时，点击单元格插入其引用（Excel 行为）
                         if (refModeActive) { e.preventDefault(); insertCellRef(r, c, e.shiftKey || !!refDragRef.current); return }
+                        // 对齐 MS Excel：Ctrl+点击 追加/取消选区，Ctrl+拖拽 框选新区域
+                        if (e.ctrlKey || e.metaKey) {
+                          e.preventDefault()
+                          const exIdx = extraAreas.findIndex(a => a.mode === 'cell' && a.r1 === a.r2 && a.c1 === a.c2 && a.r1 === r && a.c1 === c)
+                          const isPrimarySingle = selection.mode === 'cell' && selection.r1 === selection.r2 && selection.c1 === selection.c2 && selection.r1 === r && selection.c1 === c
+                          if (exIdx >= 0) setExtraAreas(arr => arr.filter((_, i) => i !== exIdx))
+                          else if (!isPrimarySingle || extraAreas.length) setExtraAreas(arr => [...arr, { r1: r, c1: c, r2: r, c2: c, mode: 'cell' }])
+                          ctrlDragRef.current = { r, c }
+                          setDragging(true)
+                          gridRef.current?.focus()
+                          return
+                        }
                         if (e.shiftKey) { e.preventDefault(); extendTo(r, c); gridRef.current?.focus(); return }
                         selectCell(r, c); setSelImage(null); setDragging(true); gridRef.current?.focus()
                       }}
                       onMouseEnter={() => {
                         if (refModeActive && refDragRef.current) { insertCellRef(r, c, true); return }
+                        // Ctrl+拖拽：更新最后一个附加区域（新框选区域）
+                        if (dragging && ctrlDragRef.current) {
+                          const a = ctrlDragRef.current
+                          updateLastExtraArea({ r1: Math.min(a.r, r), c1: Math.min(a.c, c), r2: Math.max(a.r, r), c2: Math.max(a.c, c), mode: 'cell' })
+                          return
+                        }
                         if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c))
                       }}
                       onMouseUp={() => { setDragging(false); refDragRef.current = null }}
@@ -2267,6 +2625,40 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         ))}
         </div>
       </div>
+
+      {/* 多级排序对话框（MS Excel 风格） */}
+      {sortDialog && (
+        <SortDialog
+          cols={cols}
+          colName={colName}
+          headerText={c => (autoFilter ? (data[`${autoFilter.headerRow}-${c}`]?.value ?? '') : (data[`${detectHeaderRow()}-${c}`]?.value ?? ''))}
+          initLevels={sortDialog.levels}
+          initHasHeader={sortDialog.hasHeader}
+          labels={{
+            title: tf('sheet.sortDialogTitle', '排序'),
+            major: tf('sheet.sortMajor', '主要关键字'),
+            add: tf('sheet.sortAddLevel', '添加条件'),
+            del: tf('sheet.sortDelLevel', '删除条件'),
+            header: tf('sheet.sortHasHeader', '数据包含标题'),
+            ok: tf('sheet.sortOk', '确定'), cancel: tf('sheet.sortCancel', '取消'),
+            asc: t('sheet.sortAsc'), desc: t('sheet.sortDesc'),
+          }}
+          onClose={() => setSortDialog(null)}
+          onApply={(levels, hasHeader) => {
+            const hr = detectHeaderRow()
+            const multiRowSel = selection.mode === 'cell' && selection.r1 !== selection.r2
+            let start = hasHeader ? hr + 1 : hr
+            let end = rows - 1
+            if (multiRowSel) {
+              const top = Math.min(selection.r1, selection.r2), bot = Math.max(selection.r1, selection.r2)
+              start = hasHeader && top === hr ? top + 1 : top
+              end = bot
+            }
+            applySortLevels(levels, start, end)
+            setSortDialog(null)
+          }}
+        />
+      )}
 
       {/* 右键上下文菜单 */}
       {menu && (() => {
@@ -2347,6 +2739,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       {/* 底部状态栏 */}
       <div className="px-3 py-1.5 text-xs flex items-center gap-3 flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
         <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>{t('sheet.ready')}</span>
+        {selStats.count > 0 && (
+          <span className="flex items-center gap-3">
+            <span>{tf('sheet.statusCount', '计数')}: {selStats.count}</span>
+            {selStats.numCount > 0 && (
+              <>
+                <span>{tf('sheet.statusNumCount', '数值计数')}: {selStats.numCount}</span>
+                <span>{tf('sheet.statusSum', '求和')}: {selStats.sum}</span>
+                <span>{tf('sheet.statusAvg', '平均值')}: {selStats.avg}</span>
+              </>
+            )}
+          </span>
+        )}
         <div className="flex-1" />
         <span className="font-mono">{colName(active.c)}{active.r + 1}</span>
         <span style={{ color: 'var(--color-border-strong)' }}>|</span>

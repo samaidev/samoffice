@@ -1,0 +1,140 @@
+name: Release
+
+# 推送 v* 标签时：Windows 桌面构建 → Inno Setup 安装包 → 便携 zip →
+# 创建 GitHub Release 并清理只保留最近 3 个 release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 0.5.1，不带 v 前缀）'
+        required: true
+        default: '0.5.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $v = "${{ github.event.inputs.version }}".TrimStart('v')
+          } else {
+            $v = "${{ github.ref_name }}".TrimStart('v')
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Version: $v"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        shell: pwsh
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Build desktop exe (windows/amd64)
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -tags desktop,production -trimpath -ldflags "-s -w -H windowsgui" -o samoffice.exe .
+          Get-Item samoffice.exe | Select-Object Name, Length
+
+      - name: Locate Inno Setup (ISCC)
+        id: iscc
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 7\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "ISCC not found, installing via Chocolatey..."
+            choco install innosetup -y --no-progress
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          "path=$iscc" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "ISCC: $iscc"
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          & "${{ steps.iscc.outputs.path }}" /DMyAppVersion=${{ steps.ver.outputs.version }} /Q packaging/windows/SamOffice.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          Get-ChildItem packaging/windows/dist | Select-Object Name, Length
+
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage/SamOffice-windows-x64 | Out-Null
+          Copy-Item samoffice.exe stage/SamOffice-windows-x64/
+          Copy-Item README.md stage/SamOffice-windows-x64/
+          Compress-Archive -Path stage/SamOffice-windows-x64 -DestinationPath "SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip" -Force
+          Get-Item "SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip" | Select-Object Name, Length
+
+      - name: Create release and upload assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.version }}"
+          $title = "SamOffice v${{ steps.ver.outputs.version }}"
+          $notes = @(
+            "## SamOffice v${{ steps.ver.outputs.version }} Windows 桌面包",
+            "",
+            "- 下载 `SamOffice-setup-${{ steps.ver.outputs.version }}.exe` 双击安装（安装界面支持 English / 简体中文，无需管理员权限）",
+            "- 或下载便携版 zip 解压即用",
+            "",
+            "由 GitHub Actions 自动构建发布。"
+          ) -join "`n"
+          # 已存在同 tag release 则删除重建（workflow_dispatch 重复发布场景）
+          $exist = gh release view $tag --json id 2>$null
+          if ($exist) { gh release delete $tag --yes --cleanup-tag }
+          gh release create $tag --title $title --notes $notes --target ${{ github.sha }}
+          gh release upload $tag "packaging/windows/dist/SamOffice-setup-${{ steps.ver.outputs.version }}.exe" "SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip" --clobber
+          gh release view $tag
+
+      - name: Prune old releases (keep latest 3)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releases = gh release list --limit 100 --json tagName,createdAt,isDraft | ConvertFrom-Json
+          $sorted = $releases | Sort-Object { [datetime]$_.createdAt } -Descending
+          $i = 0
+          foreach ($r in $sorted) {
+            $i++
+            if ($i -le 3) { Write-Host "keep $($r.tagName)"; continue }
+            Write-Host "delete $($r.tagName)"
+            gh release delete $r.tagName --yes --cleanup-tag
+          }
