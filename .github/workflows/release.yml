@@ -97,9 +97,16 @@ jobs:
             Write-Host "Found bundled Chinese ISL: $cn"
           } else {
             $cn = Join-Path $env:RUNNER_TEMP "ChineseSimplified.isl"
-            $url = "https://raw.githubusercontent.com/jrsoftware/issrc/is-7_1_1/Files/Languages/Unofficial/ChineseSimplified.isl"
-            Invoke-WebRequest -Uri $url -OutFile $cn
-            Write-Host "Downloaded Chinese ISL from issrc 7.1.1: $cn"
+            # 优先 6.4.1（与 runner 的 Inno Setup 6 匹配），失败则回退 7.1.1 官方中文
+            $urls = @(
+              "https://raw.githubusercontent.com/jrsoftware/issrc/is-6_4_1/Files/Languages/Unofficial/ChineseSimplified.isl",
+              "https://raw.githubusercontent.com/jrsoftware/issrc/is-7_1_1/Files/Languages/ChineseSimplified.isl"
+            )
+            $ok = $false
+            foreach ($u in $urls) {
+              try { Invoke-WebRequest -Uri $u -OutFile $cn; $ok = $true; Write-Host "Downloaded Chinese ISL: $u"; break } catch { Write-Host "miss: $u" }
+            }
+            if (-not $ok) { throw "Cannot obtain ChineseSimplified.isl" }
           }
           "path=$cn" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
