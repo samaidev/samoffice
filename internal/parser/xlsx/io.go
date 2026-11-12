@@ -167,6 +167,43 @@ func ReadXLSX(path string) (string, error) {
                         }
                         sj.Cells[key] = cj
                 }
+                // 补扫公式单元格：GetRows 对“无缓存值”的公式单元格返回空串而被上面跳过
+                // （openpyxl / SamOffice 自己写出的文件不带缓存值），这里按工作表维度
+                // 补齐这些单元格，否则保存后重开公式会整格丢失。
+                if dim, derr := f.GetSheetDimension(name); derr == nil && dim != "" {
+                        dparts := strings.SplitN(dim, ":", 2)
+                        if len(dparts) == 2 {
+                                sc, sr, _ := excelize.CellNameToCoordinates(dparts[0])
+                                ec, er, _ := excelize.CellNameToCoordinates(dparts[1])
+                                if sc > 0 && sr > 0 && ec >= sc && er >= sr && (er-sr+1)*(ec-sc+1) <= 500000 {
+                                        for r := sr - 1; r <= er-1; r++ {
+                                                for c := sc - 1; c <= ec-1; c++ {
+                                                        key := fmt.Sprintf("%d-%d", r, c)
+                                                        if _, ok := sj.Cells[key]; ok {
+                                                                continue
+                                                        }
+                                                        ref, _ := excelize.CoordinatesToCellName(c+1, r+1)
+                                                        formula, ferr := f.GetCellFormula(name, ref)
+                                                        if ferr != nil || formula == "" {
+                                                                continue
+                                                        }
+                                                        cj := cellJSON{Formula: formula}
+                                                        applyCellFormat(f, name, ref, &cj)
+                                                        if computed, cerr := f.CalcCellValue(name, ref); cerr == nil {
+                                                                cj.Value = computed
+                                                        }
+                                                        sj.Cells[key] = cj
+                                                        if r > maxR {
+                                                                maxR = r
+                                                        }
+                                                        if c > maxC {
+                                                                maxC = c
+                                                        }
+                                                }
+                                        }
+                                }
+                        }
+                }
                 // 标记合并区域：左上角写 mergeRange，被覆盖单元格写 hiddenBy。
                 // 注意：左上角单元格可能没有值（空合并区域），此时也必须生成
                 // 带 mergeRange 的 cellJSON，否则保存后合并信息丢失、网格渲染错乱。

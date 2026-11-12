@@ -531,12 +531,17 @@ function cellValue(data: Record<string, Cell>, ref: string): number | string {
   const n = Number(v)
   return isNaN(n) ? v : n
 }
+// 范围求值上限：超出此单元格数的范围（如 =SUM(A1:ZZZZZZZ1) 手误/超大范围）不再逐格遍历，
+// 否则前端会同步阻塞数十秒～无限（“公式输入错误前端崩溃”的根因）。Excel 超大范围也是惰性求值。
+const MAX_RANGE_CELLS = 200_000
 function rangeValues(a: string, b: string, data: Record<string, Cell>): number[] {
   const ma = a.match(/^\$?([A-Za-z]+)\$?(\d+)$/)
   const mb = b.match(/^\$?([A-Za-z]+)\$?(\d+)$/)
   if (!ma || !mb) return []
   const c1 = colToNum(ma[1]) - 1, r1 = parseInt(ma[2], 10) - 1
   const c2 = colToNum(mb[1]) - 1, r2 = parseInt(mb[2], 10) - 1
+  const nR = Math.abs(r2 - r1) + 1, nC = Math.abs(c2 - c1) + 1
+  if (nR * nC > MAX_RANGE_CELLS) return [] // 超限：不遍历（SUM 视为 0，避免页面冻结）
   const out: number[] = []
   for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++) {
     for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++) {
@@ -560,8 +565,9 @@ function applyFunc(name: string, args: any[]): number | string {
   switch (name.toUpperCase()) {
     case 'SUM': args.forEach(collect); return flat.reduce((s, x) => s + x, 0)
     case 'AVERAGE': case 'AVG': args.forEach(collect); return flat.length ? flat.reduce((s, x) => s + x, 0) / flat.length : 0
-    case 'MIN': args.forEach(collect); return flat.length ? Math.min(...flat) : 0
-    case 'MAX': args.forEach(collect); return flat.length ? Math.max(...flat) : 0
+    // MIN/MAX 用 reduce 而非 Math.min(...flat)：数万级参数时 spread 会栈溢出
+    case 'MIN': args.forEach(collect); return flat.length ? flat.reduce((m, x) => x < m ? x : m, Infinity) : 0
+    case 'MAX': args.forEach(collect); return flat.length ? flat.reduce((m, x) => x > m ? x : m, -Infinity) : 0
     case 'COUNT': args.forEach(collect); return flat.length
     case 'ROUND': return Math.round(Number(args[0]) * Math.pow(10, Number(args[1] ?? 0))) / Math.pow(10, Number(args[1] ?? 0))
     case 'ABS': return Math.abs(Number(args[0]))
@@ -653,6 +659,7 @@ function evalFormula(expr: string, data: Record<string, Cell>): number | string 
     let left = parsePow()
     while (peek()?.t === 'OP' && (peek()!.v === '*' || peek()!.v === '/')) {
       const op = next()!.v; const right = parsePow()
+      if (op === '/' && Number(right) === 0) { left = '#DIV/0!'; continue } // 对齐 MS Excel 除零错误
       left = op === '*' ? Number(left) * Number(right) : Number(left) / Number(right)
     }
     return left
@@ -2601,7 +2608,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         )}
         {/* 网格容器持有键盘焦点（Excel 模型）：方向键/回车/输入即编辑等由 onGridKeyDown 统一处理 */}
         <div className="relative" ref={gridRef} tabIndex={0} onKeyDown={onGridKeyDown} style={{ outline: 'none' }}>
-        <table className="border-collapse text-sm" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <table className="border-collapse text-sm select-none" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {showHeadings && (
           <thead>
             <tr>
@@ -2809,6 +2816,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                           return
                         }
                         if (e.shiftKey) { e.preventDefault(); extendTo(r, c); gridRef.current?.focus(); return }
+                        // 阻止浏览器原生文本选择（MS Excel 框选时不会选中文字）；焦点显式回到网格
+                        e.preventDefault()
                         selectCell(r, c); setSelImage(null); setDragging(true); gridRef.current?.focus()
                       }}
                       onMouseEnter={() => {
@@ -2835,21 +2844,23 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         // === 编辑态：仅正在编辑的单元格渲染输入控件（Excel 模型）===
                         if (isEditing && editCell) {
                           if (cell.wrap) {
-                            return <textarea ref={editInputRef as any} value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, true)} rows={1} className="w-full px-2 outline-none bg-transparent resize-none" style={{ ...common as any, whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
+                            return <textarea ref={editInputRef as any} value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, true)} rows={1} className="w-full px-2 outline-none bg-transparent resize-none select-text" style={{ ...common as any, whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
                           }
                           if (cell.valid) {
                             const opts = cell.valid.split(',').map(x => x.trim()).filter(Boolean)
-                            return <select ref={editInputRef as any} value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, false)} className="w-full h-7 px-1 outline-none bg-transparent" style={common as any}>
+                            return <select ref={editInputRef as any} value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, false)} className="w-full h-7 px-1 outline-none bg-transparent select-text" style={common as any}>
                               {!opts.includes(editCell.buf) && <option value={editCell.buf}>{editCell.buf || ' '}</option>}
                               {opts.map(o => <option key={o} value={o}>{o}</option>)}
                             </select>
                           }
-                          return <input ref={editInputRef as any} type="text" value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, false)} className="w-full h-7 px-2 outline-none bg-transparent" style={common as any} />
+                          return <input ref={editInputRef as any} type="text" value={editCell.buf} onChange={e => setEditCell({ ...editCell, buf: e.target.value })} onKeyDown={e => onEditKeyDown(e, false)} className="w-full h-7 px-2 outline-none bg-transparent select-text" style={common as any} />
                         }
                         // === 显示态：纯 span 展示（不抢占键盘焦点，方向键/回车/输入由网格统一处理）===
                         const display = fmtDisplay(cell)
                         return (
                           <>
+                            {/* 选区浅蓝透层叠加在原填充色之上（不遮盖单元格底色/边框）；活动格不加透层 */}
+                            {sel && !isActive && <div aria-hidden className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(59,130,246,0.12)' }} />}
                             <span className="block w-full px-2 outline-none bg-transparent" style={{ ...common as any, lineHeight: `${rowH(r)}px`, minHeight: rowH(r), whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{display}</span>
                             {isActive && cell.valid && (
                               <span title={tf('sheet.editCell', '双击或输入编辑')} onMouseDown={e => { e.preventDefault(); e.stopPropagation(); startEdit(r, c) }}

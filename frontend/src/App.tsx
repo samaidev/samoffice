@@ -17,6 +17,9 @@ import { decideOpen } from './lib/openroute'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
+// 应用版本号（底部状态栏展示；发版时同步更新）
+const APP_VERSION = 'v0.6.1'
+
 // 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
 type SheetData = {
   name: string
@@ -369,7 +372,8 @@ ${t('sample.md.more')}
       // xlsx 直接走原生读取，完整保留边框/合并/填充等格式（绕开有损的 UDM 中转）
       if (/\.xlsx?$/i.test(path) && backend) {
         try {
-          const json = await backend.readXLSX(path)
+          // serverPath：远端模式上传时服务端落盘的原件路径（原生读取才能保留全部格式）
+          const json = await backend.readXLSX(result.serverPath || path)
           const parsed = JSON.parse(json)
           if (parsed && Array.isArray(parsed.sheets) && parsed.sheets.length) {
             finalSheets = parsed.sheets
@@ -848,7 +852,8 @@ ${t('sample.md.more')}
         const result = await r.json()
         // 统一走 openResult 处理各类型（表格/MD/HTML/文档），并创建窗口标签。
         // openResult 内部会按 decideOpen 路由；MD/HTML 分支会读取原文。
-        await openResult({ ...result, path: file.name })
+        // serverPath = 服务端落盘的上传原件路径：xlsx 打开时用它走原生读取（完整格式）
+        await openResult({ ...result, path: file.name, serverPath: result.path })
         showToast(t('app.opened', { name: file.name }))
       } catch (e: any) {
         showToast(t('app.openFailed', { msg: e.message }))
@@ -914,7 +919,7 @@ ${t('sample.md.more')}
         const result = await r.json()
         // 服务端已把上传内容落盘并回传 path：xlsx 走原生 readXLSX 需要该路径；
         // 回退为文件名，保证旧行为不变
-        await openResult({ ...result, path: result.path || name })
+        await openResult({ ...result, path: name, serverPath: result.path })
         showToast(t('app.opened', { name }))
       } catch (e: any) {
         showToast(t('app.openFailed', { msg: e.message }))
@@ -1887,7 +1892,7 @@ ${t('sample.md.more')}
             <button onClick={() => setDocZoom(100)} className="px-1.5 py-0.5 rounded hover:bg-white/15 transition-colors opacity-80" style={{ fontSize: '10px' }}>100%</button>
           </div>
         )}
-        <span className="opacity-50">v0.3.0</span>
+        <span className="opacity-50">{APP_VERSION}</span>
       </footer>
 
       {/* Toast */}
