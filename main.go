@@ -41,12 +41,12 @@ var frontendAssets embed.FS
 
 // App 是 Wails 应用上下文
 type App struct {
-	ctx       context.Context
-	registry  *parser.Registry
-	dictMgr   *dict.Manager
-	userStore *userdict.Store
-	httpPort  int
-	logger    *zap.Logger
+	ctx         context.Context
+	registry    *parser.Registry
+	dictMgr     *dict.Manager
+	userStore   *userdict.Store
+	httpPort    int
+	logger      *zap.Logger
 	startupArgs []string
 	// confirmedClose 为 true 表示前端已完成未保存更改的询问，OnBeforeClose 应放行。
 	confirmedClose bool
@@ -54,13 +54,13 @@ type App struct {
 
 // pendingOpenPath 返回"待打开文件"落盘路径（第二个实例把路径写到这里，首个实例轮询读取）
 func pendingOpenPath() string {
-        dir, err := os.UserCacheDir()
-        if err != nil {
-                dir = os.TempDir()
-        }
-        dir = filepath.Join(dir, "samoffice")
-        _ = os.MkdirAll(dir, 0o755)
-        return filepath.Join(dir, "pending_open.txt")
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "samoffice")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "pending_open.txt")
 }
 
 // tryEarlySingleInstance 在 wails.Run 之前做极早期单实例检测，避免第二个实例重复加载词典（慢）。
@@ -75,13 +75,13 @@ func tryEarlySingleInstance() bool {
 		}
 	}
 	const mutexName = "Global\\SamOffice-SingleInstance"
-        _, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(mutexName))
-        if err == nil {
-                // 创建成功：本进程是第一个，继续
-                return true
-        }
-        if errno, ok := err.(windows.Errno); ok && errno == windows.ERROR_ALREADY_EXISTS {
-                // 已存在实例：把文档参数写出并立即退出，跳过昂贵初始化
+	_, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(mutexName))
+	if err == nil {
+		// 创建成功：本进程是第一个，继续
+		return true
+	}
+	if errno, ok := err.(windows.Errno); ok && errno == windows.ERROR_ALREADY_EXISTS {
+		// 已存在实例：把文档参数写出并立即退出，跳过昂贵初始化
 		args := os.Args[1:]
 		files := []string{}
 		for _, a := range args {
@@ -97,18 +97,18 @@ func tryEarlySingleInstance() bool {
 				files = append(files, clean)
 			}
 		}
-                if len(files) > 0 {
-                        if f, ferr := os.OpenFile(pendingOpenPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
-                                for _, p := range files {
-                                        _, _ = f.WriteString(p + "\n")
-                                }
-                                f.Close()
-                        }
-                }
-                os.Exit(0)
-        }
-        // 其它创建错误：退化为允许多开
-        return true
+		if len(files) > 0 {
+			if f, ferr := os.OpenFile(pendingOpenPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
+				for _, p := range files {
+					_, _ = f.WriteString(p + "\n")
+				}
+				f.Close()
+			}
+		}
+		os.Exit(0)
+	}
+	// 其它创建错误：退化为允许多开
+	return true
 }
 
 // NewWindow 打开一个新的空 SamOffice 桌面窗口。
@@ -123,96 +123,107 @@ func (a *App) NewWindow() {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	_ = cmd.Start()
 }
+
 // pollPendingOpens 由首个实例在 OnStartup 后启动，轮询第二个实例写入的待打开文件，
 // 收到后通过事件通知前端打开，并将窗口恢复/最大化（复用当前窗口而非新开）。
 func (a *App) pollPendingOpens() {
-        last := ""
-        for {
-                time.Sleep(200 * time.Millisecond)
-                if a.ctx == nil {
-                        continue
-                }
-                data, err := os.ReadFile(pendingOpenPath())
-                if err != nil {
-                        continue
-                }
-                content := string(data)
-                if content == "" || content == last {
-                        continue
-                }
-                // 清空，避免重复触发
-                _ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
-                last = content
-                for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
-                        line = strings.TrimSpace(line)
-                        if line == "" {
-                                continue
-                        }
-                        runtime.EventsEmit(a.ctx, "second-instance-open", []string{line})
-                        runtime.WindowUnminimise(a.ctx)
-                        runtime.WindowShow(a.ctx)
-                        if !runtime.WindowIsMaximised(a.ctx) {
-                                runtime.WindowMaximise(a.ctx)
-                        }
-                }
-        }
+	last := ""
+	for {
+		time.Sleep(200 * time.Millisecond)
+		if a.ctx == nil {
+			continue
+		}
+		data, err := os.ReadFile(pendingOpenPath())
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		if content == "" || content == last {
+			continue
+		}
+		// 清空，避免重复触发
+		_ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
+		last = content
+		for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			runtime.EventsEmit(a.ctx, "second-instance-open", []string{line})
+			runtime.WindowUnminimise(a.ctx)
+			runtime.WindowShow(a.ctx)
+			if !runtime.WindowIsMaximised(a.ctx) {
+				runtime.WindowMaximise(a.ctx)
+			}
+		}
+	}
 }
 
 // WindowMinimize minimizes the window
 func (a *App) WindowMinimize() {
-        if a.ctx == nil { return }
-        runtime.WindowMinimise(a.ctx)
+	if a.ctx == nil {
+		return
+	}
+	runtime.WindowMinimise(a.ctx)
 }
 
 // WindowMaximize toggles maximize
 func (a *App) WindowMaximize() {
-        if a.ctx == nil { return }
-        runtime.WindowToggleMaximise(a.ctx)
+	if a.ctx == nil {
+		return
+	}
+	runtime.WindowToggleMaximise(a.ctx)
 }
 
 // WindowClose closes the app
 // WindowClose 由前端在完成未保存更改确认后调用，直接退出（不再回弹询问）。
 func (a *App) WindowClose() {
-        if a.ctx == nil { return }
-        a.confirmedClose = true
-        runtime.Quit(a.ctx)
+	if a.ctx == nil {
+		return
+	}
+	a.confirmedClose = true
+	runtime.Quit(a.ctx)
 }
 
 // IsWindowMaximized returns whether the window is currently maximized
 func (a *App) IsWindowMaximized() bool {
-        if a.ctx == nil { return false }
-        return runtime.WindowIsMaximised(a.ctx)
+	if a.ctx == nil {
+		return false
+	}
+	return runtime.WindowIsMaximised(a.ctx)
 }
 
 // WindowStartDrag is a no-op in Wails v2.12.0 (该版本 runtime 无 WindowDrag API)。
 // frameless 窗口拖动改由前端 CSS `--wails-draggable: drag` 实现 (Wails 官方方案)。
 // 保留方法签名以兼容前端已有的调用 (App.tsx header 的 onMouseDown fallback)。
 func (a *App) WindowStartDrag() {
-        // no-op: CSS --wails-draggable handles dragging in v2.12.0
+	// no-op: CSS --wails-draggable handles dragging in v2.12.0
 }
 
 func NewApp() *App {
-        logger, _ := zap.NewProduction()
+	logger, _ := zap.NewProduction()
 
-        home, _ := os.UserHomeDir()
-        dataDir := filepath.Join(home, ".samoffice")
-        os.MkdirAll(dataDir, 0755)
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".samoffice")
+	os.MkdirAll(dataDir, 0755)
 
-        userStore, err := userdict.Open(filepath.Join(dataDir, "userdict.sqlite"))
-        if err != nil {
-                log.Fatalf("open user dict: %v", err)
-        }
+	userStore, err := userdict.Open(filepath.Join(dataDir, "userdict.sqlite"))
+	if err != nil {
+		log.Fatalf("open user dict: %v", err)
+	}
 
-        dictMgr := dict.NewManager(userStore)
-        dictMgr.SetCacheDir(dataDir) // 启用索引缓存
-        loadBuiltinDicts(dictMgr)
+	dictMgr := dict.NewManager(userStore)
+	dictMgr.SetCacheDir(dataDir) // 启用索引缓存
+	// 注意：loadBuiltinDicts 已移到 OnStartup 的后台 goroutine ——
+	// 词典（5MB 中文分词 + 5 万英文词 + SymSpell 索引）加载完再关 ready 通道，
+	// 窗口首屏不再被词典加载阻塞（SpellCheck 等调用经 EnsureReady 等待）。
 
-        return &App{
-                registry:  parser.NewRegistry(),
-                dictMgr:   dictMgr,
-                userStore: userStore,
-                logger:    logger,
-        }
+	return &App{
+		registry:  parser.NewRegistry(),
+		dictMgr:   dictMgr,
+		userStore: userStore,
+		logger:    logger,
+	}
 }
 
 // === 暴露给前端的方法（Wails Binding）===
@@ -286,17 +297,17 @@ func (a *App) OpenFile(path string) (map[string]any, error) {
 
 // SpellCheck 拼写检查
 func (a *App) SpellCheck(text, lang string) []dict.SpellError {
-        return a.dictMgr.SpellCheck(text, lang)
+	return a.dictMgr.SpellCheck(text, lang)
 }
 
 // Suggest 纠错建议
 func (a *App) Suggest(word, lang string, n int) []dict.Candidate {
-        return a.dictMgr.Suggest(word, lang, n)
+	return a.dictMgr.Suggest(word, lang, n)
 }
 
 // LearnWord 加入用户词库
 func (a *App) LearnWord(word, lang, source string) error {
-        return a.dictMgr.LearnUserWord(word, lang, source)
+	return a.dictMgr.LearnUserWord(word, lang, source)
 }
 
 // HTTPPort 返回内嵌 HTTP 服务端口
@@ -436,114 +447,119 @@ func (a *App) WritePPTX(path, jsonStr string) error {
 
 // === 内嵌 HTTP 服务 ===
 func (a *App) startHTTPServer() {
-        gin.SetMode(gin.ReleaseMode)
-        r := gin.New()
-        r.Use(gin.Recovery())
-        r.Use(api.CORSMiddleware()) // 放行 Wails WebView 跨域请求，修复导出/另存为预检失败
-        h := api.New(a.registry, a.dictMgr)
-        h.Register(r)
-        r.GET("/api/doc/local", h.LocalFileOpen)
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(api.CORSMiddleware()) // 放行 Wails WebView 跨域请求，修复导出/另存为预检失败
+	h := api.New(a.registry, a.dictMgr)
+	h.Register(r)
+	r.GET("/api/doc/local", h.LocalFileOpen)
 
-        ln, err := net.Listen("tcp", "127.0.0.1:0")
-        if err != nil {
-                log.Fatalf("listen: %v", err)
-        }
-        a.httpPort = ln.Addr().(*net.TCPAddr).Port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("listen: %v", err)
+	}
+	a.httpPort = ln.Addr().(*net.TCPAddr).Port
 
-        go func() {
-                srv := &http.Server{Handler: r}
-                _ = srv.Serve(ln)
-        }()
+	go func() {
+		srv := &http.Server{Handler: r}
+		_ = srv.Serve(ln)
+	}()
 
-        a.logger.Info("HTTP server started", zap.Int("port", a.httpPort))
+	a.logger.Info("HTTP server started", zap.Int("port", a.httpPort))
 }
 
 func main() {
-        // 极早期单实例检测：若已有实例在运行，第二个实例把文档参数写出后立即退出，
-        // 不再加载词典/初始化 Wails（否则"再打开"会和首次一样慢）。
-        tryEarlySingleInstance()
+	// 极早期单实例检测：若已有实例在运行，第二个实例把文档参数写出后立即退出，
+	// 不再加载词典/初始化 Wails（否则"再打开"会和首次一样慢）。
+	tryEarlySingleInstance()
 
-        app := NewApp()
-        app.startHTTPServer()
+	app := NewApp()
+	app.startHTTPServer()
 
-        dist, err := fs.Sub(frontendAssets, "frontend/dist")
-        if err != nil {
-                log.Fatalf("embed assets: %v", err)
-        }
+	dist, err := fs.Sub(frontendAssets, "frontend/dist")
+	if err != nil {
+		log.Fatalf("embed assets: %v", err)
+	}
 
-        fmt.Printf("SamOffice starting...\n  Local HTTP: http://127.0.0.1:%d\n", app.httpPort)
+	fmt.Printf("SamOffice starting...\n  Local HTTP: http://127.0.0.1:%d\n", app.httpPort)
 
-        err = wails.Run(&options.App{
-                Title:     "SamOffice",
-                Width:     1280,
-                Height:    800,
-                MinWidth:  800,
-                MinHeight: 600,
-                Frameless: true, // 无系统标题栏，由前端自绘窗口控制按钮
-                DragAndDrop: &options.DragAndDrop{EnableFileDrop: true}, // 启用文件拖放：window.runtime.OnFileDrop 才能收到真实路径
-                AssetServer: &assetserver.Options{
-                        Assets: dist,
-                },
-                BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
-                OnStartup: func(ctx context.Context) {
-                        app.ctx = ctx
-                        // 捕获右键"打开方式"/命令行传入的文件路径（os.Args[1:]）
-                        if len(os.Args) > 1 {
-                                app.startupArgs = append(app.startupArgs, os.Args[1:]...)
-                        }
-                        // 清空可能残留的"待打开文件"，并启动轮询第二个实例写入的路径
-                        _ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
-                        go app.pollPendingOpens()
-                },
-                // 拦截标题栏 ✕ / Alt+F4 / 任务栏关闭：先交给前端询问未保存更改。
-                // 返回 true = 阻止关闭；前端确认后会调 WindowClose() 置位 confirmedClose 再退出。
-                OnBeforeClose: func(ctx context.Context) bool {
-                        if app.confirmedClose {
-                                return false
-                        }
-                        runtime.EventsEmit(ctx, "app-close-requested")
-                        return true
-                },
-                Bind: []interface{}{app},
-        })
+	err = wails.Run(&options.App{
+		Title:       "SamOffice",
+		Width:       1280,
+		Height:      800,
+		MinWidth:    800,
+		MinHeight:   600,
+		Frameless:   true,                                       // 无系统标题栏，由前端自绘窗口控制按钮
+		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true}, // 启用文件拖放：window.runtime.OnFileDrop 才能收到真实路径
+		AssetServer: &assetserver.Options{
+			Assets: dist,
+		},
+		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
+		OnStartup: func(ctx context.Context) {
+			app.ctx = ctx
+			// 后台加载词典（不阻塞首屏）；完成后 MarkReady 供 SpellCheck 等待
+			go func() {
+				loadBuiltinDicts(app.dictMgr)
+				app.dictMgr.MarkReady()
+			}()
+			// 捕获右键"打开方式"/命令行传入的文件路径（os.Args[1:]）
+			if len(os.Args) > 1 {
+				app.startupArgs = append(app.startupArgs, os.Args[1:]...)
+			}
+			// 清空可能残留的"待打开文件"，并启动轮询第二个实例写入的路径
+			_ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
+			go app.pollPendingOpens()
+		},
+		// 拦截标题栏 ✕ / Alt+F4 / 任务栏关闭：先交给前端询问未保存更改。
+		// 返回 true = 阻止关闭；前端确认后会调 WindowClose() 置位 confirmedClose 再退出。
+		OnBeforeClose: func(ctx context.Context) bool {
+			if app.confirmedClose {
+				return false
+			}
+			runtime.EventsEmit(ctx, "app-close-requested")
+			return true
+		},
+		Bind: []interface{}{app},
+	})
 
-        if err != nil {
-                log.Fatal(err)
-        }
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func loadBuiltinDicts(m *dict.Manager) {
-        enWords, err := hunspell.LoadBuiltin("en_US")
-        if err != nil {
-                log.Printf("WARN: load en_US dict failed: %v, using fallback", err)
-                enWords = map[string]int{
-                        "hello": 1000, "world": 1000, "the": 5000, "be": 5000, "to": 5000,
-                        "of": 5000, "and": 5000, "a": 5000, "in": 5000, "that": 4000,
-                        "office": 500, "document": 500, "open": 500, "save": 500, "edit": 500,
-                        "file": 500, "text": 500, "format": 500, "spell": 200, "check": 500,
-                        "language": 300, "word": 500, "sentence": 200,
-                }
-        } else {
-                log.Printf("Loaded en_US dict: %d words", len(enWords))
-        }
-        m.RegisterLang("en", enWords)
+	enWords, err := hunspell.LoadBuiltin("en_US")
+	if err != nil {
+		log.Printf("WARN: load en_US dict failed: %v, using fallback", err)
+		enWords = map[string]int{
+			"hello": 1000, "world": 1000, "the": 5000, "be": 5000, "to": 5000,
+			"of": 5000, "and": 5000, "a": 5000, "in": 5000, "that": 4000,
+			"office": 500, "document": 500, "open": 500, "save": 500, "edit": 500,
+			"file": 500, "text": 500, "format": 500, "spell": 200, "check": 500,
+			"language": 300, "word": 500, "sentence": 200,
+		}
+	} else {
+		log.Printf("Loaded en_US dict: %d words", len(enWords))
+	}
+	m.RegisterLang("en", enWords)
 
-        zhWords := map[string]int{
-                "你好": 1000, "世界": 1000, "中国": 1000, "文档": 800, "编辑": 800,
-                "打开": 800, "保存": 800, "关闭": 800, "复制": 800, "粘贴": 800,
-                "剪切": 800, "撤销": 800, "重做": 800, "查找": 800, "替换": 800,
-                "字体": 600, "字号": 600, "加粗": 600, "斜体": 600, "下划": 600,
-                "颜色": 800, "对齐": 800, "居中": 800, "表格": 800, "图片": 800,
-                "链接": 800, "标题": 800, "段落": 800, "列表": 800, "页眉": 600,
-                "页脚": 600, "页码": 600, "目录": 600, "办公": 800, "软件": 800,
-                "应用": 800, "程序": 800, "系统": 800, "用户": 800, "管理": 800,
-                "设置": 800, "选项": 800, "配置": 800, "工具": 800, "菜单": 800,
-                "窗口": 800, "面板": 800, "按钮": 800, "输入": 800, "输出": 800,
-                "数据": 800, "信息": 800, "内容": 800, "格式": 800, "样式": 800,
-                "模板": 800, "插件": 800, "扩展": 800, "协同": 800, "协作": 800,
-                "共享": 800, "版本": 800, "历史": 800, "我们": 1000, "你们": 1000,
-                "他们": 1000, "自己": 1000, "这个": 1000, "那个": 1000, "什么": 1000,
-                "怎么": 1000, "为什么": 1000, "哪里": 1000, "时间": 1000, "地方": 1000,
-        }
-        m.RegisterLang("zh", zhWords)
+	zhWords := map[string]int{
+		"你好": 1000, "世界": 1000, "中国": 1000, "文档": 800, "编辑": 800,
+		"打开": 800, "保存": 800, "关闭": 800, "复制": 800, "粘贴": 800,
+		"剪切": 800, "撤销": 800, "重做": 800, "查找": 800, "替换": 800,
+		"字体": 600, "字号": 600, "加粗": 600, "斜体": 600, "下划": 600,
+		"颜色": 800, "对齐": 800, "居中": 800, "表格": 800, "图片": 800,
+		"链接": 800, "标题": 800, "段落": 800, "列表": 800, "页眉": 600,
+		"页脚": 600, "页码": 600, "目录": 600, "办公": 800, "软件": 800,
+		"应用": 800, "程序": 800, "系统": 800, "用户": 800, "管理": 800,
+		"设置": 800, "选项": 800, "配置": 800, "工具": 800, "菜单": 800,
+		"窗口": 800, "面板": 800, "按钮": 800, "输入": 800, "输出": 800,
+		"数据": 800, "信息": 800, "内容": 800, "格式": 800, "样式": 800,
+		"模板": 800, "插件": 800, "扩展": 800, "协同": 800, "协作": 800,
+		"共享": 800, "版本": 800, "历史": 800, "我们": 1000, "你们": 1000,
+		"他们": 1000, "自己": 1000, "这个": 1000, "那个": 1000, "什么": 1000,
+		"怎么": 1000, "为什么": 1000, "哪里": 1000, "时间": 1000, "地方": 1000,
+	}
+	m.RegisterLang("zh", zhWords)
 }

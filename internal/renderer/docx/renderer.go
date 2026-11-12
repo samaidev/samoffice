@@ -54,10 +54,10 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
         // 页码配置：生成页脚与关系
         var footerRels []footRel
         var footer1XML, footer2XML string
-        if doc.PageNumber != nil && doc.PageNumber.Enabled {
-                footer1XML = renderFooterXML(doc.PageNumber, false)
-                if doc.PageNumber.FirstPageDifferent {
-                        footer2XML = renderFooterXML(doc.PageNumber, true) // 首页页脚（空）
+        if (doc.PageNumber != nil && doc.PageNumber.Enabled) || (doc.Footer != nil && doc.Footer.Text != "") {
+                footer1XML = renderFooterXML(doc.PageNumber, false, doc.Footer)
+                if doc.PageNumber != nil && doc.PageNumber.FirstPageDifferent {
+                        footer2XML = renderFooterXML(doc.PageNumber, true, doc.Footer) // 首页页脚
                 } else {
                         footer2XML = footer1XML
                 }
@@ -67,8 +67,15 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
                 }
         }
 
-        // [Content_Types].xml（包含图片 MIME 类型、页脚、脚注、批注与 numbering 覆盖）
-        if err := writeZip(w, "[Content_Types].xml", renderContentTypes(images, len(footerRels) > 0, hasComments)); err != nil {
+        // 页眉：带文字时生成 header1.xml + 关系（对齐 MS Word 页眉）
+        hasHeader := doc.Header != nil && doc.Header.Text != ""
+        var header1XML string
+        if hasHeader {
+                header1XML = renderHeaderXML(doc.Header)
+        }
+
+        // [Content_Types].xml（包含图片 MIME 类型、页眉页脚、脚注、批注与 numbering 覆盖）
+        if err := writeZip(w, "[Content_Types].xml", renderContentTypes(images, len(footerRels) > 0, hasHeader, hasComments)); err != nil {
                 return nil, err
         }
         if err := writeZip(w, "_rels/.rels", rootRelsXML); err != nil {
@@ -83,8 +90,8 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
                         return nil, err
                 }
         }
-        // word/_rels/document.xml.rels（image + footer + numbering + footnotes + comments + 超链接 relationship）
-        if err := writeZip(w, "word/_rels/document.xml.rels", renderDocRels(images, footerRels, linkRels, hasComments)); err != nil {
+        // word/_rels/document.xml.rels（image + footer + header + numbering + footnotes + comments + 超链接 relationship）
+        if err := writeZip(w, "word/_rels/document.xml.rels", renderDocRels(images, footerRels, linkRels, hasComments, hasHeader)); err != nil {
                 return nil, err
         }
         // word/numbering.xml（bullet=1 / ordered=2 两个编号定义）
@@ -102,7 +109,7 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
                 }
         }
         // word/document.xml
-        if err := writeZip(w, "word/document.xml", renderDocumentXML(doc, imageMap, footerRels)); err != nil {
+        if err := writeZip(w, "word/document.xml", renderDocumentXML(doc, imageMap, footerRels, hasHeader)); err != nil {
                 return nil, err
         }
         // 页脚文件
@@ -111,6 +118,12 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
                         return nil, err
                 }
                 if err := writeZip(w, "word/footer2.xml", footer2XML); err != nil {
+                        return nil, err
+                }
+        }
+        // 页眉文件
+        if hasHeader {
+                if err := writeZip(w, "word/header1.xml", header1XML); err != nil {
                         return nil, err
                 }
         }
@@ -379,7 +392,7 @@ func pxToEMU(px, defaultValue float64) int {
 }
 
 // renderContentTypes 渲染 [Content_Types].xml（含图片扩展）
-func renderContentTypes(images []*embedImage, hasFooter, hasComments bool) string {
+func renderContentTypes(images []*embedImage, hasFooter, hasHeader, hasComments bool) string {
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -401,6 +414,10 @@ func renderContentTypes(images []*embedImage, hasFooter, hasComments bool) strin
         if hasFooter {
                 sb.WriteString(`  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
   <Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+`)
+        }
+        if hasHeader {
+                sb.WriteString(`  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
 `)
         }
         // footnotes.xml：脚注部件（分隔符 + 正文脚注），始终生成
@@ -428,7 +445,7 @@ type footRel struct {
 
 // renderDocRels 渲染 word/_rels/document.xml.rels
 // 包含图片、页脚、numbering、脚注、批注定义与超链接（外部链接）关系
-func renderDocRels(images []*embedImage, footers []footRel, links []linkRel, hasComments bool) string {
+func renderDocRels(images []*embedImage, footers []footRel, links []linkRel, hasComments, hasHeader bool) string {
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -438,6 +455,9 @@ func renderDocRels(images []*embedImage, footers []footRel, links []linkRel, has
         }
         for _, f := range footers {
                 sb.WriteString(fmt.Sprintf(`  <Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="%s"/>`+"\n", f.relID, f.target))
+        }
+        if hasHeader {
+                sb.WriteString(`  <Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>` + "\n")
         }
         // numbering.xml 关系（renderBulletList 输出的 numId 1/2 依赖该部件）
         sb.WriteString(`  <Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>` + "\n")
@@ -456,7 +476,7 @@ func renderDocRels(images []*embedImage, footers []footRel, links []linkRel, has
 }
 
 // renderDocumentXML 渲染 word/document.xml 主体
-func renderDocumentXML(doc *core.Document, images map[string]*embedImage, footers []footRel) string {
+func renderDocumentXML(doc *core.Document, images map[string]*embedImage, footers []footRel, hasHeader bool) string {
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -485,8 +505,8 @@ func renderDocumentXML(doc *core.Document, images map[string]*embedImage, footer
                 }
         }
 
-        // 全局 sectPr（最后一节）：页面尺寸/方向/边距/分栏 + 页脚绑定
-        sb.WriteString(sectPrXML(doc.PageSetup, footers, doc.PageNumber))
+        // 全局 sectPr（最后一节）：页面尺寸/方向/边距/分栏 + 页眉页脚绑定
+        sb.WriteString(sectPrXML(doc.PageSetup, footers, doc.PageNumber, hasHeader))
         sb.WriteString("</w:body>\n</w:document>")
         return sb.String()
 }
@@ -546,7 +566,7 @@ func contentWidth(ps *core.PageSetup) int {
 
 // sectPrXML 生成节属性：页面尺寸/方向/页边距/分栏 + 页脚引用 + titlePg。
 // 无 PageSetup 时保持 A4（11906×16838）与 1440 边距的既有行为。
-func sectPrXML(ps *core.PageSetup, footers []footRel, pn *core.PageNumberConfig) string {
+func sectPrXML(ps *core.PageSetup, footers []footRel, pn *core.PageNumberConfig, hasHeader bool) string {
         w, h, orient := pageDims(ps)
         mt, mr, mb, ml := pageMargins(ps)
         var sb strings.Builder
@@ -558,6 +578,9 @@ func sectPrXML(ps *core.PageSetup, footers []footRel, pn *core.PageNumberConfig)
 `)
         if ps != nil && ps.Cols > 1 {
                 sb.WriteString(fmt.Sprintf(`<w:cols w:num="%d" w:space="720"/>`+"\n", ps.Cols))
+        }
+        if hasHeader {
+                sb.WriteString(`<w:headerReference w:type="default" r:id="rIdHeader1"/>` + "\n")
         }
         if len(footers) > 0 {
                 // footer1 为 default（偶数页/奇数页通用），footer2 为 first
@@ -1390,8 +1413,9 @@ func renderImage(sb *strings.Builder, im *core.Image, images map[string]*embedIm
                 return
         }
 
-        // 文字环绕：left/right 使用浮动锚点（四周型环绕），否则使用嵌入型
-        floating := im.Float == "left" || im.Float == "right"
+        // 文字环绕：left/right 四周型浮动；behind/front 衬于/浮于文字（wrapNone）；
+        // topBottom 上下型（wrapTopAndBottom）；否则嵌入型
+        floating := im.Float == "left" || im.Float == "right" || im.Float == "topBottom" || im.Float == "behind" || im.Float == "front"
 
         var jc string
         if !floating {
@@ -1415,15 +1439,33 @@ func renderImage(sb *strings.Builder, im *core.Image, images map[string]*embedIm
                 posAlign := "left"
                 if im.Float == "right" {
                         posAlign = "right"
+                } else if im.Float == "topBottom" || im.Float == "behind" || im.Float == "front" {
+                        posAlign = "center"
+                }
+                // 衬于文字下方：behindDoc=1 + wrapNone；浮于文字上方：behindDoc=0 + wrapNone + 置顶层级；
+                // 上下型：wrapTopAndBottom；四周型：wrapSquare
+                behindDoc := `0`
+                wrapEl := `<wp:wrapSquare wrapText="both"/>`
+                relHeight := `251658240`
+                switch im.Float {
+                case "behind":
+                        behindDoc = `1`
+                        wrapEl = `<wp:wrapNone/>`
+                        relHeight = `0`
+                case "front":
+                        wrapEl = `<wp:wrapNone/>`
+                        relHeight = `503316480`
+                case "topBottom":
+                        wrapEl = `<wp:wrapTopAndBottom/>`
                 }
                 sb.WriteString(`<w:r><w:drawing>
-<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="` + relHeight + `" behindDoc="` + behindDoc + `" locked="0" layoutInCell="1" allowOverlap="1">
   <wp:simplePos x="0" y="0"/>
   <wp:positionH relativeFrom="column"><wp:align>` + posAlign + `</wp:align></wp:positionH>
   <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
   <wp:extent cx="` + fmt.Sprintf("%d", e.Width) + `" cy="` + fmt.Sprintf("%d", e.Height) + `"/>
   <wp:effectExtent l="0" t="0" r="0" b="0"/>
-  <wp:wrapSquare wrapText="both"/>
+  ` + wrapEl + `
   <wp:docPr id="` + fmt.Sprintf("%d", e.ID) + `" name="Picture ` + fmt.Sprintf("%d", e.ID) + `"/>
   <wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>
   ` + graphic + `
@@ -1839,14 +1881,18 @@ func renderCoreProps(meta core.Meta) string {
         return sb.String()
 }
 
-// renderFooterXML 生成 word/footerN.xml，含 PAGE 字段（按 pageNumber 配置格式化、设置样式）。
-// firstPage 为 true 时生成首页页脚（通常为空）。
-func renderFooterXML(pn *core.PageNumberConfig, firstPage bool) string {
+// renderFooterXML 生成 word/footerN.xml：页脚文字（可含样式）+ PAGE 字段（按 pageNumber 配置格式化）。
+// firstPage 为 true 时生成首页页脚（不重复页脚文字，仅页码域）。
+func renderFooterXML(pn *core.PageNumberConfig, firstPage bool, hf *core.HeaderFooter) string {
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<w:p>`)
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`)
+        // 页脚文字段落（首页不重复）
+        if !firstPage && hf != nil && hf.Text != "" {
+                sb.WriteString(renderHFParagraph(hf, false))
+        }
+        sb.WriteString("\n<w:p>")
         if firstPage {
                 // 首页页脚（通常为空）
                 sb.WriteString(`<w:pPr><w:pBdr/></w:pPr>`)
@@ -1913,8 +1959,53 @@ func renderFooterXML(pn *core.PageNumberConfig, firstPage bool) string {
         return sb.String()
 }
 
-func escAttr(s string) string {
-        s = strings.ReplaceAll(s, `"`, "&quot;")
+// renderHeaderXML 生成 word/header1.xml：页眉文字段落（样式 + 底部边框，对齐 MS Word 页眉线）。
+func renderHeaderXML(hf *core.HeaderFooter) string {
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`)
+        sb.WriteString(renderHFParagraph(hf, true))
+        sb.WriteString("\n</w:hdr>")
+        return sb.String()
+}
+
+// renderHFParagraph 生成页眉/页脚文字段落（含 rPr 样式；header=true 时带下边框线）。
+func renderHFParagraph(hf *core.HeaderFooter, header bool) string {
+        var sb strings.Builder
+        sb.WriteString("\n<w:p><w:pPr>")
+        if header {
+                // 页眉下边框（MS Word 默认页眉样式）
+                sb.WriteString(`<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr>`)
+        }
+        align := escAttr(hf.Align)
+        if align == "" {
+                align = "center"
+        }
+        sb.WriteString(`<w:jc w:val="` + align + `"/></w:pPr>`)
+        rPr := `<w:rPr>`
+        if hf.Bold {
+                rPr += `<w:b/>`
+        }
+        if hf.Italic {
+                rPr += `<w:i/>`
+        }
+        if hf.FontSize > 0 {
+                rPr += fmt.Sprintf(`<w:sz w:val="%d"/><w:szCs w:val="%d"/>`, int(hf.FontSize*2), int(hf.FontSize*2))
+        }
+        if hf.Color != "" {
+                rPr += `<w:color w:val="` + escAttr(hf.Color) + `"/>`
+        }
+        if hf.FontFamily != "" {
+                rPr += `<w:rFonts w:ascii="` + escAttr(hf.FontFamily) + `" w:eastAsia="` + escAttr(hf.FontFamily) + `"/>`
+        }
+        rPr += `</w:rPr>`
+        sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(hf.Text) + `</w:t></w:r>`)
+        sb.WriteString("</w:p>")
+        return sb.String()
+}
+
+func escAttr(s string) string {        s = strings.ReplaceAll(s, `"`, "&quot;")
         s = strings.ReplaceAll(s, "&", "&amp;")
         s = strings.ReplaceAll(s, "<", "&lt;")
         return s

@@ -386,6 +386,10 @@ export const schema = new Schema({
         height: { default: 0 },
         float: { default: '' },        // '' | 'left' | 'right' | 'center'
         wrap: { default: true },       // text wrap around image
+        // 文字环绕方式（对齐 MS Word 图片环绕）：
+        // 'inline' 嵌入型 | 'left'/'right' 四周型 | 'topBottom' 上下型
+        // | 'behind' 衬于文字下方 | 'front' 浮于文字上方
+        wrapMode: { default: '' },
       },
       group: 'block',
       toDOM: (node) => {

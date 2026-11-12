@@ -131,6 +131,9 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
         if pn := extractPageNumber(files); pn != nil {
                 doc.PageNumber = pn
         }
+        // 解析页眉/页脚富文本（文字 + 主导样式），供前端展示/编辑；
+        // 仅含页码域的页眉页脚不算文字内容（由 PageNumberConfig 负责）
+        doc.Header, doc.Footer = extractHeaderFooter(files)
 
         // 解析 sectPr 的纸张/方向/页边距/分栏，持久化到 UDM.pageSetup，
         // 否则打开横向/自定义纸张的文档再保存会退回默认 A4 纵向。
@@ -1266,6 +1269,185 @@ func extractPageNumber(files map[string]*zip.File) *core.PageNumberConfig {
                 rc.Close()
                 if cfg != nil {
                         return cfg
+                }
+        }
+        return nil
+}
+
+// extractHeaderFooter 扫描 word/header*.xml 与 word/footer*.xml，
+// 解析首个含文字的段落为 HeaderFooter（保留主导样式：加粗/斜体/字号/颜色/字体/对齐）。
+// 只含页码域（无字面文本）的段落跳过。返回 (header, footer)，无则 nil。
+func extractHeaderFooter(files map[string]*zip.File) (*core.HeaderFooter, *core.HeaderFooter) {
+        var header, footer *core.HeaderFooter
+        for name := range files {
+                if !strings.HasSuffix(name, ".xml") {
+                        continue
+                }
+                isHeader := strings.HasPrefix(name, "word/header")
+                isFooter := !isHeader && strings.HasPrefix(name, "word/footer")
+                if !isHeader && !isFooter {
+                        continue
+                }
+                f, ok := files[name]
+                if !ok {
+                        continue
+                }
+                rc, err := f.Open()
+                if err != nil {
+                        continue
+                }
+                hf := parseHeaderFooterText(rc)
+                rc.Close()
+                if hf == nil || hf.Text == "" {
+                        continue
+                }
+                if isHeader && header == nil {
+                        header = hf
+                } else if isFooter && footer == nil {
+                        footer = hf
+                }
+                if header != nil && footer != nil {
+                        break
+                }
+        }
+        return header, footer
+}
+
+// parseHeaderFooterText 解析页眉/页脚 XML 的首个含文字段落。
+// 页码域（PAGE/NUMPAGES）内容不计入文本；若整个段落只剩页码域，返回 nil。
+// 样式取首个带样式的 run（主导样式近似）。
+func parseHeaderFooterText(rc io.Reader) *core.HeaderFooter {
+        dec := xml.NewDecoder(rc)
+        dec.Strict = false
+        dec.AutoClose = xml.HTMLAutoClose
+        dec.Entity = xml.HTMLEntity
+
+        hf := &core.HeaderFooter{}
+        var sb strings.Builder
+        fieldDepth := 0
+        inPPr := false
+        inRPr := false
+        styled := false
+        for {
+                t, err := dec.Token()
+                if err != nil {
+                        break
+                }
+                switch el := t.(type) {
+                case xml.StartElement:
+                        switch el.Name.Local {
+                        case "p":
+                                sb.Reset()
+                                hf = &core.HeaderFooter{}
+                                styled = false
+                        case "pPr":
+                                inPPr = true
+                        case "jc":
+                                if inPPr {
+                                        for _, a := range el.Attr {
+                                                if a.Name.Local == "val" {
+                                                        hf.Align = a.Value
+                                                }
+                                        }
+                                }
+                        case "rPr":
+                                inRPr = true
+                        case "b":
+                                if inRPr && !styled {
+                                        val := "1"
+                                        for _, a := range el.Attr {
+                                                if a.Name.Local == "val" {
+                                                        val = a.Value
+                                                }
+                                        }
+                                        hf.Bold = val != "0" && val != "false"
+                                }
+                        case "i":
+                                if inRPr && !styled {
+                                        val := "1"
+                                        for _, a := range el.Attr {
+                                                if a.Name.Local == "val" {
+                                                        val = a.Value
+                                                }
+                                        }
+                                        hf.Italic = val != "0" && val != "false"
+                                }
+                        case "color":
+                                if inRPr && !styled {
+                                        for _, a := range el.Attr {
+                                                if a.Name.Local == "val" && a.Value != "" && a.Value != "auto" {
+                                                        hf.Color = strings.TrimPrefix(a.Value, "#")
+                                                }
+                                        }
+                                }
+                        case "sz":
+                                if inRPr && !styled {
+                                        for _, a := range el.Attr {
+                                                if a.Name.Local == "val" {
+                                                        if half, e := strconv.ParseFloat(a.Value, 64); e == nil && half > 0 {
+                                                                hf.FontSize = half / 2 // 半磅 → 磅
+                                                        }
+                                                }
+                                        }
+                                }
+                        case "rFonts":
+                                if inRPr && !styled {
+                                        for _, a := range el.Attr {
+                                                if a.Name.Local == "ascii" || (a.Name.Local == "eastAsia" && hf.FontFamily == "") {
+                                                        if a.Name.Local == "ascii" || hf.FontFamily == "" {
+                                                                hf.FontFamily = a.Value
+                                                        }
+                                                }
+                                        }
+                                }
+                        case "fldSimple":
+                                for _, a := range el.Attr {
+                                        if a.Name.Local == "instr" {
+                                                if strings.Contains(strings.ToUpper(a.Value), "PAGE") {
+                                                        fieldDepth++
+                                                }
+                                        }
+                                }
+                        case "fldChar":
+                                ftype := ""
+                                for _, a := range el.Attr {
+                                        if a.Name.Local == "fldCharType" {
+                                                ftype = a.Value
+                                        }
+                                }
+                                if ftype == "begin" {
+                                        fieldDepth++
+                                } else if ftype == "end" && fieldDepth > 0 {
+                                        fieldDepth--
+                                }
+                        case "t":
+                                if fieldDepth == 0 {
+                                        sb.WriteString(readCharData(dec))
+                                        styled = styled || hf.Bold || hf.Italic || hf.FontSize > 0 || hf.Color != "" || hf.FontFamily != ""
+                                }
+                        }
+                case xml.EndElement:
+                        switch el.Name.Local {
+                        case "p":
+                                text := strings.TrimSpace(sb.String())
+                                if text != "" {
+                                        hf.Text = text
+                                        if hf.Align == "" {
+                                                hf.Align = "center"
+                                        }
+                                        return hf
+                                }
+                                // 空段落继续找下一个
+                                styled = false
+                        case "pPr":
+                                inPPr = false
+                        case "rPr":
+                                inRPr = false
+                        case "fldSimple":
+                                if fieldDepth > 0 {
+                                        fieldDepth--
+                                }
+                        }
                 }
         }
         return nil

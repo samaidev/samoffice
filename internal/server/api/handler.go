@@ -3,15 +3,18 @@ package api
 import (
         "encoding/base64"
         "fmt"
+        "io"
         "net/http"
         "os"
         "path/filepath"
         "strings"
+        "time"
 
         "github.com/gin-gonic/gin"
         "github.com/zai/samoffice/internal/core"
         "github.com/zai/samoffice/internal/dict"
         "github.com/zai/samoffice/internal/parser"
+        "github.com/zai/samoffice/internal/parser/xlsx"
         "github.com/zai/samoffice/internal/renderer/docx"
         "github.com/zai/samoffice/internal/renderer/pdf"
 )
@@ -34,6 +37,7 @@ func New(parsers *parser.Registry, dictMgr *dict.Manager) *Handler {
 func (h *Handler) Register(r *gin.Engine) {
         r.GET("/api/health", h.health)
         r.POST("/api/doc/open", h.openDocument)
+        r.GET("/api/xlsx/read", h.readXLSXFile)
         r.POST("/api/doc/save", h.saveDocument)
         r.POST("/api/doc/export-pdf", h.exportPDF)
         r.GET("/api/dict/check", h.spellCheck)
@@ -45,7 +49,35 @@ func (h *Handler) health(c *gin.Context) {
         c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// openDocument 接收文件上传，返回 UDM JSON
+// readXLSXFile 用原生 xlsx 读取器返回 JSON（与桌面版 ReadXLSX binding 完全一致，
+// 保留合并/边框/填充等全部格式），供远端/浏览器模式使用。
+func (h *Handler) readXLSXFile(c *gin.Context) {
+        path := c.Query("path")
+        if path == "" {
+                c.JSON(http.StatusBadRequest, gin.H{"error": "missing path"})
+                return
+        }
+        abs, err := filepath.Abs(path)
+        if err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        if _, err := os.Stat(abs); err != nil {
+                c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+                return
+        }
+        jsonStr, err := xlsx.ReadXLSX(abs)
+        if err != nil {
+                c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+                return
+        }
+        // 前端 readXLSX 契约：返回原始 JSON 字符串（桌面 binding 同样返回 string）
+        c.String(http.StatusOK, jsonStr)
+}
+
+// openDocument 接收文件上传，返回 UDM JSON。
+// 上传内容同时落盘到临时目录并回传 path：前端对 xlsx 会再调 /api/xlsx/read
+// 走原生读取（与桌面版 ReadXLSX binding 同源，完整保留合并/边框/填充）。
 func (h *Handler) openDocument(c *gin.Context) {
         file, err := c.FormFile("file")
         if err != nil {
@@ -64,67 +96,87 @@ func (h *Handler) openDocument(c *gin.Context) {
                 c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
                 return
         }
+        // 保存原始上传内容到临时目录，供 /api/xlsx/read 等按路径原生读取
+        savedPath := ""
+        if f2, err2 := file.Open(); err2 == nil {
+                defer f2.Close()
+                dir := filepath.Join(os.TempDir(), "samoffice-uploads")
+                if mkErr := os.MkdirAll(dir, 0o755); mkErr == nil {
+                        base := filepath.Base(file.Filename)
+                        if base == "" || base == "." || base == "/" {
+                                base = "upload.bin"
+                        }
+                        cand := filepath.Join(dir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), base))
+                        if out, crErr := os.Create(cand); crErr == nil {
+                                if _, cpErr := io.Copy(out, f2); cpErr == nil {
+                                        savedPath = cand
+                                }
+                                out.Close()
+                        }
+                }
+        }
         c.JSON(http.StatusOK, gin.H{
                 "document": doc,
                 "warnings": warns,
+                "path":     savedPath,
         })
 }
 
 // RenderToBytes 把 UDM 文档渲染为指定格式，返回字节与规范扩展名。
 // format 支持: docx / doc / wps / pdf。供 HTTP 端点与本地写盘（Wails 绑定）共用。
 func RenderToBytes(doc *core.Document, format string) ([]byte, string, error) {
-	switch strings.ToLower(format) {
-	case "docx", "wps":
-		r := docx.New()
-		data, err := r.Render(doc)
-		if err != nil {
-			return nil, "", err
-		}
-		return data, "." + strings.ToLower(format), nil
-	case "doc":
-		// .doc 以 OOXML (docx) 内容写出：项目已有完整的 docx 双向解析/渲染
-		// 能力，可保留图片、公式、脚注、表格与段落样式，避免老 RTF 导出把
-		// 整篇文档格式丢弃的问题。docx 是 ZIP(PK) 容器，registry 打开端会按
-		// 内容嗅探（PK 头）走 docx 解析，因此 ".doc 扩展名 + docx 内容" 在
-		// SamOffice 内可正常打开且格式完整。
-		r := docx.New()
-		data, err := r.Render(doc)
-		if err != nil {
-			return nil, "", err
-		}
-		return data, ".doc", nil
-	case "pdf":
-		r := pdf.New()
-		data, err := r.Render(doc)
-		if err != nil {
-			return nil, "", err
-		}
-		return data, ".pdf", nil
-	default:
-		return nil, "", fmt.Errorf("unsupported format: %s", format)
-	}
+        switch strings.ToLower(format) {
+        case "docx", "wps":
+                r := docx.New()
+                data, err := r.Render(doc)
+                if err != nil {
+                        return nil, "", err
+                }
+                return data, "." + strings.ToLower(format), nil
+        case "doc":
+                // .doc 以 OOXML (docx) 内容写出：项目已有完整的 docx 双向解析/渲染
+                // 能力，可保留图片、公式、脚注、表格与段落样式，避免老 RTF 导出把
+                // 整篇文档格式丢弃的问题。docx 是 ZIP(PK) 容器，registry 打开端会按
+                // 内容嗅探（PK 头）走 docx 解析，因此 ".doc 扩展名 + docx 内容" 在
+                // SamOffice 内可正常打开且格式完整。
+                r := docx.New()
+                data, err := r.Render(doc)
+                if err != nil {
+                        return nil, "", err
+                }
+                return data, ".doc", nil
+        case "pdf":
+                r := pdf.New()
+                data, err := r.Render(doc)
+                if err != nil {
+                        return nil, "", err
+                }
+                return data, ".pdf", nil
+        default:
+                return nil, "", fmt.Errorf("unsupported format: %s", format)
+        }
 }
 
 // saveDocument 接收 UDM JSON 保存为 docx 文件并返回
 func (h *Handler) saveDocument(c *gin.Context) {
-	var doc core.Document
-	if err := c.ShouldBindJSON(&doc); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+        var doc core.Document
+        if err := c.ShouldBindJSON(&doc); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
 
-	data, _, err := RenderToBytes(&doc, "docx")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+        data, _, err := RenderToBytes(&doc, "docx")
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
 
-	filename := doc.Meta.Title
-	if filename == "" {
-		filename = "untitled"
-	}
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
-	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
+        filename := doc.Meta.Title
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.docx"`, filename))
+        c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)
 }
 
 // generateRTF converts UDM to a minimal RTF string that Word/WPS can open
@@ -219,24 +271,24 @@ func generateRTF(doc *core.Document) string {
 
 // exportPDF 接收 UDM JSON 导出为 PDF 文件
 func (h *Handler) exportPDF(c *gin.Context) {
-	var doc core.Document
-	if err := c.ShouldBindJSON(&doc); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+        var doc core.Document
+        if err := c.ShouldBindJSON(&doc); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
 
-	data, _, err := RenderToBytes(&doc, "pdf")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+        data, _, err := RenderToBytes(&doc, "pdf")
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+        }
 
-	filename := doc.Meta.Title
-	if filename == "" {
-		filename = "untitled"
-	}
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
-	c.Data(http.StatusOK, "application/pdf", data)
+        filename := doc.Meta.Title
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
+        c.Data(http.StatusOK, "application/pdf", data)
 }
 
 // spellCheck GET /api/dict/check?text=xxx&lang=en
@@ -307,25 +359,25 @@ func (h *Handler) LocalFileOpen(c *gin.Context) {
                 c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
                 return
         }
-	doc, warns, err := h.Parsers.ParseBytes(abs, data)
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-		return
-	}
-	// 文本类文件（Markdown/HTML）把原文以 base64 一并返回，
-	// 前端无需再调用 readFile（网页模式下不可用），直接展示原文。
-	lower := strings.ToLower(abs)
-	out := gin.H{
-		"document": doc,
-		"warnings": warns,
-		"path":     abs,
-	}
-	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
-		strings.HasSuffix(lower, ".mdx") || strings.HasSuffix(lower, ".html") ||
-		strings.HasSuffix(lower, ".htm") {
-		out["rawContent"] = base64.StdEncoding.EncodeToString(data)
-	}
-	c.JSON(http.StatusOK, out)
+        doc, warns, err := h.Parsers.ParseBytes(abs, data)
+        if err != nil {
+                c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+                return
+        }
+        // 文本类文件（Markdown/HTML）把原文以 base64 一并返回，
+        // 前端无需再调用 readFile（网页模式下不可用），直接展示原文。
+        lower := strings.ToLower(abs)
+        out := gin.H{
+                "document": doc,
+                "warnings": warns,
+                "path":     abs,
+        }
+        if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
+                strings.HasSuffix(lower, ".mdx") || strings.HasSuffix(lower, ".html") ||
+                strings.HasSuffix(lower, ".htm") {
+                out["rawContent"] = base64.StdEncoding.EncodeToString(data)
+        }
+        c.JSON(http.StatusOK, out)
 }
 
 func parseInt(s string) (int, error) {

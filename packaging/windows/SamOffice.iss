@@ -3,7 +3,7 @@
 ; 未注入时使用默认值。路径全部相对仓库根，本地/CI 通用。
 ; 安装界面支持英文/简体中文；默认安装到用户目录，装完创建桌面快捷方式
 #ifndef MyAppVersion
-#define MyAppVersion "0.5.0"
+#define MyAppVersion "0.6.0"
 #endif
 ; 中文语言文件路径可由 CI 注入（runner 预装的 Inno 可能缺 ChineseSimplified.isl）
 #ifndef CnMessages

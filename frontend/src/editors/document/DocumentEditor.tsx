@@ -29,7 +29,7 @@ import {
   IconFontColor, IconHighlight, IconShading,
   IconVAlignTop, IconVAlignMiddle, IconVAlignBottom, IconTextDirection,
 } from './ribbonIcons'
-import type { Document, SpellError, PageNumberConfig, Backend } from '../../types/udm'
+import type { Document, SpellError, PageNumberConfig, HeaderFooterContent, Backend } from '../../types/udm'
 
 interface Props {
   document: Document
@@ -259,6 +259,70 @@ const PAGE_NUM_FORMATS = [
   { label: 'Page {n} of {total}', value: 'Page {n} of {total}' },
   { label: '— {n} —', value: '— {n} —' },
 ]
+
+// 页眉/页脚编辑对话框（对齐 MS Word：文字 + 对齐/字号/加粗/斜体/颜色）
+function HeaderFooterDialog({ target, initial, labels, onClose, onSave }: {
+  target: 'header' | 'footer'
+  initial: HeaderFooterContent
+  labels: { title: string; text: string; align: string; fontSize: string; ok: string; cancel: string; clear: string }
+  onClose: () => void
+  onSave: (content: HeaderFooterContent) => void
+}) {
+  const [text, setText] = useState(initial.text || '')
+  const [align, setAlign] = useState<string>(initial.align || 'center')
+  const [fontSize, setFontSize] = useState<string>(initial.fontSize ? String(initial.fontSize) : '9')
+  const [bold, setBold] = useState(!!initial.bold)
+  const [italic, setItalic] = useState(!!initial.italic)
+  const [color, setColor] = useState(initial.color ? `#${initial.color}` : '#595959')
+  const save = () => {
+    const sizeN = parseFloat(fontSize)
+    onSave({
+      text: text.trim(),
+      align,
+      fontSize: !isNaN(sizeN) && sizeN > 0 ? sizeN : undefined,
+      bold, italic,
+      color: color.replace('#', ''),
+      fontFamily: initial.fontFamily,
+    })
+  }
+  const selStyle = { background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' } as const
+  return (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 430 }}>
+        <div className="modal-title">{labels.title}</div>
+        <label className="pn-field" style={{ alignItems: 'flex-start' }}>
+          <span style={{ marginTop: 4 }}>{labels.text}</span>
+          <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
+            className="text-xs px-2 py-1 rounded border flex-1" style={selStyle} />
+        </label>
+        <label className="pn-field"><span>{labels.align}</span>
+          <select value={align} onChange={e => setAlign(e.target.value)} className="text-xs px-1 py-1 rounded border" style={{ ...selStyle, width: 140 }}>
+            <option value="left">⬅ {labels.align === 'Align' ? 'Left' : '左对齐'}</option>
+            <option value="center">↔ {labels.align === 'Align' ? 'Center' : '居中'}</option>
+            <option value="right">➡ {labels.align === 'Align' ? 'Right' : '右对齐'}</option>
+          </select>
+        </label>
+        <label className="pn-field"><span>{labels.fontSize}</span>
+          <input type="number" min={6} max={48} step={0.5} value={fontSize} onChange={e => setFontSize(e.target.value)}
+            className="text-xs px-1 py-1 rounded border" style={{ ...selStyle, width: 80 }} />
+        </label>
+        <label className="pn-field"><span>&nbsp;</span>
+          <span className="flex items-center gap-3 text-xs" style={{ color: 'var(--color-text)' }}>
+            <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={bold} onChange={e => setBold(e.target.checked)} /><b>B</b></label>
+            <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={italic} onChange={e => setItalic(e.target.checked)} /><i>I</i></label>
+            <input type="color" value={color} onChange={e => setColor(e.target.value)} className="w-7 h-6 cursor-pointer rounded border" style={{ borderColor: 'var(--color-border)' }} title="Color" />
+          </span>
+        </label>
+        <div className="flex justify-end gap-2 mt-2">
+          <button className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }}
+            onClick={() => { onSave({ text: '' }); }}>{labels.clear}</button>
+          <button className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={onClose}>{labels.cancel}</button>
+          <button className="btn btn-primary btn-sm" onClick={save} disabled={!text.trim()}>{labels.ok}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function PageNumberDialog({ value, onClose, onSave }: {
   value: PageNumberConfig | null
@@ -887,8 +951,44 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   // 显示编辑标记 (段落标记 ¶ / 分页符等)
   const [showMarks, setShowMarks] = useState<boolean>(() => readBool('samoffice_show_marks'))
   const setShowMarksPersist = (v: boolean) => { persistBool('samoffice_show_marks', v); setShowMarks(v) }
+  // Ribbon 折叠（对齐 MS Office：仅保留选项卡栏，再次点击展开；三编辑器共享同一持久化键）
+  const [ribbonCollapsed, setRibbonCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('sam-ribbon-collapsed') === '1' } catch { return false }
+  })
+  const setRibbonCollapsedPersist = (v: boolean) => { try { localStorage.setItem('sam-ribbon-collapsed', v ? '1' : '0') } catch { /* ignore */ }; setRibbonCollapsed(v) }
   // 文档级设置 (页眉/页脚/页边距/分栏/行号)
   const [docHeader, setDocHeader] = useState('')
+  // 页眉/页脚样式与页脚富文本（对齐 MS Word：解析自 docx，可编辑，保存写回）
+  const [docHeaderFmt, setDocHeaderFmt] = useState<HeaderFooterContent>({})
+  const [docFooterHF, setDocFooterHF] = useState<HeaderFooterContent>({ text: '' })
+  // 页眉页脚编辑对话框：target 指定当前编辑的是页眉还是页脚
+  const [showHFDialog, setShowHFDialog] = useState<null | { target: 'header' | 'footer' }>(null)
+  // 打开文档时从 UDM 初始化页眉/页脚（含样式），无则保持空
+  useEffect(() => {
+    const h = (document as any)?.header as HeaderFooterContent | undefined
+    const f = (document as any)?.footer as HeaderFooterContent | undefined
+    if (h && h.text) { setDocHeader(h.text); setDocHeaderFmt({ align: h.align, fontSize: h.fontSize, bold: h.bold, italic: h.italic, color: h.color, fontFamily: h.fontFamily }) }
+    else { setDocHeader(''); setDocHeaderFmt({}) }
+    setDocFooterHF(f && f.text ? { text: f.text, align: f.align, fontSize: f.fontSize, bold: f.bold, italic: f.italic, color: f.color, fontFamily: f.fontFamily } : { text: '' })
+  }, [document])
+  // 应用页眉/页脚编辑：更新本地状态并写回 UDM（随保存写盘 docx header1.xml/footer1.xml）
+  const applyHF = (target: 'header' | 'footer', content: HeaderFooterContent) => {
+    const v = viewRef.current
+    const base: any = documentRef.current ?? document
+    let updated: any
+    if (target === 'header') {
+      setDocHeader(content.text || '')
+      setDocHeaderFmt(content)
+      updated = { ...base, header: content.text ? content : undefined }
+    } else {
+      setDocFooterHF(content)
+      updated = { ...base, footer: content.text ? content : undefined }
+    }
+    documentRef.current = updated
+    lastEmittedRef.current = updated
+    onChange?.(updated)
+    if (v) v.focus()
+  }
   // 默认页边距采用 Word「普通」预设：上下 2.54cm、左右 3.18cm（96dpi 下分别为 96px / 120px）
   const [docMargins, setDocMargins] = useState({ top: 96, bottom: 96, left: 120, right: 120 })
   const [pageSize, setPageSize] = useState<'A4'|'A3'|'A5'|'B5'|'Letter'|'Legal'>('A4')
@@ -1014,7 +1114,21 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const state = EditorState.create({
       doc,
       plugins: [
-        keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo, 'Mod-b': toggleMark(schema.marks.bold), 'Mod-i': toggleMark(schema.marks.italic), 'Mod-u': toggleMark(schema.marks.underline), 'Mod-f': () => { setSearchOpen(true); return true } }),
+        keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo, 'Mod-b': toggleMark(schema.marks.bold), 'Mod-i': toggleMark(schema.marks.italic), 'Mod-u': toggleMark(schema.marks.underline), 'Mod-f': () => { setSearchOpen(true); return true },
+          // 对齐 MS Word：光标在表格内时按 Esc 把光标移到表格之后（退出表格编辑）
+          'Escape': (state, dispatch) => {
+            const $pos = state.selection.$from
+            for (let d = $pos.depth; d > 0; d--) {
+              if ($pos.node(d).type.name === 'table') {
+                if (dispatch) {
+                  const after = $pos.after(d)
+                  dispatch(state.tr.setSelection(TextSelection.create(state.doc, Math.min(after, state.doc.content.size))).scrollIntoView())
+                }
+                return true
+              }
+            }
+            return false
+          } }),
         keymap(baseKeymap), history(),
         inputRules({ rules: [
           textblockTypeInputRule(/^#\s$/, schema.nodes.heading, () => ({ level: 1 })),
@@ -1074,33 +1188,63 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       nodeViews: {
         image: (node: any, view: any, getPos: any) => {
           const dom = window.document.createElement('div')
-          // 应用环绕（float）与嵌入型（wrap=false）样式，使文字环绕生效。
-          // 抽成函数，创建与 update 时都会调用，确保切换环绕方式时样式实时刷新。
+          // 应用环绕（float/wrapMode）与嵌入型样式，使文字环绕生效。
+          // wrapMode 对齐 MS Word 六种环绕：inline 嵌入型 | left/right 四周型 |
+          // topBottom 上下型 | behind 衬于文字下方 | front 浮于文字上方。
+          // 旧文档兼容：float:left/right → 四周型；float:center 或无 float → 嵌入型。
           const applyFloat = (n: any) => {
-            const fl = n.attrs.float || ''
-            const wrap = n.attrs.wrap !== false
-            if (fl === 'left' || fl === 'right') {
+            let mode: string = n.attrs.wrapMode || ''
+            if (!mode) {
+              const fl = n.attrs.float || ''
+              if (fl === 'left' || fl === 'right') mode = fl
+              else mode = 'inline'
+            }
+            const w = n.attrs.width || 300
+            // 先重置，再按模式设置
+            dom.style.cssText = 'position: relative; max-width: 100%;'
+            if (mode === 'left' || mode === 'right') {
               dom.style.display = 'block'
-              dom.style.float = fl
-              dom.style.margin = fl === 'left' ? '4px 12px 4px 0' : '4px 0 4px 12px'
-            } else if (fl === 'center') {
+              dom.style.float = mode
+              dom.style.margin = mode === 'left' ? '4px 12px 4px 0' : '4px 0 4px 12px'
+            } else if (mode === 'topBottom') {
+              // 上下型：块级居中，不占满宽 → 用 inline-block + clear 双侧实现上下留白
               dom.style.display = 'block'
-              dom.style.margin = '4px auto'
+              dom.style.clear = 'both'
               dom.style.textAlign = 'center'
-              dom.style.float = 'none'
+              dom.style.margin = '6px auto'
+              dom.style.width = w + 'px'
+            } else if (mode === 'behind' || mode === 'front') {
+              // 衬于文字下方 / 浮于文字上方：0 高锚点 + 绝对定位，正文文字从下方/上方流过
+              dom.style.display = 'block'
+              dom.style.height = '0'
+              dom.style.width = w + 'px'
+              dom.style.margin = mode === 'front' ? '0 auto' : '0 auto'
+              const inner = dom.querySelector('img') as HTMLElement | null
+              if (inner) {
+                inner.style.position = 'absolute'
+                inner.style.top = '0'
+                inner.style.left = '50%'
+                inner.style.transform = 'translateX(-50%)'
+                inner.style.zIndex = mode === 'front' ? '10' : '0'
+                if (mode === 'behind') inner.style.opacity = '0.85'
+              }
+              return
             } else {
-              // 嵌入型 / 无环绕：独占一行块或行内，取决于 wrap
+              // 嵌入型：独占一行居中
               dom.style.display = 'block'
               dom.style.float = 'none'
               dom.style.margin = '4px auto'
               dom.style.textAlign = 'center'
             }
-            if (!wrap) {
-              // 嵌入型：不环绕，独占一行
-              dom.style.display = 'block'
-              dom.style.float = 'none'
-              dom.style.margin = '4px auto'
-              dom.style.textAlign = 'center'
+            // 恢复非绝对定位的图片样式（behind/front 之外的分支）
+            const inner = dom.querySelector('img') as HTMLElement | null
+            if (inner) {
+              inner.style.position = 'relative'
+              inner.style.top = ''
+              inner.style.left = ''
+              inner.style.transform = ''
+              inner.style.zIndex = ''
+              inner.style.opacity = ''
             }
           }
           applyFloat(node)
@@ -1484,6 +1628,22 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     setActiveTextBox(selNode && selNode.type.name === 'text_box' ? { node: selNode, pos: sel.from } : null)
     setTick(t => t + 1)
   }
+
+  // 表格工具栏状态兜底同步：点击表格外的空白区/页边距时 DOM 选区变化不产生 PM 事务，
+  // inTable 会卡在 true —— 用户看到的“表格编辑模式无法退出”。监听 selectionchange 刷新。
+  // 注意：组件内 document 被 props.document（UDM 文档）遮蔽，必须用 window.document。
+  useEffect(() => {
+    const onSelChange = () => {
+      const pmDom = viewRef.current?.dom as HTMLElement | undefined
+      if (!pmDom) return
+      const anchor = window.getSelection()?.anchorNode
+      if (!anchor || !pmDom.contains(anchor)) { setInTable(false); return }
+      const el = anchor.nodeType === 1 ? (anchor as HTMLElement) : anchor.parentElement
+      setInTable(!!el?.closest?.('table'))
+    }
+    window.document.addEventListener('selectionchange', onSelChange)
+    return () => window.document.removeEventListener('selectionchange', onSelChange)
+  }, [])
 
   // ============ 样式系统 ============
   const resolveStyle = (name: string): StyleFormat => {
@@ -1883,11 +2043,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.text_box.create({ shape: shapeType }, cell)))
         break
       }
-      case 'imgFloatLeft': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'left' })); break }
-      case 'imgFloatRight': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'right' })); break }
-      case 'imgFloatCenter': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'center' })); break }
-      case 'imgFloatNone': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: '' })); break }
+      case 'imgFloatLeft': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'left', wrapMode: 'left' })); break }
+      case 'imgFloatRight': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'right', wrapMode: 'right' })); break }
+      case 'imgFloatCenter': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'center', wrapMode: 'inline' })); break }
+      case 'imgFloatNone': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: '', wrapMode: 'inline' })); break }
       case 'imgToggleWrap': { if (selNode && selNode.type.name === 'image') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, wrap: !selNode.attrs.wrap })); break }
+      // 对齐 MS Word 六种环绕方式：inline/left/right/topBottom/behind/front
+      // 用法 exec('imgWrapMode:behind') 等
+      case 'imgWrapMode': { if (selNode && selNode.type.name === 'image') {
+        const mode = cmd.split(':')[1] || 'inline'
+        const floatMap: Record<string, string> = { inline: '', left: 'left', right: 'right', topBottom: 'center', behind: '', front: '' }
+        v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: floatMap[mode] ?? '', wrap: mode !== 'behind' && mode !== 'front', wrapMode: mode }))
+      } break }
       case 'shapeFloatLeft': { if (selNode && selNode.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'left' })); break }
       case 'shapeFloatRight': { if (selNode && selNode.type.name === 'text_box') v.dispatch(v.state.tr.setNodeMarkup(sel.from, undefined, { ...selNode.attrs, float: 'right' })); break }
       case 'tableAlignLeft': { alignTable(v, 'left'); break }
@@ -2536,6 +2703,31 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     return () => window.removeEventListener('keydown', onKey)
   }, [zoom])
 
+  // Ctrl+Z / Ctrl+Y / Ctrl+B / Ctrl+I / Ctrl+U 窗口级兜底（对齐 MS Word：
+  // 焦点不在正文时（如刚点过 Ribbon 按钮、页眉提示框关闭后）也能撤销/重做/加粗）。
+  // 焦点在 ProseMirror 内时由编辑器 keymap 处理（此处 hasFocus 直接放行，避免重复执行）；
+  // 焦点在输入框/文本域时交给原生控件，不拦截。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const k = (e.key || '').toLowerCase()
+      if (k !== 'z' && k !== 'y' && k !== 'b' && k !== 'i' && k !== 'u') return
+      const v = viewRef.current
+      if (!v) return
+      if (v.hasFocus()) return // 编辑器自己会处理
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      e.preventDefault()
+      if (k === 'z' && !e.shiftKey) { undo(v.state, v.dispatch); v.focus() }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { redo(v.state, v.dispatch); v.focus() }
+      else if (k === 'b') { toggleMark(schema.marks.bold)(v.state, v.dispatch, v) }
+      else if (k === 'i') { toggleMark(schema.marks.italic)(v.state, v.dispatch, v) }
+      else if (k === 'u') { toggleMark(schema.marks.underline)(v.state, v.dispatch, v) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   // Escape 关闭所有弹出层（右键菜单、mini工具栏、形状/艺术字/颜色/底纹/背景面板）
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
@@ -2582,6 +2774,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </div>
         <button onClick={() => setSearchOpen(!searchOpen)} data-testid="doc-search-toggle" className="toolbar-btn flex-shrink-0" title={t('doc.find') + ' (Ctrl+F)'} type="button">🔍</button>
         <button onClick={() => setTrackChanges(!trackChanges)} className={`toolbar-btn flex-shrink-0 ${trackChanges ? 'active' : ''}`} title={t('doc.trackChanges')} type="button">✏️</button>
+        {/* Ribbon 整体折叠/展开（对齐 MS Office） */}
+        <button onClick={() => setRibbonCollapsedPersist(!ribbonCollapsed)} data-testid="ribbon-collapse" type="button"
+          className="toolbar-btn flex-shrink-0"
+          title={ribbonCollapsed ? (t('ribbon.expand') || '展开功能区') : (t('ribbon.collapse') || '折叠功能区')}>{ribbonCollapsed ? '⌄' : '⌃'}</button>
       </div>
 
       {/* 点击外部关闭弹出面板的透明遮罩 — absolute 限制在编辑器根容器内，
@@ -2590,7 +2786,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <div className="absolute inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
       )}
 
-      {/* Ribbon 内容区 */}
+      {/* Ribbon 内容区（整体折叠时不渲染，仅保留选项卡栏） */}
+      {!ribbonCollapsed && (
       <div
         className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll"
         style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '72px', position: 'relative', zIndex: 45, '--wails-draggable': 'drag' as any } as any}
@@ -2781,9 +2978,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.table')}><RibbonButton icon="📊" label={t('doc.table')} onClick={() => exec('insertTable')} /></RibbonGroup>
           <RibbonGroup label={t('doc.image')}>
             <RibbonButton icon="🖼" label={t('doc.image')} onClick={insertImage} />
-            <RibbonButton icon="⬅" label={t('doc.imgFloatLeft')} onClick={() => exec('imgFloatLeft')} disabled={!activeIsImage} title={t('doc.imgFloatLeftTitle')} />
-            <RibbonButton icon="➡" label={t('doc.imgFloatRight')} onClick={() => exec('imgFloatRight')} disabled={!activeIsImage} title={t('doc.imgFloatRightTitle')} />
-            <RibbonButton icon="⏹" label={t('doc.imgFloatNone')} onClick={() => exec('imgFloatNone')} disabled={!activeIsImage} title={t('doc.imgFloatNoneTitle')} />
+            {/* 文字环绕（对齐 MS Word 六种：嵌入型/四周型左右/上下型/衬于文字下方/浮于文字上方） */}
+            <Dropdown
+              className="ribbon-input"
+              style={{ width: 128, height: 26 }}
+              value={(() => {
+                // 当前选中图片的环绕方式（未选中图片时显示默认嵌入型）
+                const sel = viewRef.current?.state.selection
+                const n = sel instanceof NodeSelection ? sel.node : null
+                if (!n || n.type.name !== 'image') return 'inline'
+                return n.attrs.wrapMode || (n.attrs.float === 'left' ? 'left' : n.attrs.float === 'right' ? 'right' : 'inline')
+              })()}
+              onChange={(v2: string) => exec('imgWrapMode:' + v2)}
+              options={[
+                { label: t('doc.wrapInline') || '嵌入型', value: 'inline' },
+                { label: t('doc.wrapSquareLeft') || '四周型-左环绕', value: 'left' },
+                { label: t('doc.wrapSquareRight') || '四周型-右环绕', value: 'right' },
+                { label: t('doc.wrapTopBottom') || '上下型环绕', value: 'topBottom' },
+                { label: t('doc.wrapBehind') || '衬于文字下方', value: 'behind' },
+                { label: t('doc.wrapFront') || '浮于文字上方', value: 'front' },
+              ]}
+            />
             <RibbonButton icon="—" label={t('doc.horizontalRule')} onClick={() => exec('horizontalRule')} />
             <RibbonButton icon="⏎" label={t('doc.pageBreak')} onClick={() => exec('pageBreak')} />
             <RibbonButton icon="🔄" label={t('doc.pageBreakRestart')} onClick={() => exec('pageBreakRestart')} title={t('doc.pageBreakRestartTitle')} />
@@ -2986,10 +3201,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           </RibbonGroup>
           {/* 页眉页脚 / 页码 */}
           <RibbonGroup label={t('doc.headerFooter')}>
-            <RibbonButton icon="📄" label={t('doc.header')} onClick={() => {
-              const h = prompt(t('doc.headerPrompt'), docHeader)
-              if (h !== null) setDocHeader(h)
-            }} title={t('doc.headerTitle')} />
+            <RibbonButton icon="📄" label={t('doc.header')} active={!!docHeader} onClick={() => setShowHFDialog({ target: 'header' })} title={t('doc.headerTitle')} />
+            <RibbonButton icon="📎" label={t('doc.footer')} active={!!docFooterHF.text} onClick={() => setShowHFDialog({ target: 'footer' })} title={t('doc.footerTitle')} />
             <RibbonButton icon="🔢" label={t('doc.pageNum')} onClick={() => setShowPageNumDialog(true)} active={!!pageNumber?.enabled} title={t('doc.pageNumTitle')} />
           </RibbonGroup>
           <RibbonGroup label="公文 GB/T 9704">
@@ -3129,6 +3342,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
         </>)}
       </div>
+      )}
 
       {/* 表格工具栏 */}
       {inTable && (
@@ -3283,7 +3497,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                     fontSize: '0.82em',
                     lineHeight: 1.5,
                     color: 'var(--color-text-muted)',
-                    background: 'rgba(255,255,255,0.92)',
+                    // 背景透明：护眼色/背景色由纸页层提供，不再被白色遮住（修复护眼模式下页脚区发白）
+                    background: 'transparent',
                     pointerEvents: 'auto',
                   }}>
                     {(footnotesByPage[i] || []).map((f) => (
@@ -3325,6 +3540,31 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   )
                 })()}
               </div>
+              {/* 每页底部页脚（富文本，解析自 docx footerN.xml / 可编辑；点击弹页脚编辑对话框） */}
+              {docFooterHF.text && (
+                <div
+                  onClick={() => setShowHFDialog({ target: 'footer' })}
+                  title={t('doc.footerTitle')}
+                  style={{
+                    position: 'absolute',
+                    top: bodyTop + p.top + p.height - Math.round(docMargins.bottom * 0.8),
+                    left: docMargins.left,
+                    right: docMargins.right,
+                    fontSize: docFooterHF.fontSize ? `${Math.max(9, Math.round(docFooterHF.fontSize * 1.333))}px` : '12px',
+                    fontFamily: docFooterHF.fontFamily || undefined,
+                    fontWeight: docFooterHF.bold ? 700 : 400,
+                    fontStyle: docFooterHF.italic ? 'italic' : undefined,
+                    color: docFooterHF.color ? `#${docFooterHF.color}` : 'var(--color-text-muted)',
+                    textAlign: (docFooterHF.align as any) || 'center',
+                    cursor: 'pointer',
+                    pointerEvents: 'auto',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}>
+                  {docFooterHF.text}
+                </div>
+              )}
               {/* 每页底部页码（预览）：按真实页码填充模板 */}
               {pageNumber?.enabled && (
                 <div style={{
@@ -3378,12 +3618,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               正是 removeChild 崩溃的触发源之一。 */}
           <div
             key="doc-header"
+            onClick={() => setShowHFDialog({ target: 'header' })}
+            title={t('doc.headerTitle')}
             style={{
               padding: `${Math.round(docMargins.top * 0.3)}px ${docMargins.right}px ${docMargins.top * 0.3}px ${docMargins.left}px`,
               borderBottom: '1px solid var(--color-border)',
-              fontSize: '12px',
-              color: 'var(--color-text-muted)',
-              textAlign: 'center',
+              fontSize: docHeaderFmt.fontSize ? `${Math.max(9, Math.round(docHeaderFmt.fontSize * 1.333))}px` : '12px',
+              fontFamily: docHeaderFmt.fontFamily || undefined,
+              fontWeight: docHeaderFmt.bold ? 700 : 400,
+              fontStyle: docHeaderFmt.italic ? 'italic' : undefined,
+              color: docHeaderFmt.color ? `#${docHeaderFmt.color}` : 'var(--color-text-muted)',
+              textAlign: (docHeaderFmt.align as any) || 'center',
+              cursor: 'pointer',
               minHeight: docHeader ? 'auto' : '0',
               display: docHeader ? 'block' : 'none',
             }}>
@@ -3564,6 +3810,25 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           value={pageNumber}
           onClose={() => setShowPageNumDialog(false)}
           onSave={(pn) => { setPageNumber(pn); setShowPageNumDialog(false); emitDoc(pn) }}
+        />
+      )}
+      {/* 页眉/页脚编辑对话框（对齐 MS Word：文字 + 对齐/字号/加粗/斜体/颜色，保存写回 docx） */}
+      {showHFDialog && (
+        <HeaderFooterDialog
+          target={showHFDialog.target}
+          initial={showHFDialog.target === 'header'
+            ? { text: docHeader, ...docHeaderFmt }
+            : { ...docFooterHF }}
+          labels={{
+            title: showHFDialog.target === 'header' ? t('doc.header') : (t('doc.footer') || '页脚'),
+            text: t('doc.headerPrompt') || '页眉内容',
+            align: t('doc.align') || '对齐',
+            fontSize: t('doc.fontSize') || '字号',
+            ok: t('doc.paraOk') || '确定', cancel: t('doc.paraCancel') || '取消',
+            clear: t('sheet.clearFilter') || '清除',
+          }}
+          onClose={() => setShowHFDialog(null)}
+          onSave={(content) => { applyHF(showHFDialog.target, content); setShowHFDialog(null) }}
         />
       )}
       {showParaDialog && (

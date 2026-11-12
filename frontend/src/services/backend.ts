@@ -83,8 +83,12 @@ export class RemoteBackend implements Backend {
   async writeDocument(_path: string, _format: string, _document: Document): Promise<void> {
     throw new Error('writeDocument not supported in remote mode')
   }
-  async readXLSX(_path: string): Promise<string> {
-    throw new Error('readXLSX not supported in remote mode')
+  async readXLSX(path: string): Promise<string> {
+    // 与桌面版 ReadXLSX binding 同源的原生读取（服务端 /api/xlsx/read），
+    // 完整保留合并/边框/填充等格式；path 为服务端落盘的上传文件路径
+    const r = await fetch(`${this.baseUrl}/api/xlsx/read?path=${encodeURIComponent(path)}`)
+    if (!r.ok) throw new Error(`readXLSX: ${r.status} ${await r.text()}`)
+    return r.text()
   }
   async writeXLSX(_path: string, _json: string): Promise<void> {
     throw new Error('writeXLSX not supported in remote mode')

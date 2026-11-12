@@ -72,6 +72,7 @@ export interface SlideData {
   transition?: string // 切换效果：fade/push/wipe/cover/cut/zoom/morph
   pageW?: number // 页面宽度 EMU
   pageH?: number // 页面高度 EMU
+  masterShapes?: SlideShape[] // 母版形状（随首页携带；母版视图可编辑，对齐 MS PPT 母版）
 }
 
 export interface OpenDecision {

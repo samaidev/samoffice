@@ -158,9 +158,22 @@ export interface Document {
   comments?: Comment[]
   styles?: StyleDef[]
   pageNumber?: PageNumberConfig
+  header?: HeaderFooterContent
+  footer?: HeaderFooterContent
   protect?: DocumentProtect
   warnings?: Warning[]
   raw?: Record<string, unknown>
+}
+
+// 页眉/页脚富文本内容（对齐 MS Word，与后端 core.HeaderFooter 对应）
+export interface HeaderFooterContent {
+  text?: string
+  align?: string
+  fontFamily?: string
+  fontSize?: number
+  bold?: boolean
+  italic?: boolean
+  color?: string
 }
 
 export interface Comment {

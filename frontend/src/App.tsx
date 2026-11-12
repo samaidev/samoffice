@@ -912,7 +912,9 @@ ${t('sample.md.more')}
         const r = await fetch(`${base}/api/doc/open`, { method: 'POST', body: form })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const result = await r.json()
-        await openResult({ ...result, path: name })
+        // 服务端已把上传内容落盘并回传 path：xlsx 走原生 readXLSX 需要该路径；
+        // 回退为文件名，保证旧行为不变
+        await openResult({ ...result, path: result.path || name })
         showToast(t('app.opened', { name }))
       } catch (e: any) {
         showToast(t('app.openFailed', { msg: e.message }))

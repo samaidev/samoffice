@@ -23,6 +23,8 @@ type writePPTX struct {
         PageW  int64        `json:"pageW"`
         PageH  int64        `json:"pageH"`
         Slides []slideWrite `json:"slides"`
+        // 母版形状（母版视图编辑的装饰层；写盘进 slideMaster1.xml spTree，对齐 MS PPT 母版）
+        MasterShapes []shapeWrite `json:"masterShapes,omitempty"`
 }
 
 type slideWrite struct {
@@ -33,37 +35,37 @@ type slideWrite struct {
 }
 
 type shapeWrite struct {
-        Kind       string      `json:"kind"`             // text | rect | pic
-        Type       string      `json:"type"`             // rect/ellipse/triangle/... (几何)
-        X          int64       `json:"x"`                // EMU
-        Y          int64       `json:"y"`                // EMU
-        Cx         int64       `json:"cx"`               // EMU
-        Cy         int64       `json:"cy"`               // EMU
-        Fill       string      `json:"fill"`             // #RRGGBB 或 url("data:...")
-        Text       string      `json:"text"`             // 多行以 \n 分隔
-        Color      string      `json:"color"`            // #RRGGBB
-        SizePt     int         `json:"sizePt"`           // 磅
-        Bold       bool        `json:"bold"`             // 文字加粗
+        Kind       string      `json:"kind"`   // text | rect | pic
+        Type       string      `json:"type"`   // rect/ellipse/triangle/... (几何)
+        X          int64       `json:"x"`      // EMU
+        Y          int64       `json:"y"`      // EMU
+        Cx         int64       `json:"cx"`     // EMU
+        Cy         int64       `json:"cy"`     // EMU
+        Fill       string      `json:"fill"`   // #RRGGBB 或 url("data:...")
+        Text       string      `json:"text"`   // 多行以 \n 分隔
+        Color      string      `json:"color"`  // #RRGGBB
+        SizePt     int         `json:"sizePt"` // 磅
+        Bold       bool        `json:"bold"`   // 文字加粗
         Italic     bool        `json:"italic"`
         Underline  bool        `json:"underline"`
         Font       string      `json:"font"`
-        Align      string      `json:"align"`            // l|c|r
-        Vanchor    string      `json:"vanchor"`          // t|ctr|b
-        Img        string      `json:"img"`              // 图片 data URL
-        LineColor  string      `json:"lineColor,omitempty"` // 边框色 #RRGGBB（a:ln solidFill）
-        LineWpt    float64     `json:"lineWpt,omitempty"`   // 边框宽（磅）
-        Gradient   string      `json:"gradient,omitempty"`  // 渐变 "RRGGBB,RRGGBB"
-        Shadow     bool        `json:"shadow,omitempty"`    // 外阴影
-        Glow       bool        `json:"glow,omitempty"`      // 发光
-        GlowColor  string      `json:"glowColor,omitempty"` // 发光色 #RRGGBB
-        Rotation   float64     `json:"rotation,omitempty"`  // 旋转角度（度）
-        Bullet     bool        `json:"bullet,omitempty"`    // 项目符号
-        Numbered   bool        `json:"numbered,omitempty"`  // 编号列表
+        Align      string      `json:"align"`                // l|c|r
+        Vanchor    string      `json:"vanchor"`              // t|ctr|b
+        Img        string      `json:"img"`                  // 图片 data URL
+        LineColor  string      `json:"lineColor,omitempty"`  // 边框色 #RRGGBB（a:ln solidFill）
+        LineWpt    float64     `json:"lineWpt,omitempty"`    // 边框宽（磅）
+        Gradient   string      `json:"gradient,omitempty"`   // 渐变 "RRGGBB,RRGGBB"
+        Shadow     bool        `json:"shadow,omitempty"`     // 外阴影
+        Glow       bool        `json:"glow,omitempty"`       // 发光
+        GlowColor  string      `json:"glowColor,omitempty"`  // 发光色 #RRGGBB
+        Rotation   float64     `json:"rotation,omitempty"`   // 旋转角度（度）
+        Bullet     bool        `json:"bullet,omitempty"`     // 项目符号
+        Numbered   bool        `json:"numbered,omitempty"`   // 编号列表
         LineHeight float64     `json:"lineHeight,omitempty"` // 行距倍数（1=单倍）
         Indent     int         `json:"indent,omitempty"`     // 缩进层级（0 起）
         Link       string      `json:"link,omitempty"`       // 超链接 URL
-        GroupID    string      `json:"groupId,omitempty"`  // 所属组合 ID（非空时连续同组段写出为 p:grpSp）
-        Paras      []paraWrite `json:"paras"`               // 逐段逐 run（优先于 Text/Color 等扁平字段）
+        GroupID    string      `json:"groupId,omitempty"`    // 所属组合 ID（非空时连续同组段写出为 p:grpSp）
+        Paras      []paraWrite `json:"paras"`                // 逐段逐 run（优先于 Text/Color 等扁平字段）
 }
 
 type paraWrite struct {
@@ -101,7 +103,7 @@ func WritePPTX(p string, jsonStr string) error {
         }
 
         builder := &pptxWriter{pageW: pageW, pageH: pageH}
-        if err := builder.build(data.Slides); err != nil {
+        if err := builder.build(data.Slides, data.MasterShapes); err != nil {
                 return err
         }
         return builder.save(p)
@@ -120,7 +122,8 @@ type pptxWriter struct {
         pageH   int64
         slides  []slideWrite
         media   []mediaFile
-        bgMedia []string // 每页背景图的 media 名（无背景图为空串），与 slides 一一对应
+        bgMedia []string     // 每页背景图的 media 名（无背景图为空串），与 slides 一一对应
+        master  []shapeWrite // 母版形状（母版视图编辑，写盘进 slideMaster1.xml）
 }
 
 // prstGeom 把前端类型映射为 PPTX 预设几何名
@@ -148,6 +151,39 @@ func prstGeom(t string) string {
                 return "cloud"
         case "callout", "wedgerectcallout":
                 return "wedgeRectCallout"
+        // === 流程图（对齐 MS PPT 形状库；解析端 GEOM_MAP 逆向对应）===
+        case "parallelogram":
+                return "parallelogram"
+        case "trapezoid":
+                return "trapezoid"
+        case "can", "cylinder":
+                return "can"
+        case "flowdoc", "flowdocument":
+                return "flowChartDocument"
+        case "chevron":
+                return "chevron"
+        case "lightning", "lightningbolt":
+                return "lightningBolt"
+        case "flowmanualinput":
+                return "flowChartManualInput"
+        case "flowdelay":
+                return "flowChartDelay"
+        case "flowmerge":
+                return "flowChartMerge"
+        case "flowoffpage", "flowoffpageconnector":
+                return "flowChartOffpageConnector"
+        case "leftarrow":
+                return "leftArrow"
+        case "uparrow":
+                return "upArrow"
+        case "downarrow":
+                return "downArrow"
+        case "leftrightarrow":
+                return "leftRightArrow"
+        case "updownarrow":
+                return "upDownArrow"
+        case "bentarrow":
+                return "bentArrow"
         default:
                 return "rect"
         }
@@ -323,8 +359,9 @@ func transitionXML(t string) string {
 }
 
 // build 准备所有媒体并校验
-func (w *pptxWriter) build(slides []slideWrite) error {
+func (w *pptxWriter) build(slides []slideWrite, masterShapes []shapeWrite) error {
         w.slides = slides
+        w.master = masterShapes
         w.bgMedia = make([]string, len(slides))
         // 收集图片并解码
         for _, s := range slides {
@@ -442,7 +479,25 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
 
         b.WriteString(`<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>`)
 
-        // writeShape 输出单个形状/图片（id = idx+10 保持全局唯一，组内同样适用）
+        // 形状序列化（文本/图片/组合）——与母版 shapesXML 共用
+        b.WriteString(w.shapesXML(s.Shapes, mediaRels, linkRels, 10))
+
+        b.WriteString(`</p:spTree></p:cSld>`)
+        b.WriteString(`<p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>`)
+        // 幻灯片切换效果（CT_Slide 顺序：cSld → clrMapOvr → transition）
+        if tx := transitionXML(s.Transition); tx != "" {
+                b.WriteString(tx)
+        }
+        b.WriteString(`</p:sld>`)
+        return b.String()
+}
+
+// shapesXML 把形状列表序列化为 spTree 内部 XML（文本/矩形/图片/组合）。
+// mediaRels 为 media 名称→rId 映射（图片）；linkRels 为 URL→rId（超链接）；
+// idBase 为 cNvPr id 基数（slide 用 10，master 用 90000 以避免与占位符 id 冲突）。
+func (w *pptxWriter) shapesXML(shapes []shapeWrite, mediaRels map[string]string, linkRels map[string]string, idBase int) string {
+        var b strings.Builder
+        // writeShape 输出单个形状/图片（id = idBase+idx 保持全局唯一，组内同样适用）
         writeShape := func(idx int, sh shapeWrite) {
                 // 旋转属性（前端存角度，xfrm rot 单位 1/60000 度）
                 rotAttr := ""
@@ -457,7 +512,7 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                                 return
                         }
                         b.WriteString(`<p:pic><p:nvPicPr><p:cNvPr id="`)
-                        b.WriteString(fmt.Sprintf("%d", idx+10))
+                        b.WriteString(fmt.Sprintf("%d", idBase+idx))
                         b.WriteString(`" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="`)
                         b.WriteString(rId)
                         b.WriteString(`"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm`)
@@ -477,7 +532,7 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                 geom := prstGeom(sh.Type)
                 fill := normColor(sh.Fill)
                 b.WriteString(`<p:sp><p:nvSpPr><p:cNvPr id="`)
-                b.WriteString(fmt.Sprintf("%d", idx+10))
+                b.WriteString(fmt.Sprintf("%d", idBase+idx))
                 b.WriteString(`" name="Shape`)
                 b.WriteString(fmt.Sprintf("%d", idx+1))
                 b.WriteString(`"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>`)
@@ -638,18 +693,18 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
         // 遍历形状：连续同 GroupID 的段包进 p:grpSp（off/ext=成员包围盒，
         // chOff/chExt=off/ext → 恒等子空间，子形状坐标已绝对，合法 OOXML）
         idx := 0
-        for idx < len(s.Shapes) {
-                gid := s.Shapes[idx].GroupID
+        for idx < len(shapes) {
+                gid := shapes[idx].GroupID
                 if gid == "" {
-                        writeShape(idx, s.Shapes[idx])
+                        writeShape(idx, shapes[idx])
                         idx++
                         continue
                 }
                 j := idx + 1
-                for j < len(s.Shapes) && s.Shapes[j].GroupID == gid {
+                for j < len(shapes) && shapes[j].GroupID == gid {
                         j++
                 }
-                members := s.Shapes[idx:j]
+                members := shapes[idx:j]
                 minX, minY := members[0].X, members[0].Y
                 maxX, maxY := members[0].X+members[0].Cx, members[0].Y+members[0].Cy
                 for _, m := range members[1:] {
@@ -667,8 +722,8 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                         }
                 }
                 b.WriteString(`<p:grpSp><p:nvGrpSpPr><p:cNvPr id="`)
-                // 组 id 与形状 id（idx+10）不冲突（≥1000+len，远大于 idx+10 的上限）
-                b.WriteString(fmt.Sprintf("%d", len(s.Shapes)+1000+idx))
+                // 组 id 与形状 id（idBase+idx）不冲突（≥1000+len，远大于 idBase+idx 的上限）
+                b.WriteString(fmt.Sprintf("%d", len(shapes)+1000+idx))
                 b.WriteString(`" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>`)
                 b.WriteString(`<a:off x="`)
                 b.WriteString(fmt.Sprintf("%d", minX))
@@ -688,19 +743,11 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                 b.WriteString(fmt.Sprintf("%d", maxY-minY))
                 b.WriteString(`"/></a:xfrm></p:grpSpPr>`)
                 for k := idx; k < j; k++ {
-                        writeShape(k, s.Shapes[k])
+                        writeShape(k, shapes[k])
                 }
                 b.WriteString(`</p:grpSp>`)
                 idx = j
         }
-
-        b.WriteString(`</p:spTree></p:cSld>`)
-        b.WriteString(`<p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>`)
-        // 幻灯片切换效果（CT_Slide 顺序：cSld → clrMapOvr → transition）
-        if tx := transitionXML(s.Transition); tx != "" {
-                b.WriteString(tx)
-        }
-        b.WriteString(`</p:sld>`)
         return b.String()
 }
 
@@ -745,7 +792,8 @@ func (w *pptxWriter) save(p string) error {
         if err := writeZip(zw, "ppt/theme/theme1.xml", themeXML); err != nil {
                 return err
         }
-        if err := writeZip(zw, "ppt/slideMasters/slideMaster1.xml", masterXML); err != nil {
+        // 母版形状（MasterShapes 非空时写进 spTree，实现真实母版层）
+        if err := writeZip(zw, "ppt/slideMasters/slideMaster1.xml", w.buildMasterXML(w.master)); err != nil {
                 return err
         }
         if err := writeZip(zw, "ppt/slideMasters/_rels/slideMaster1.xml.rels", masterRels); err != nil {
@@ -954,6 +1002,31 @@ const masterXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
         `<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>` +
         `<p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>` +
         `</p:sldMaster>`
+
+// buildMasterXML 生成 slideMaster1.xml；masterShapes 非空时写入母版 spTree（母版层），
+// 否则与旧静态模板等价。母版图片未收集 media，忽略 pic 类型。
+func (w *pptxWriter) buildMasterXML(shapes []shapeWrite) string {
+        // 过滤掉图片形状（母版媒体关系未登记；母版通常只放文本/装饰形状）
+        filtered := make([]shapeWrite, 0, len(shapes))
+        for _, sh := range shapes {
+                if sh.Kind == "pic" || strings.HasPrefix(sh.Fill, "url(") {
+                        continue
+                }
+                filtered = append(filtered, sh)
+        }
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+        sb.WriteString(`<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">`)
+        sb.WriteString(`<p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>`)
+        sb.WriteString(`<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>`)
+        sb.WriteString(w.shapesXML(filtered, map[string]string{}, map[string]string{}, 90000))
+        sb.WriteString(`</p:spTree></p:cSld>`)
+        sb.WriteString(`<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>`)
+        sb.WriteString(`<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>`)
+        sb.WriteString(`<p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles>`)
+        sb.WriteString(`</p:sldMaster>`)
+        return sb.String()
+}
 
 const masterRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
         `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +

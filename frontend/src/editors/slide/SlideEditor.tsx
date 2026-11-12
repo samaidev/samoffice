@@ -28,6 +28,15 @@ const SHAPE_DEFS = [
   { type: 'star5', icon: '★' }, { type: 'hexagon', icon: '⬡' },
   { type: 'pentagon', icon: '⬠' }, { type: 'heart', icon: '♥' },
   { type: 'cloud', icon: '☁' }, { type: 'callout', icon: '💬' },
+  // === 流程图（对齐 MS PPT 形状库）===
+  { type: 'parallelogram', icon: '▱' }, { type: 'trapezoid', icon: ' ⬢' },
+  { type: 'can', icon: '🛢' }, { type: 'flowDoc', icon: '📄' },
+  { type: 'chevron', icon: '⫸' }, { type: 'lightning', icon: '⚡' },
+  { type: 'flowManualInput', icon: '⏢' }, { type: 'flowDelay', icon: '◐' },
+  { type: 'flowMerge', icon: '▽' }, { type: 'flowOffpage', icon: '⧕' },
+  { type: 'leftArrow', icon: '←' }, { type: 'upArrow', icon: '↑' },
+  { type: 'downArrow', icon: '↓' }, { type: 'leftRightArrow', icon: '↔' },
+  { type: 'upDownArrow', icon: '↕' }, { type: 'bentArrow', icon: '⤸' },
 ] as const
 
 const LAYOUT_DEFS = [
@@ -105,6 +114,24 @@ const SHAPE_CLIP: Record<string, string> = {
   heart: 'path("M50 90 L10 50 A20 20 0 0 1 50 30 A20 20 0 0 1 90 50 Z")',
   cloud: 'ellipse(50% 50% at 50% 50%)',
   callout: 'polygon(0 0, 100% 0, 100% 70%, 60% 70%, 50% 100%, 40% 70%, 0 70%)',
+  // === 流程图 ===
+  parallelogram: 'polygon(18% 0, 100% 0, 82% 100%, 0 100%)',
+  trapezoid: 'polygon(22% 0, 78% 0, 100% 100%, 0 100%)',
+  // can（圆柱）：不用 clip —— 主画布/缩略图用 borderRadius '50%/12%' 呈现上下椭圆盖
+  can: '',
+  flowDoc: 'path("M0 8 Q25 0 50 8 Q75 16 100 8 L100 92 Q75 100 50 92 Q25 84 0 92 Z")',
+  chevron: 'polygon(0 0, 72% 0, 100% 50%, 72% 100%, 0 100%, 28% 50%)',
+  lightning: 'polygon(62% 0, 20% 55%, 45% 55%, 38% 100%, 80% 40%, 55% 40%, 75% 0)',
+  flowManualInput: 'polygon(0 18%, 100% 0, 100% 100%, 0 100%)',
+  flowDelay: 'polygon(0 0, 55% 0, 100% 50%, 55% 100%, 0 100%)',
+  flowMerge: 'polygon(0 0, 100% 0, 50% 100%)',
+  flowOffpage: 'polygon(0 0, 78% 0, 100% 50%, 78% 100%, 0 100%)',
+  leftArrow: 'polygon(0 50%, 40% 8%, 40% 30%, 100% 30%, 100% 70%, 40% 70%, 40% 92%)',
+  upArrow: 'polygon(50% 0, 92% 40%, 70% 40%, 70% 100%, 30% 100%, 30% 40%, 8% 40%)',
+  downArrow: 'polygon(50% 100%, 92% 60%, 70% 60%, 70% 0, 30% 0, 30% 60%, 8% 60%)',
+  leftRightArrow: 'polygon(0 50%, 30% 20%, 30% 40%, 70% 40%, 70% 20%, 100% 50%, 70% 80%, 70% 60%, 30% 60%, 30% 80%)',
+  upDownArrow: 'polygon(50% 0, 80% 30%, 60% 30%, 60% 70%, 80% 70%, 50% 100%, 20% 70%, 40% 70%, 40% 30%, 20% 30%)',
+  bentArrow: 'polygon(0 100%, 0 40%, 30% 40%, 30% 0, 100% 0, 100% 30%, 55% 30%, 55% 65%, 30% 65%, 30% 74%)',
 }
 
 // SlideThumb — 幻灯片真实缩略图（左侧面板 / 打印讲义共用）。
@@ -246,12 +273,19 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     const SX = 6464 / pageW // 808px 宽 = 6464 单位 (x/8)；等比坐标 x/y 同尺度
     // 字号 pt → 画布 px（与几何同比例）
     const ptToPx = (pt: number) => Math.round(pt * 914400 * 808 / (72 * pageW))
-    // PPTX prstGeom → 内部形状类型
+    // PPTX prstGeom → 内部形状类型（含流程图形状，与 SHAPE_CLIP/prstGeom 写盘映射对应）
     const GEOM_MAP: Record<string, string> = {
       ellipse: 'ellipse', roundRect: 'roundRect', triangle: 'triangle',
       diamond: 'diamond', rightArrow: 'rightArrow', star5: 'star5',
       hexagon: 'hexagon', pentagon: 'pentagon', heart: 'heart',
       cloud: 'cloud', wedgeRectCallout: 'callout',
+      // 流程图
+      parallelogram: 'parallelogram', trapezoid: 'trapezoid', can: 'can',
+      flowChartDocument: 'flowDoc', chevron: 'chevron', lightningBolt: 'lightning',
+      flowChartManualInput: 'flowManualInput', flowChartDelay: 'flowDelay',
+      flowChartMerge: 'flowMerge', flowChartOffpageConnector: 'flowOffpage',
+      leftArrow: 'leftArrow', upArrow: 'upArrow', downArrow: 'downArrow',
+      leftRightArrow: 'leftRightArrow', upDownArrow: 'upDownArrow', bentArrow: 'bentArrow',
     }
     return shapes.map((s) => {
       const isPic = s.kind === 'pic'
@@ -335,6 +369,18 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   })
   const [active, setActive] = useState(0)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
+  // Ribbon 折叠（对齐 MS Office：仅保留选项卡栏；三编辑器共享同一持久化键）
+  const [ribbonCollapsed, setRibbonCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('sam-ribbon-collapsed') === '1' } catch { return false }
+  })
+  const setRibbonCollapsedPersist = (v: boolean) => { try { localStorage.setItem('sam-ribbon-collapsed', v ? '1' : '0') } catch { /* ignore */ }; setRibbonCollapsed(v) }
+  // === 母版（对齐 MS PPT 母版视图）：母版形状层随首页 slide 数据解析；
+  // 母版视图下画布编辑母版形状；普通视图下母版形状作为装饰底层渲染（不可选中）。
+  const [masterShapes, setMasterShapes] = useState<ShapeItem[]>(() => {
+    const first = (initialSlides && initialSlides[0]) as any
+    return emuShapesToItems(first?.masterShapes, first?.pageW || 12192000, first?.pageH || 6858000)
+  })
+  const [masterView, setMasterView] = useState(false)
   // 幻灯片页面尺寸（EMU）——设计选项卡的宽屏/标准/自定义真实生效
   const [deckW, setDeckW] = useState(() => {
     const first = (initialSlides && initialSlides[0]) as any
@@ -456,6 +502,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const deleteSlide = (idx: number) => { if (slides.length <= 1) return; recordHistory(); setSlides(s => s.filter((_, i) => i !== idx)); if (active >= idx && active > 0) setActive(active - 1) }
   const duplicateSlide = (idx: number) => { recordHistory(); setSlides(s => { const copy = { ...s[idx], id: Date.now() }; const next = [...s]; next.splice(idx + 1, 0, copy); return next }); setActive(idx + 1) }
   const updateActive = (patch: Partial<Slide>, record = true) => {
+    // 母版视图：形状变更重定向到母版层（对齐 MS PPT 母版编辑语义）
+    if (masterView && patch.shapes !== undefined) { if (record) recordHistory(); setMasterShapes(patch.shapes as ShapeItem[]); return }
+    if (masterView && patch.bg !== undefined) { return } // 母版背景暂不编辑，避免与页面背景混淆
     if (record) {
       // 纯文本字段（标题/正文/备注）的连续编辑合并为一个撤销块
       const keys = Object.keys(patch)
@@ -465,7 +514,11 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     setSlides(s => s.map((sl, i) => i === active ? { ...sl, ...patch } : sl))
   }
   const switchSlide = (i: number) => { if (i === active) return; setActive(i) }
-  const current = slides[active] || slides[0]
+  // 母版视图下画布操作对象：形状层指向 masterShapes（复用全部形状编辑/拖拽/右键逻辑）
+  const currentBase = slides[active] || slides[0]
+  const current = masterView
+    ? { ...currentBase, shapes: masterShapes, layout: 'blank' as const, animations: [] }
+    : currentBase
   const isDark = current.bg === '#1e293b' || current.bg === '#312e81'
   // 画布像素高度：宽 808 固定，高随页面比例（等比坐标系）
   const canvasH = Math.round(808 * (deckH / deckW))
@@ -478,7 +531,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     const SX = PAGE_W / 6464
     const toEMUx = (px: number) => Math.round(px * SX)
     const toEMUy = (py: number) => Math.round(py * SX)
-    return (src: Slide[]): SlideData[] => src.map((s) => {
+    return (src: Slide[]): SlideData[] => src.map((s, i) => {
       const shapes: SlideShape[] = []
       for (const sh of s.shapes) {
         const isPic = typeof sh.fill === 'string' && sh.fill.startsWith('url(')
@@ -556,9 +609,33 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         transition: s.transition || undefined,
         pageW: PAGE_W,
         pageH: PAGE_H,
+        // 母版形状随首页写盘（对齐 MS PPT slideMaster spTree；写盘端 buildMasterXML 消费）
+        masterShapes: i === 0 ? masterShapes.map((msh) => {
+          const isPic = typeof msh.fill === 'string' && msh.fill.startsWith('url(')
+          let img: string | undefined
+          if (isPic) {
+            const m = msh.fill.match(/^url\(\s*["']?(.*?)["']?\s*\)$/)
+            img = m ? m[1] : undefined
+          }
+          return {
+            kind: isPic ? 'pic' : 'text',
+            type: msh.type,
+            x: toEMUx(msh.x), y: toEMUy(msh.y), cx: toEMUx(msh.w), cy: toEMUy(msh.h),
+            fill: isPic ? undefined : (msh.fill || ''),
+            text: msh.text, color: msh.fontColor, font: msh.font,
+            sizePt: msh.fontSize ? Math.round(msh.fontSize * 72 * PAGE_W / (914400 * 808)) : undefined,
+            bold: msh.fontBold,
+            italic: (msh as any).italic,
+            align: msh.textAlign === 'left' ? 'l' : msh.textAlign === 'right' ? 'r' : msh.textAlign === 'center' ? 'c' : 'l',
+            vanchor: msh.vAlign === 'top' ? 't' : msh.vAlign === 'bottom' ? 'b' : 'ctr',
+            img,
+            gradient: msh.gradient || undefined,
+            rotation: msh.rotation || undefined,
+          } as SlideShape
+        }) : undefined,
       }
     })
-  }, [deckW, deckH])
+  }, [deckW, deckH, masterShapes])
 
   // 幻灯片变化时回传给 App（用于保存）
   useEffect(() => {
@@ -1125,6 +1202,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           ))}
         </div>
         <span className="text-xs flex-shrink-0 px-2" data-testid="slide-page-indicator" style={{ color: 'var(--color-text-muted)' }}>{active + 1} / {slides.length}</span>
+        {/* Ribbon 整体折叠/展开（对齐 MS Office） */}
+        <button onClick={() => setRibbonCollapsedPersist(!ribbonCollapsed)} data-testid="ribbon-collapse" type="button"
+          className="toolbar-btn flex-shrink-0"
+          title={ribbonCollapsed ? (t('ribbon.expand') || '展开功能区') : (t('ribbon.collapse') || '折叠功能区')}>{ribbonCollapsed ? '⌄' : '⌃'}</button>
       </div>
 
       {/* 点击外部关闭弹出面板的透明遮罩 — absolute 限制在编辑器根容器内，
@@ -1133,7 +1214,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         <div className="absolute inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
       )}
 
-      {/* Ribbon 内容区 */}
+      {/* Ribbon 内容区（整体折叠时不渲染，仅保留选项卡栏） */}
+      {!ribbonCollapsed && (
       <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('slide.edit')}>
@@ -1665,6 +1747,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         </>)}
 
         {ribbonTab === 'view' && (<>
+          <RibbonGroup label={t('slide.masterView') || '母版视图'}>
+            {/* 对齐 MS PPT：母版视图下画布编辑母版形状，普通视图每页底层渲染母版装饰 */}
+            <RibbonButton icon="🧬" label={masterView ? (t('slide.exitMaster') || '退出母版视图') : (t('slide.masterView') || '幻灯片母版')}
+              onClick={() => { setMasterView(!masterView); setSelectedEl(null) }} active={masterView}
+              title={t('slide.masterTitle') || '母版形状会出现在每页幻灯片底层，保存后写盘 slideMaster1'} />
+          </RibbonGroup>
           <RibbonGroup label={t('slide.zoom')}>
             <RibbonButton icon="−" label={t('slide.zoomOut')} onClick={() => setZoom(Math.max(50, zoom - 25))} />
             <div className="flex flex-col items-center px-2"><span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-text)' }}>{zoom}%</span></div>
@@ -1685,6 +1773,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           </RibbonGroup>
         </>)}
       </div>
+      )}
 
       {/* 打印对话框 */}
       <PrintDialog
@@ -1808,6 +1897,34 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder={t('slide.placeholder.blank')} />
               )}
 
+              {/* 母版装饰层（对齐 MS PPT：母版形状出现在每页幻灯片底层；母版视图下不重复渲染） */}
+              {!masterView && masterShapes.length > 0 && (
+                <div className="absolute inset-0" style={{ zIndex: 15, pointerEvents: 'none' }}>
+                  {masterShapes.map((msh, mi) => (
+                    <div key={'m' + mi} className="absolute" style={{
+                      left: `${msh.x / 8}px`, top: `${msh.y / 8}px`, width: `${msh.w / 8}px`, height: `${msh.h / 8}px`,
+                      transform: msh.rotation ? `rotate(${msh.rotation}deg)` : '',
+                    }}>
+                      <div style={{
+                        width: '100%', height: '100%',
+                        justifyContent: msh.vAlign === 'top' ? 'flex-start' : msh.vAlign === 'bottom' ? 'flex-end' : 'center',
+                        display: 'flex', flexDirection: 'column',
+                        background: msh.gradient ? `linear-gradient(135deg, #${msh.gradient.split(',')[0]}, #${msh.gradient.split(',')[1]})` : msh.fill,
+                        borderRadius: msh.type === 'roundRect' ? '8px' : msh.type === 'ellipse' ? '50%' : msh.type === 'can' ? '50% / 12%' : '0',
+                        clipPath: SHAPE_CLIP[msh.type],
+                        border: msh.stroke ? `${Math.max(1, msh.strokeWidth || 1)}px solid ${msh.stroke}` : 'none',
+                        color: msh.fontColor || (msh.fill && !msh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
+                        fontSize: msh.fontSize ? `${msh.fontSize}px` : '12px',
+                        fontWeight: msh.fontBold ? 700 : 400,
+                        fontStyle: (msh as any).italic ? 'italic' : undefined,
+                        textAlign: msh.textAlign || 'center',
+                        overflow: 'hidden',
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      }}>{msh.text}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* 形状渲染层 — zIndex 20 > 文字内容 z-10，确保形状可点击选中/拖拽 */}
               {current.shapes.map((sh, i) => (
                 <div key={i} className="absolute flex items-center justify-center group cursor-move"
@@ -1828,17 +1945,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                     backgroundSize: sh.fill.startsWith('url') ? 'cover' : undefined,
                     backgroundRepeat: sh.fill.startsWith('url') ? 'no-repeat' : undefined,
                     backgroundPosition: sh.fill.startsWith('url') ? 'center' : undefined,
-                    borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : '0',
-                    clipPath: sh.type === 'triangle' ? 'polygon(50% 0, 100% 100%, 0 100%)' :
-                             sh.type === 'diamond' ? 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)' :
-                             sh.type === 'rightArrow' ? 'polygon(0 30%, 60% 30%, 60% 0, 100% 50%, 60% 100%, 60% 70%, 0 70%)' :
-                             sh.type === 'star5' ? 'polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' :
-                             sh.type === 'hexagon' ? 'polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%)' :
-                             sh.type === 'pentagon' ? 'polygon(50% 0, 100% 38%, 82% 100%, 18% 100%, 0 38%)' :
-                             sh.type === 'heart' ? 'path("M50 90 L10 50 A20 20 0 0 1 50 30 A20 20 0 0 1 90 50 Z")' :
-                             sh.type === 'cloud' ? 'ellipse(50% 50% at 50% 50%)' :
-                             sh.type === 'callout' ? 'polygon(0 0, 100% 0, 100% 70%, 60% 70%, 50% 100%, 40% 70%, 0 70%)' :
-                             undefined,
+                    borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : sh.type === 'can' ? '50% / 12%' : '0',
+                    // 几何裁剪：统一用 SHAPE_CLIP 表（主画布与缩略图一致，新增流程图形状自动生效）
+                    clipPath: SHAPE_CLIP[sh.type],
                     boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
                     filter: sh.glow ? `drop-shadow(0 0 ${Math.min(28, Math.max(4, (sh.glowRadius || 60000) / 5000))}px ${sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8')})` : 'none',
                     border: sh.stroke

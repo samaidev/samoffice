@@ -201,6 +201,236 @@ function SortDialog({ cols, colName, headerText, initLevels, initHasHeader, labe
   )
 }
 
+// === 数字格式引擎（对齐 MS Excel 设置单元格格式）===
+// token 支持两类：
+// 1) 内置简写（历史兼容）：int / 0.00 / thousands / thousands2 / percent / percent2 / currency / date
+// 2) 原生 Excel 数字格式串（新）：'0.00' '#,##0' '#,##0.00' '0.0%' '¥#,##0.00' '$#,##0.00'
+//    'yyyy-mm-dd' 'yyyy/m/d' 'yyyy-mm-dd hh:mm' 'hh:mm:ss' 等（与后端 io.go numFmtFromToken 对应）
+
+// Excel 日期序列号 → Date（Excel 纪元 1899-12-30）
+function excelSerialToDate(serial: number): Date {
+  return new Date(Date.UTC(1899, 11, 30) + Math.round(serial * 86400 * 1000))
+}
+// 尝试把字符串解析为 Date（ISO 日期 / 日期时间 / 斜杠日期），失败返回 null
+function parseDateLike(v: string): Date | null {
+  const s = v.trim()
+  if (!s) return null
+  const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s)
+  if (m) {
+    const [, y, mo, d, h = '0', mi = '0', se = '0'] = m
+    return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se))
+  }
+  return null
+}
+// 按日期格式串渲染 Date。
+// m 的歧义（月/分）按位置判定：出现在时间起始（hh/ss 段）之后是分钟，否则是月份。
+function formatDateByPattern(d: Date, pattern: string): string {
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const tm = /(?:hh|h)\s*[:：]/i.exec(pattern)
+  const timeStart = tm ? tm.index : pattern.length
+  let out = pattern
+    .replace(/dddd/gi, ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()])
+    .replace(/mmm/gi, ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()])
+    .replace(/yyyy/gi, String(d.getFullYear()))
+    .replace(/yy/gi, p2(d.getFullYear() % 100))
+    .replace(/dd/gi, p2(d.getDate()))
+    .replace(/\bd\b/gi, String(d.getDate()))
+  out = out.replace(/mm/gi, (s, off) => off < timeStart ? p2(d.getMonth() + 1) : p2(d.getMinutes()))
+  out = out.replace(/\bm\b/gi, (s, off) => off < timeStart ? String(d.getMonth() + 1) : String(d.getMinutes()))
+  out = out
+    .replace(/hh/gi, p2(d.getHours()))
+    .replace(/\bh\b/gi, String(d.getHours()))
+    .replace(/ss/gi, p2(d.getSeconds()))
+    .replace(/\bs\b/gi, String(d.getSeconds()))
+  return out
+}
+// 从 "¥#,##0.00" / '"¥"#,##0' 等格式串提取货币符号（无则返回 ''）
+function currencySymbolOf(pattern: string): string {
+  const q = /^"([^"]+)"/.exec(pattern.trim())
+  if (q) return q[1]
+  const m = /^(¥|￥|\$|€|£)/.exec(pattern.trim())
+  return m ? m[1] : ''
+}
+// 按数字格式串渲染数值（支持 #,##0.00 / 0.000 / 0% 形式），返回 null 表示不是纯数字格式
+function formatNumberByPattern(n: number, pattern: string): string | null {
+  const m = /^([#,0]*)(?:\.([0#]+))?(%?)$/.exec(pattern.trim())
+  if (!m) return null
+  const [, , decPart, pct] = m
+  const decimals = decPart ? decPart.length : 0
+  const useThou = m[1].includes(',')
+  let v = pct ? n * 100 : n
+  let s = v.toFixed(decimals)
+  if (useThou) {
+    const [int, dec] = s.split('.')
+    s = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (dec ? '.' + dec : '')
+  }
+  return s + (pct ? '%' : '')
+}
+// 统一入口：按 token 渲染单元格显示值；无法识别时原样返回
+function applyNumFmt(v: string, token?: string): string {
+  if (!token || v === '' || v == null) return v ?? ''
+  // 1) 历史内置 token
+  switch (token) {
+    case 'int': return isNaN(Number(v)) ? v : String(Math.round(Number(v)))
+    case '0.00': return isNaN(Number(v)) ? v : Number(v).toFixed(2)
+    case 'thousands': return isNaN(Number(v)) ? v : Number(v).toLocaleString('en-US')
+    case 'thousands2': return isNaN(Number(v)) ? v : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    case 'percent': return isNaN(Number(v)) ? v : (Number(v) * 100).toFixed(0) + '%'
+    case 'percent2': return isNaN(Number(v)) ? v : (Number(v) * 100).toFixed(2) + '%'
+    case 'currency': return isNaN(Number(v)) ? v : '¥' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    case 'date': return v
+  }
+  // 2) 原生格式串
+  const isDatePat = /[ymdhs]/i.test(token) && /[-\/ :]/.test(token)
+  if (isDatePat) {
+    if (!isNaN(Number(v)) && v.trim() !== '') {
+      // 数值序列号 → 日期
+      const serial = Number(v)
+      if (serial > 0 && serial < 60000) return formatDateByPattern(excelSerialToDate(serial), token)
+      return v
+    }
+    const d = parseDateLike(v)
+    if (d) return formatDateByPattern(d, token)
+    return v
+  }
+  if (!isNaN(Number(v)) && v.trim() !== '') {
+    const n = Number(v)
+    const sym = currencySymbolOf(token)
+    const body = token.replace(/^"[^"]+"/, '').replace(/^(¥|￥|\$|€|£)/, '').trim()
+    const num = formatNumberByPattern(n, body)
+    if (num !== null) return sym + num
+    if (/%$/.test(body)) {
+      const m2 = /^([#,0]*)(?:\.([0#]+))?%$/.exec(body)
+      if (m2) return (n * 100).toFixed(m2[2] ? m2[2].length : 0) + '%'
+    }
+  }
+  return v
+}
+
+// === 设置单元格格式对话框（对齐 MS Excel「数字」选项卡）===
+function FormatCellsDialog({ sample, initToken, labels, onClose, onApply }: {
+  sample: string
+  initToken?: string
+  labels: Record<string, string>
+  onClose: () => void
+  onApply: (token?: string) => void
+}) {
+  // category: general / number / currency / percent / date / text
+  const [cat, setCat] = useState<string>(() => {
+    if (!initToken) return 'general'
+    if (initToken === 'int' || initToken === '0.00' || initToken === 'thousands' || initToken === 'thousands2' || /^([#,0]*)(\.[0#]+)?$/.test(initToken)) return 'number'
+    if (initToken === 'currency' || /^(¥|￥|\$|€|£)/.test(initToken) || /^"/.test(initToken)) return 'currency'
+    if (initToken === 'percent' || initToken === 'percent2' || /%$/.test(initToken)) return 'percent'
+    if (initToken === 'date' || /[ymdhs]/i.test(initToken)) return 'date'
+    return 'number'
+  })
+  const [decimals, setDecimals] = useState<number>(() => {
+    if (initToken === 'int' || initToken === 'thousands' || initToken === 'percent' || initToken === 'currency') return 0
+    if (initToken === '0.00' || initToken === 'thousands2' || initToken === 'percent2' || initToken === 'currency2') return 2
+    const m = /\.([0#]+)/.exec(initToken || '')
+    return m ? m[1].length : 2
+  })
+  const [useThou, setUseThou] = useState<boolean>(() => initToken === 'thousands' || initToken === 'thousands2' || /#,##/.test(initToken || ''))
+  const [symbol, setSymbol] = useState<string>(() => {
+    const s = currencySymbolOf(initToken || '')
+    return s || '¥'
+  })
+  const dateFormats = ['yyyy-mm-dd', 'yyyy/m/d', 'yyyy年m月d日', 'yyyy-mm-dd hh:mm', 'hh:mm:ss', 'mmm d, yyyy']
+  const [dateFmt, setDateFmt] = useState<string>(() => (initToken && dateFormats.includes(initToken) ? initToken : 'yyyy-mm-dd'))
+  const num = parseFloat(sample)
+  const preview = (() => {
+    if (cat === 'general' || cat === 'text') return sample || '—'
+    if (isNaN(num)) return labels.notNum || '不是数值'
+    if (cat === 'number') return applyNumFmt(String(num), useThou ? (decimals > 0 ? `#,##0.${'0'.repeat(decimals)}` : '#,##0') : (decimals > 0 ? `0.${'0'.repeat(decimals)}` : '0'))
+    if (cat === 'currency') return applyNumFmt(String(num), `${symbol === '"' ? '"¥"' : symbol}${useThou ? '#,##0' : '0'}${decimals > 0 ? '.' + '0'.repeat(decimals) : ''}`)
+    if (cat === 'percent') return applyNumFmt(String(num), `0${decimals > 0 ? '.' + '0'.repeat(decimals) : ''}%`)
+    if (cat === 'date') {
+      const d = parseDateLike(sample) || (!isNaN(num) && num > 0 && num < 60000 ? excelSerialToDate(num) : null)
+      return d ? formatDateByPattern(d, dateFmt) : (sample || '—')
+    }
+    return sample
+  })()
+  // 生成的实际 token（写回单元格 fmt）
+  const tokenFor = (): string | undefined => {
+    if (cat === 'general') return undefined
+    if (cat === 'text') return '@'
+    if (cat === 'date') return dateFmt
+    if (cat === 'number') return useThou ? (decimals > 0 ? `#,##0.${'0'.repeat(decimals)}` : '#,##0') : (decimals > 0 ? `0.${'0'.repeat(decimals)}` : '0')
+    if (cat === 'currency') return `${symbol}${useThou ? '#,##0' : '0'}${decimals > 0 ? '.' + '0'.repeat(decimals) : ''}`
+    if (cat === 'percent') return `0${decimals > 0 ? '.' + '0'.repeat(decimals) : ''}%`
+    return undefined
+  }
+  const selStyle = { background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' } as const
+  const categories = [
+    { v: 'general', label: labels.general }, { v: 'number', label: labels.number },
+    { v: 'currency', label: labels.currency }, { v: 'percent', label: labels.percent },
+    { v: 'date', label: labels.date }, { v: 'text', label: labels.text },
+  ]
+  return (
+    <div className="fixed inset-0 flex items-center justify-center" style={{ zIndex: 95, background: 'rgba(0,0,0,0.35)' }} onMouseDown={onClose}>
+      <div className="rounded-lg shadow-xl border p-4" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', width: 430, maxWidth: '92vw' }} onMouseDown={e => e.stopPropagation()}>
+        <div className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text)' }}>{labels.title}</div>
+        <div className="flex gap-3">
+          <div className="flex flex-col gap-0.5 flex-shrink-0">
+            {categories.map(c => (
+              <button key={c.v} onClick={() => setCat(c.v)}
+                className="text-xs text-left px-2 py-1 rounded transition-colors"
+                style={cat === c.v ? { background: 'var(--color-primary-light)', color: 'var(--color-primary)', fontWeight: 600 } : { color: 'var(--color-text)' }}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 min-w-0">
+            {(cat === 'number' || cat === 'currency' || cat === 'percent') && (
+              <>
+                <label className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--color-text)' }}>
+                  <span style={{ width: 72 }}>{labels.decimals}</span>
+                  <input type="number" min={0} max={10} value={decimals} onChange={e => setDecimals(Math.max(0, Math.min(10, Number(e.target.value) || 0)))}
+                    className="text-xs px-1 py-0.5 rounded border" style={{ ...selStyle, width: 60 }} />
+                </label>
+                {(cat === 'number' || cat === 'currency') && (
+                  <label className="flex items-center gap-2 text-xs mb-2 cursor-pointer" style={{ color: 'var(--color-text)' }}>
+                    <input type="checkbox" checked={useThou} onChange={e => setUseThou(e.target.checked)} />
+                    {labels.thousands}
+                  </label>
+                )}
+                {cat === 'currency' && (
+                  <label className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--color-text)' }}>
+                    <span style={{ width: 72 }}>{labels.symbol}</span>
+                    <select value={symbol} onChange={e => setSymbol(e.target.value)} className="text-xs px-1 py-0.5 rounded border" style={{ ...selStyle, width: 90 }}>
+                      <option value="¥">¥ CNY</option>
+                      <option value="$">$ USD</option>
+                      <option value="€">€ EUR</option>
+                      <option value="£">£ GBP</option>
+                    </select>
+                  </label>
+                )}
+              </>
+            )}
+            {cat === 'date' && (
+              <label className="flex items-center gap-2 text-xs mb-2" style={{ color: 'var(--color-text)' }}>
+                <span style={{ width: 72 }}>{labels.type}</span>
+                <select value={dateFmt} onChange={e => setDateFmt(e.target.value)} className="text-xs px-1 py-0.5 rounded border" style={{ ...selStyle, width: 170 }}>
+                  {dateFormats.map(f => <option key={f} value={f}>{applyNumFmt(sample, f) || f}</option>)}
+                </select>
+              </label>
+            )}
+            {cat === 'text' && <div className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>{labels.textHint}</div>}
+            <div className="text-xs mt-3 rounded border px-2 py-1.5" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg-alt)', color: 'var(--color-text)' }}>
+              <span style={{ color: 'var(--color-text-muted)' }}>{labels.sample}：</span>
+              <span className="font-mono">{preview}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <button className="btn btn-primary btn-sm" onClick={() => onApply(tokenFor())}>{labels.ok}</button>
+          <button className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={onClose}>{labels.cancel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // === SVG 图表渲染组件 ===
 const CHART_COLORS = ['#4f46e5', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1']
 function ChartSVG({ type, data, labels }: { type: string; data: number[]; labels: string[] }) {
@@ -604,6 +834,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [filterMenuCol, setFilterMenuCol] = useState<number | null>(null)
   // 排序对话框（MS Excel 多级排序）
   const [sortDialog, setSortDialog] = useState<null | { levels: SortLevel[]; hasHeader: boolean }>(null)
+  // Ribbon 折叠（对齐 MS Office：仅保留选项卡栏；三编辑器共享同一持久化键）
+  const [ribbonCollapsed, setRibbonCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('sam-ribbon-collapsed') === '1' } catch { return false }
+  })
+  const setRibbonCollapsedPersist = (v: boolean) => { try { localStorage.setItem('sam-ribbon-collapsed', v ? '1' : '0') } catch { /* ignore */ }; setRibbonCollapsed(v) }
+  // 列头排序三角指示（col → asc），由 applySortLevels 写入；点击三角可反向重排
+  const [sortMarks, setSortMarks] = useState<Record<number, boolean>>({})
+  // 设置单元格格式对话框（对齐 MS Excel 数字选项卡）
+  const [fmtDialog, setFmtDialog] = useState<null | { token?: string; sample: string }>(null)
   // 自定义视图（localStorage 命名视图：缩放/网格线/标题/公式栏/冻结）
   const [customViewNames, setCustomViewNames] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('sam-xlsx-views') || '[]') } catch { return [] }
@@ -745,20 +984,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const getCell = (r: number, c: number): Cell => data[`${r}-${c}`] || { value: '' }
   // 数字格式化显示（只影响显示，不改存储值；与后端 xlsx fmt token 对应）
   const fmtDisplay = (cell: Cell): string => {
-    const v = cell.value ?? ''
-    if (!cell.fmt || v === '' || isNaN(Number(v))) return v
-    const n = Number(v)
-    switch (cell.fmt) {
-      case 'percent': return (n * 100).toFixed(0) + '%'
-      case 'percent2': return (n * 100).toFixed(2) + '%'
-      case '0.00': return n.toFixed(2)
-      case 'thousands': return n.toLocaleString('en-US')
-      case 'thousands2': return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-      case 'int': return String(Math.round(n))
-      case 'currency': return '¥' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-      case 'date': return v // 日期值原样显示（打开文件时已是日期字符串，不做序列号换算）
-      default: return v
-    }
+    // 统一走数字格式引擎：兼容历史 token（percent/currency/…）与新原生格式串（#,##0.00/0%/日期…）
+    return applyNumFmt(cell.value ?? '', cell.fmt)
   }
   const setCell = (r: number, c: number, value: string) => {
     pushHistory()
@@ -1702,6 +1929,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 多级排序：levels 依次比较；整行搬运（样式/公式跟随），区域内合并先拆分
   const applySortLevels = (levels: SortLevel[], startRow: number, endRow: number) => {
     if (!levels.length || endRow < startRow) return
+    // 写入列头排序三角指示（新排序替换旧指示）
+    setSortMarks(Object.fromEntries(levels.map(l => [l.col, l.asc])))
     let hasMerge = false
     for (const key in data) {
       if (data[key].mergeRange || data[key].hiddenBy) {
@@ -1893,6 +2122,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           ))}
         </div>
         <span className="text-xs flex-shrink-0 px-2" style={{ color: 'var(--color-text-muted)' }}>{rows} {t('sheet.rows')} × {cols} {t('sheet.cols')}</span>
+        {/* Ribbon 整体折叠/展开（对齐 MS Office） */}
+        <button onClick={() => setRibbonCollapsedPersist(!ribbonCollapsed)} data-testid="ribbon-collapse" type="button"
+          className="toolbar-btn flex-shrink-0"
+          title={ribbonCollapsed ? (t('ribbon.expand') || '展开功能区') : (t('ribbon.collapse') || '折叠功能区')}>{ribbonCollapsed ? '⌄' : '⌃'}</button>
       </div>
 
       {/* 点击外部关闭弹出面板的透明遮罩 — absolute 限制在编辑器根容器内，
@@ -1901,7 +2134,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         <div className="absolute inset-0" style={{ zIndex: 40 }} onClick={() => closeAllPanels()} />
       )}
 
-      {/* Ribbon 内容区 */}
+      {/* Ribbon 内容区（整体折叠时不渲染，仅保留选项卡栏） */}
+      {!ribbonCollapsed && (
       <div className="flex items-stretch px-1 py-1 flex-shrink-0 border-b w-full ribbon-scroll" style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', minHeight: '64px', position: 'relative', zIndex: 45 }}>
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
@@ -2010,6 +2244,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               <option value="currency">{tf('sheet.fmtCurrency', '货币')}</option>
               <option value="date">{tf('sheet.fmtDate', '日期')}</option>
             </select>
+            {/* 设置单元格格式对话框入口（对齐 MS Excel 数字组右下角启动器） */}
+            <RibbonButton icon="⌸" label={tf('sheet.formatCells', '设置单元格格式')} onClick={() => {
+              const cell = getCell(active.r, active.c)
+              setFmtDialog({ token: cell.fmt, sample: cell.value ?? '' })
+            }} title={tf('sheet.formatCellsTitle', '设置单元格数字格式（数值/货币/百分比/日期，含小数位与千位分隔符）')} />
             {/* 自动求和 Σ：对选区或活动列上方连续数字区域写真公式 =SUM(...) */}
             <RibbonButton icon="Σ" label={tf('sheet.autoSum', '求和')} onClick={() => insertAutoSum()} title={tf('sheet.autoSumTitle', '对上方连续数字区域或选区写入 =SUM 公式')} />
           </RibbonGroup>
@@ -2232,6 +2471,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </RibbonGroup>
         </>)}
       </div>
+      )}
 
       {/* 打印对话框 */}
       <PrintDialog
@@ -2398,6 +2638,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   }}
                   title={tf('sheet.selectCol', '选择整列')}>
                   {colName(c)}
+                  {/* 排序方向三角（对齐 MS Excel：排序后列头显示 ▲/▼，点击可反向重排） */}
+                  {sortMarks[c] !== undefined && (
+                    <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[10px] leading-none"
+                      style={{ color: 'var(--color-primary)', fontWeight: 700, cursor: 'pointer' }}
+                      title={sortMarks[c] ? tf('sheet.sortedAsc', '已升序排序，点击改为降序') : tf('sheet.sortedDesc', '已降序排序，点击改为升序')}
+                      onMouseDown={e => e.stopPropagation()}
+                      onClick={e => { e.stopPropagation(); quickSort(!sortMarks[c], c) }}
+                    >{sortMarks[c] ? '▲' : '▼'}</span>
+                  )}
                   {/* 右缘拖拽调整列宽 */}
                   <span className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize" title={tf('sheet.resizeCol', '拖拽调整列宽')}
                     onMouseDown={e => startColResize(e, c)} />
@@ -2493,10 +2742,20 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   const findHit = findKeys.has(`${r}-${c}`)
                   const valignMap: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
                   // === Excel 式选区渲染（支持多区域）===
-                  // 每个选中区域独立外框（2px 主色 inset shadow 拼边）；区域内浅蓝填充；
-                  // 活动格保持原底色（白/自身填充色）+ 1px 细框。修复“框选正确但更多格子被激活覆盖”的问题：
-                  // 只有真正落在选中区域内的格子才着色。
+                  // 每个选中区域独立外框（2px 主色 inset shadow 拼边）；区域内浅蓝叠加；
+                  // 活动格保持原底色（白/自身填充色）+ 1px 细框。
+                  // 对齐 MS Excel 的两个关键修复：
+                  // 1) 选区底色用「半透明蓝叠加在原填充色之上」（linear-gradient 双层背景），
+                  //    不再整体替换原填充色 —— 否则带填充色的格子被选中后像被灰蓝"糊住"，
+                  //    用户看起来就像"周围格子被覆盖了样式"。
+                  // 2) 合并单元格的边缘判断用合并区的真实边界（锚点 + rowSpan/colSpan-1），
+                  //    否则跨行/列合并格的选区外框会出现缺口（如合并格底部无边框线）。
                   const singleSel = selection.mode === 'cell' && selection.r1 === selection.r2 && selection.c1 === selection.c2 && extraAreas.length === 0
+                  const mr = mergeRange
+                  const effR1 = r
+                  const effR2 = r + (mr?.rowSpan || 1) - 1
+                  const effC1 = c
+                  const effC2 = c + (mr?.colSpan || 1) - 1
                   const shadowParts: string[] = []
                   for (const a of allAreas()) {
                     const n = normArea(a)
@@ -2504,13 +2763,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     let eT = false, eB = false, eL = false, eR = false
                     if (a.mode === 'row') {
                       if (r < n.r1 || r > n.r2) continue
-                      hit = true; eT = r === n.r1; eB = r === n.r2; eL = c === 0; eR = c === cols - 1
+                      hit = true; eT = effR1 === n.r1; eB = effR2 === n.r2; eL = c === 0; eR = c === cols - 1
                     } else if (a.mode === 'col') {
                       if (c < n.c1 || c > n.c2) continue
-                      hit = true; eT = r === 0; eB = r === rows - 1; eL = c === n.c1; eR = c === n.c2
+                      hit = true; eT = r === 0; eB = effR2 === rows - 1; eL = effC1 === n.c1; eR = effC2 === n.c2
                     } else {
                       if (r < n.r1 || r > n.r2 || c < n.c1 || c > n.c2) continue
-                      hit = true; eT = r === n.r1; eB = r === n.r2; eL = c === n.c1; eR = c === n.c2
+                      hit = true; eT = effR1 === n.r1; eB = effR2 === n.r2; eL = effC1 === n.c1; eR = effC2 === n.c2
                     }
                     if (!hit) continue
                     if (eT) shadowParts.push('inset 0 2px 0 0 var(--color-primary)')
@@ -2519,11 +2778,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     if (eR) shadowParts.push('inset -2px 0 0 0 var(--color-primary)')
                   }
                   if (isActive && sel && !singleSel) shadowParts.push('inset 0 0 0 1px var(--color-primary)')
+                  // 选区叠加层：半透明蓝叠在原填充色上（MS Excel 行为——填充色仍隐约可见）
+                  const selOverlay = `linear-gradient(rgba(59,130,246,0.22), rgba(59,130,246,0.22)), ${cell.bg || '#ffffff'}`
                   return (
                     <td key={c} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
-                      background: sel ? (isActive ? (cell.bg || '#ffffff') : 'rgba(59,130,246,0.12)') : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
+                      background: sel ? (isActive ? (cell.bg || '#ffffff') : selOverlay) : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
                       borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)'),
                       borderWidth: bw,
                       width: `${cw}px`,
@@ -2657,6 +2918,27 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             applySortLevels(levels, start, end)
             setSortDialog(null)
           }}
+        />
+      )}
+
+      {/* 设置单元格格式对话框（对齐 MS Excel：分类/小数位/千位分隔/货币符号/日期类型，作用于整个选区） */}
+      {fmtDialog && (
+        <FormatCellsDialog
+          sample={fmtDialog.sample}
+          initToken={fmtDialog.token}
+          labels={{
+            title: tf('sheet.fmtDialogTitle', '设置单元格格式'),
+            general: tf('sheet.fmtGeneral', '常规'), number: tf('sheet.fmtNumber', '数值'),
+            currency: tf('sheet.fmtCurrency', '货币'), percent: t('sheet.percent'),
+            date: tf('sheet.fmtDate', '日期'), text: tf('sheet.fmtText', '文本'),
+            decimals: tf('sheet.fmtDecimals', '小数位数'), thousands: tf('sheet.fmtUseThou', '使用千位分隔符'),
+            symbol: tf('sheet.fmtSymbol', '货币符号'), type: tf('sheet.fmtType', '类型'),
+            sample: tf('sheet.fmtSample', '示例'), notNum: tf('sheet.fmtNotNum', '（不是数值）'),
+            textHint: tf('sheet.fmtTextHint', '文本格式：输入什么就显示什么（不改数值计算）'),
+            ok: tf('sheet.sortOk', '确定'), cancel: tf('sheet.sortCancel', '取消'),
+          }}
+          onClose={() => setFmtDialog(null)}
+          onApply={token => { setCellFmtRange({ fmt: token }); setFmtDialog(null) }}
         />
       )}
 

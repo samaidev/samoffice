@@ -16,9 +16,24 @@ type Document struct {
         Styles     []StyleDef        `json:"styles,omitempty"`
         PageNumber *PageNumberConfig `json:"pageNumber,omitempty"`
         PageSetup  *PageSetup        `json:"pageSetup,omitempty"`
+        Header     *HeaderFooter     `json:"header,omitempty"`
+        Footer     *HeaderFooter     `json:"footer,omitempty"`
         Protect    *DocumentProtect  `json:"protect,omitempty"`
         Warnings   []Warning         `json:"warnings,omitempty"`
         Raw        map[string]any    `json:"raw,omitempty"`
+}
+
+// HeaderFooter 描述页眉/页脚富文本内容（对齐 MS Word 页眉页脚）。
+// 解析自 docx 的 word/headerN.xml / footerN.xml 首段落，保留主导样式；
+// 前端可编辑（字体/字号/加粗/斜体/颜色/对齐），保存时写回 docx。
+type HeaderFooter struct {
+        Text       string  `json:"text,omitempty"`
+        Align      string  `json:"align,omitempty"`      // l|c|r
+        FontFamily string  `json:"fontFamily,omitempty"` // 字体名（可选）
+        FontSize   float64 `json:"fontSize,omitempty"`   // pt（如 9 / 10.5）
+        Bold       bool    `json:"bold,omitempty"`
+        Italic     bool    `json:"italic,omitempty"`
+        Color      string  `json:"color,omitempty"`      // RRGGBB（可选）
 }
 
 // PageSetup 描述页面尺寸/方向/页边距/分栏（单位均为 twips，1pt=20twips）。

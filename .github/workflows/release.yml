@@ -158,7 +158,8 @@ jobs:
           $i = 0
           foreach ($r in $sorted) {
             $i++
-            if ($i -le 3) { Write-Host "keep $($r.tagName)"; continue }
+            if ($i -lt 3) { Write-Host "keep $($r.tagName)"; continue }
+            if ($i -eq 3) { Write-Host "keep $($r.tagName) (3rd)"; continue }
             Write-Host "delete $($r.tagName)"
             gh release delete $r.tagName --yes --cleanup-tag
           }
