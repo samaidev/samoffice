@@ -5,6 +5,10 @@
 #ifndef MyAppVersion
 #define MyAppVersion "0.5.0"
 #endif
+; 中文语言文件路径可由 CI 注入（runner 预装的 Inno 可能缺 ChineseSimplified.isl）
+#ifndef CnMessages
+#define CnMessages compiler:Languages\ChineseSimplified.isl
+#endif
 #define MyAppName "SamOffice"
 #define MyAppExeName "samoffice.exe"
 
@@ -27,7 +31,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinese"; MessagesFile: "{#CnMessages}"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

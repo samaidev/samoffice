@@ -86,10 +86,27 @@ jobs:
           "path=$iscc" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "ISCC: $iscc"
 
+      - name: Resolve Chinese language file
+        id: cnisl
+        shell: pwsh
+        run: |
+          $innoDir = Split-Path "${{ steps.iscc.outputs.path }}"
+          $found = Get-ChildItem -Path $innoDir -Recurse -Filter "ChineseSimplified.isl" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($found) {
+            $cn = $found.FullName
+            Write-Host "Found bundled Chinese ISL: $cn"
+          } else {
+            $cn = Join-Path $env:RUNNER_TEMP "ChineseSimplified.isl"
+            $url = "https://raw.githubusercontent.com/jrsoftware/issrc/is-7_1_1/Files/Languages/Unofficial/ChineseSimplified.isl"
+            Invoke-WebRequest -Uri $url -OutFile $cn
+            Write-Host "Downloaded Chinese ISL from issrc 7.1.1: $cn"
+          }
+          "path=$cn" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
-          & "${{ steps.iscc.outputs.path }}" /DMyAppVersion=${{ steps.ver.outputs.version }} /Q packaging/windows/SamOffice.iss
+          & "${{ steps.iscc.outputs.path }}" /DMyAppVersion=${{ steps.ver.outputs.version }} "/DCnMessages=${{ steps.cnisl.outputs.path }}" /Q packaging/windows/SamOffice.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
           Get-ChildItem packaging/windows/dist | Select-Object Name, Length
 

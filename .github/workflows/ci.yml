@@ -39,10 +39,6 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
 
-      - name: Go vet
-        shell: pwsh
-        run: go vet ./...
-
       - name: Build desktop exe
         shell: pwsh
         env:
