@@ -130,7 +130,9 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
             align: cell.align || '',
             vAlign: (cell as any).vAlign || '',
             isHeader: !!cell.isHeader,
-            borderW: tb.border || 0,
+            borderW: (cell as any).borderW ?? ((tb as any).border || 0),
+            borders: (cell as any).borders || '',
+            borderColor: (cell as any).borderColor || '',
           },
           content,
         )
@@ -335,7 +337,10 @@ function pmToBlock(node: Node): Block | null {
             align: (cell.attrs.align as string) || '',
             vAlign: (cell.attrs.vAlign as string) || '',
             isHeader: !!cell.attrs.isHeader,
-          }
+            borders: (cell.attrs.borders as string) || undefined,
+            borderColor: (cell.attrs.borderColor as string) || undefined,
+            borderW: (cell.attrs.borderW as number) || undefined,
+          } as any
         }),
       )
       return { rows }

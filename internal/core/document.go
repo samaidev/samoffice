@@ -206,6 +206,11 @@ type TableCell struct {
         VAlign   string   `json:"vAlign,omitempty"`                    // 单元格垂直对齐：top|middle|bottom（docx 导出为 w:vAlign）
         IsHeader bool     `json:"isHeader,omitempty"`
         Formula  string   `json:"formula,omitempty"` // 单元格公式（xls/xlsx 解析填充）
+        // Borders 为单元格边框四边开关（前端 table_cell.borders 同款编码：
+        // 上/右/下/左，'1'=有线 '0'=无线；空=四边默认线）。docx 导出为 w:tcBorders。
+        Borders     string  `json:"borders,omitempty"`
+        BorderColor string  `json:"borderColor,omitempty"` // 边框线色（hex，无 #），空=默认 CBD5E1
+        BorderW     float64 `json:"borderW,omitempty"`     // 边框线宽（pt），0=默认 1px
         // VMerge 为垂直合并中间态（不进 JSON）：0=不合并 1=被合并占位 3=合并起点。
         VMerge int `json:"-"`
 }

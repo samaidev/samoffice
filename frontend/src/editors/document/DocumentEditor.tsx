@@ -12,8 +12,8 @@ import { udmToProseMirror, proseMirrorToUDM } from './convert'
 import { BUILTIN_STYLES, BUILTIN_STYLE_MAP, AppStyle, StyleFormat, styleDefToFormat, outlineLevelFromName } from './styles'
 import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
-import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign } from './tableCommands'
-import { columnResizing, tableEditing, CellSelection } from 'prosemirror-tables'
+import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign, setCellBorders } from './tableCommands'
+import { columnResizing, tableEditing, CellSelection, cellAround } from 'prosemirror-tables'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
 import { PrintDialog } from '../../components/PrintDialog'
@@ -53,6 +53,87 @@ const HL_COLORS = ['#fef08a','#fed7aa','#fca5a5','#bbf7d0','#bfdbfe','#fbcfe8','
 
 function readBool(key: string): boolean {
   try { return localStorage.getItem(key) === '1' } catch { return false }
+}
+
+// ============ 表格行/列选择插件（对齐 MS Word） ============
+// MS Word 交互：鼠标悬停在表格行首左侧边缘出现箭头，单击选中整行；
+// 悬停在首行顶部边缘出现下箭头，单击选中整列；按下后拖动可扩展多行/多列。
+// 之前只依赖 prosemirror-tables 的框选，用户无法快速选中整行/整列。
+function createTableRowColSelectPlugin() {
+  let dragMode: '' | 'row' | 'col' = ''
+  return new Plugin({
+    props: {
+      handleDOMEvents: {
+        mousedown: (view: any, event: Event) => {
+          const e = event as MouseEvent
+          if (e.button !== 0) return false
+          const td = (e.target as HTMLElement)?.closest?.('td,th') as HTMLElement | null
+          if (!td) return false
+          const rect = td.getBoundingClientRect()
+          const inFirstCol = !(td.previousElementSibling as HTMLElement | null)?.matches?.('td,th')
+          const inFirstRow = !(td.parentElement as HTMLElement | null)?.previousElementSibling?.matches?.('tr')
+          const nearLeft = e.clientX - rect.left < 6
+          const nearTop = e.clientY - rect.top < 6
+          if (!((nearLeft && inFirstCol) || (nearTop && inFirstRow))) return false
+          dragMode = nearTop && inFirstRow ? 'col' : 'row'
+          const cellPosOf = (el: HTMLElement): any => {
+            try {
+              const $pos = view.state.doc.resolve(view.posAtDOM(el, 0))
+              // posAtDOM 给的是单元格内部位置，必须用 cellAround 归一化到单元格起点
+              return cellAround($pos)
+            } catch { return null }
+          }
+          const $anchorCell = cellPosOf(td)
+          if (!$anchorCell) return false
+          const applySelection = (headEl: HTMLElement | null) => {
+            if (!headEl) return
+            const $headCell = cellPosOf(headEl)
+            if (!$headCell) return
+            try {
+              // rowSelection / colSelection 以锚点行/列展开为整行/整列矩形选区
+              const final = dragMode === 'row'
+                ? CellSelection.rowSelection($anchorCell, $headCell)
+                : CellSelection.colSelection($anchorCell, $headCell)
+              view.dispatch(view.state.tr.setSelection(final).scrollIntoView())
+            } catch { /* 跨表格或位置无效时忽略 */ }
+          }
+          applySelection(td)
+          const move = (ev: MouseEvent) => {
+            if (!dragMode) return
+            const el = (ev.target as HTMLElement)?.closest?.('td,th') as HTMLElement | null
+            if (el) applySelection(el)
+          }
+          const up = () => {
+            dragMode = ''
+            window.removeEventListener('mousemove', move)
+            window.removeEventListener('mouseup', up)
+          }
+          window.addEventListener('mousemove', move)
+          window.addEventListener('mouseup', up)
+          e.preventDefault()
+          return true
+        },
+      },
+    },
+  })
+}
+
+// ============ 尾随空段落插件（对齐 MS Word） ============
+// Word 文档在表格之后永远保留一个段落标记，否则表格后无法点击定位光标输入
+// 新文本（用户报告：插入表格后点击表格下方空白处无法输入新内容）。
+// 此插件保证文档最后一个块不是表格/列表：若是则自动在末尾补一个空段落。
+function createTrailingParagraphPlugin() {
+  return new Plugin({
+    appendTransaction: (_trs: any, _old: any, newState: any) => {
+      const doc = newState.doc
+      const last = doc.lastChild
+      if (!last) return null
+      if (last.type.name === 'paragraph') return null
+      if (last.type.name === 'text_box' || last.type.name === 'footnote_section') return null
+      const pos = doc.content.size
+      return newState.tr.insert(pos, newState.schema.nodes.paragraph.create()).setMeta('addToHistory', false)
+    },
+  })
 }
 
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
@@ -852,6 +933,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [printPreview, setPrintPreview] = useState(false)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [inTable, setInTable] = useState(false)
+  // 表格边框工具（对齐 MS Word 表格工具“边框”预设）：预设下拉 + 线色 + 线宽
+  const [showTableBorderMenu, setShowTableBorderMenu] = useState(false)
+  const [tableBorderColor, setTableBorderColor] = useState('#000000')
+  const [tableBorderWidth, setTableBorderWidth] = useState(1)
   const [watermark, setWatermark] = useState('')
   const [showMiniToolbar, setShowMiniToolbar] = useState(false)
   const [miniToolbarPos, setMiniToolbarPos] = useState({ x: 0, y: 0 })
@@ -1140,6 +1225,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
         columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
+        createTableRowColSelectPlugin(), createTrailingParagraphPlugin(),
         createPaginationPlugin(() => metricsRef.current, setPageCount, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, (pages: number[]) => { blockPagesRef.current = pages; setBlockPages(pages) }),
         // 差异对比高亮（左侧：被删除段落标红），仅在并排对比时生效
         diffDecorationPlugin(diffDelRef),
@@ -3129,11 +3215,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
         {ribbonTab === 'layout' && (<>
           <RibbonGroup label={t('doc.border')}>
-            <RibbonButton icon="▢" label={t('doc.borderAll')} onClick={toggleBorderAll} active={borderHas(activeAttrs.border, 'all')} />
-            <RibbonButton icon="▔" label={t('doc.borderTop')} onClick={() => toggleBorderSide('top')} active={borderHas(activeAttrs.border, 'top')} />
-            <RibbonButton icon="▕" label={t('doc.borderRight')} onClick={() => toggleBorderSide('right')} active={borderHas(activeAttrs.border, 'right')} />
-            <RibbonButton icon="▁" label={t('doc.borderBottom')} onClick={() => toggleBorderSide('bottom')} active={borderHas(activeAttrs.border, 'bottom')} />
-            <RibbonButton icon="▏" label={t('doc.borderLeft')} onClick={() => toggleBorderSide('left')} active={borderHas(activeAttrs.border, 'left')} />
+            <RibbonButton icon="▢" label={t('doc.tblBorderAll')} onClick={toggleBorderAll} active={borderHas(activeAttrs.border, 'all')} />
+            <RibbonButton icon="▔" label={t('doc.tblBorderTop')} onClick={() => toggleBorderSide('top')} active={borderHas(activeAttrs.border, 'top')} />
+            <RibbonButton icon="▕" label={t('doc.tblBorderRight')} onClick={() => toggleBorderSide('right')} active={borderHas(activeAttrs.border, 'right')} />
+            <RibbonButton icon="▁" label={t('doc.tblBorderBottom')} onClick={() => toggleBorderSide('bottom')} active={borderHas(activeAttrs.border, 'bottom')} />
+            <RibbonButton icon="▏" label={t('doc.tblBorderLeft')} onClick={() => toggleBorderSide('left')} active={borderHas(activeAttrs.border, 'left')} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.shading')}>
             <div className="relative">
@@ -3356,6 +3442,57 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <button onClick={() => deleteRow(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.deleteRow')} type="button">↧✕</button>
           <button onClick={() => deleteColumn(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.deleteColumn')} type="button">↦✕</button>
           <div className="toolbar-divider" />
+          {/* 边框（对齐 MS Word）：预设菜单 + 线色 + 线宽，作用于选区（单格/多格/整行/整列） */}
+          <div className="relative">
+            <button onClick={() => setShowTableBorderMenu(v => !v)} className={`toolbar-btn ${showTableBorderMenu ? 'active' : ''}`}
+              title={t('doc.tblBorders') || '边框'} type="button">▦</button>
+            {showTableBorderMenu && (
+              <>
+                <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={() => setShowTableBorderMenu(false)} />
+                <div className="absolute top-full left-0 mt-1 py-1.5 rounded-lg shadow-xl" style={{ zIndex: 95, background: 'var(--color-surface)', border: '1px solid var(--color-border)', width: 190 }}>
+                  {([
+                    ['all', t('doc.tblBorderAll') || '所有框线'],
+                    ['outer', t('doc.tblBorderOuter') || '外侧框线'],
+                    ['inner', t('doc.tblBorderInner') || '内部框线'],
+                    ['none', t('doc.tblBorderNone') || '无框线'],
+                    ['top', t('doc.tblBorderTop') || '上框线'],
+                    ['bottom', t('doc.tblBorderBottom') || '下框线'],
+                    ['left', t('doc.tblBorderLeft') || '左框线'],
+                    ['right', t('doc.tblBorderRight') || '右框线'],
+                    ['innerH', t('doc.tblBorderInnerH') || '内部横线'],
+                    ['innerV', t('doc.tblBorderInnerV') || '内部竖线'],
+                  ] as [string, string][]).map(([preset, label]) => (
+                    <button key={preset} type="button"
+                      onClick={() => { setCellBorders(viewRef.current!.state, viewRef.current!.dispatch, preset, { color: tableBorderColor, width: tableBorderWidth }); setShowTableBorderMenu(false) }}
+                      className="flex w-full items-center px-3 py-1.5 text-xs transition-colors"
+                      style={{ color: 'var(--color-text)' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-alt)' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>{label}</button>
+                  ))}
+                  <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+                  <div className="flex items-center gap-2 px-3 py-1.5">
+                    <span className="text-xs flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{t('doc.tblBorderLineColor') || '线色'}</span>
+                    <input type="color" value={tableBorderColor} onChange={e => setTableBorderColor(e.target.value)}
+                      className="w-7 h-6 cursor-pointer rounded border" style={{ borderColor: 'var(--color-border)' }} />
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-1.5">
+                    <span className="text-xs flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{t('doc.tblBorderLineWidth') || '线宽'}</span>
+                    <select value={String(tableBorderWidth)} onChange={e => setTableBorderWidth(Number(e.target.value))}
+                      className="text-xs px-1 py-1 rounded border flex-1"
+                      style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>
+                      <option value="0">1px</option>
+                      <option value="0.5">0.5pt</option>
+                      <option value="1">1pt</option>
+                      <option value="1.5">1.5pt</option>
+                      <option value="2">2pt</option>
+                      <option value="3">3pt</option>
+                    </select>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="toolbar-divider" />
           <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'left')} className="toolbar-btn" title={t('doc.alignLeft')} type="button"><IconAlignLeft /></button>
           <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'center')} className="toolbar-btn" title={t('doc.alignCenter')} type="button"><IconAlignCenter /></button>
           <button onClick={() => setCellAlign(viewRef.current!.state, viewRef.current!.dispatch, 'right')} className="toolbar-btn" title={t('doc.alignRight')} type="button"><IconAlignRight /></button>
@@ -3460,6 +3597,26 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       <div
         ref={pageRef}
         className="mx-auto animate-fade-in"
+        onMouseDown={(e: any) => {
+          // 点击页面空白区（页边距 / 纸页正文下方空白 / 尾页下方）：把光标放到最近可输入位置，
+          // 对齐 MS Word"点击页面任意空白处即可开始输入"（修复表格后无法输入新文本的一部分场景）。
+          // ProseMirror 内容区与交互控件（标尺/文本框/按钮/页脚）不拦截。
+          const v = viewRef.current
+          if (!v) return
+          const target = e.target as HTMLElement
+          if (target.closest && target.closest('.ProseMirror, .text-box, button, input, select, textarea, [contenteditable], .sam-ruler, .comment-card')) return
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          const zoomRatio = zoom / 100
+          const below = e.clientY > rect.top + (docMargins.top * zoomRatio)
+          const endPos = v.state.doc.content.size
+          try {
+            const $pos = v.state.doc.resolve(below ? Math.max(0, endPos) : Math.min(1, endPos))
+            const sel = TextSelection.near($pos, below ? -1 : 1)
+            v.dispatch(v.state.tr.setSelection(sel).scrollIntoView())
+            v.focus()
+            e.preventDefault()
+          } catch { /* 位置无效时忽略 */ }
+        }}
         style={{
           position: 'relative',
           marginTop: '24px',

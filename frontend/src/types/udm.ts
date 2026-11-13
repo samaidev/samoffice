@@ -84,6 +84,12 @@ export interface TableCell {
   rowSpan?: number
   colSpan?: number
   isHeader?: boolean
+  /** 边框四边开关（上/右/下/左，'1'=有线 '0'=无线）；''/缺省 = 四边默认线 */
+  borders?: string
+  /** 边框线色（hex），缺省回退默认 #cbd5e1 */
+  borderColor?: string
+  /** 边框线宽（pt），0/缺省 = 默认 1px */
+  borderW?: number
 }
 
 export interface Image {

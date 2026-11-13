@@ -1574,6 +1574,7 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
         var curCell core.TableCell
         var curCellInline []core.Inline
         inTcPr := false
+        inTcBorders := false
 
         flushCell := func() {
                 if curCellInline != nil {
@@ -1638,6 +1639,56 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                                                 curCell.RowSpan = 1
                                         }
                                 }
+                        case "tcBorders":
+                                // 单元格边框（前端表格工具"边框"预设导出为 w:tcBorders）
+                                if inTcPr {
+                                        inTcBorders = true
+                                        // 默认四边有线；逐侧根据 w:val=nil/none 关闭
+                                        curCell.Borders = "1111"
+                                }
+                        case "top", "right", "bottom", "left":
+                                if inTcBorders {
+                                        val, sz, color := "", 0, ""
+                                        for _, a := range t.Attr {
+                                                switch a.Name.Local {
+                                                case "val":
+                                                        val = a.Value
+                                                case "sz":
+                                                        if n, e := strconv.Atoi(a.Value); e == nil {
+                                                                sz = n
+                                                        }
+                                                case "color":
+                                                        color = a.Value
+                                                }
+                                        }
+                                        sideIdx := 0
+                                        switch t.Name.Local {
+                                        case "top":
+                                                sideIdx = 0
+                                        case "right":
+                                                sideIdx = 1
+                                        case "bottom":
+                                                sideIdx = 2
+                                        case "left":
+                                                sideIdx = 3
+                                        }
+                                        b := []byte(curCell.Borders)
+                                        if len(b) == 4 {
+                                                if val == "nil" || val == "none" {
+                                                        b[sideIdx] = '0'
+                                                } else {
+                                                        b[sideIdx] = '1'
+                                                        // 线宽（eighths-of-a-point → pt）/线色：仅在有效时记录一次
+                                                        if curCell.BorderW == 0 && sz > 0 {
+                                                                curCell.BorderW = float64(sz) / 8
+                                                        }
+                                                        if curCell.BorderColor == "" && color != "" && color != "auto" {
+                                                                curCell.BorderColor = strings.TrimPrefix(color, "#")
+                                                        }
+                                                }
+                                                curCell.Borders = string(b)
+                                        }
+                                }
                         case "p":
                                 for _, b := range parseParagraph(dec, footnotes, fn, ntf, media, nil) {
                                         if b == nil {
@@ -1655,6 +1706,8 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                         switch t.Name.Local {
                         case "tcPr":
                                 inTcPr = false
+                        case "tcBorders":
+                                inTcBorders = false
                         case "tc":
                                 flushCell()
                         case "tr":

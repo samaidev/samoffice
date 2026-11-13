@@ -119,6 +119,7 @@ export function Ruler({ width, marginLeft, marginRight, indents, onChange }: Rul
 
   return (
     <div
+      className="sam-ruler"
       style={{
         position: 'relative',
         height: 22,

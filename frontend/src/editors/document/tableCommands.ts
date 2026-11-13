@@ -30,33 +30,77 @@ function getTableInfo(state: any): TableInfo | null {
   }
   if (!tableNode) return null
 
+  // 构建"单元格起始位置 → 行列号"映射（考虑 rowspan/colspan 占位）。
+  // 注意：doc 位置偏移（pos - tablePos）与"第几个单元格"是两回事，
+  // 旧实现 findRowCol 用单元格序号去比位置偏移，永远匹配不上，
+  // 导致光标在单元格内时 getTableInfo 返回 null —— 边框等命令全部静默失效。
+  const cellPosMap = new Map<number, { row: number; col: number }>()
+  const occupied: number[][] = []
+  let rowOffset = 0
+  for (let r = 0; r < tableNode.childCount; r++) {
+    const row = tableNode.child(r)
+    let c = 0
+    while (occupied[r] && occupied[r][c]) c++
+    let cellOffset = 0
+    for (let i = 0; i < row.childCount; i++) {
+      const cell = row.child(i)
+      const rs = cell.attrs.rowspan || 1
+      const cs = cell.attrs.colspan || 1
+      cellPosMap.set(tablePos + 1 + rowOffset + 1 + cellOffset, { row: r, col: c })
+      for (let ri = r; ri < r + rs; ri++) {
+        if (!occupied[ri]) occupied[ri] = []
+        for (let ci = c; ci < c + cs; ci++) occupied[ri][ci] = 1
+      }
+      c += cs
+      cellOffset += cell.nodeSize
+    }
+    rowOffset += row.nodeSize
+  }
+
   // 计算选中范围的行列
   let startRow = Infinity, startCol = Infinity, endRow = -1, endCol = -1
   let cellFound = false
 
-  state.doc.nodesBetween($from.pos, $to.pos, (node: any, pos: number) => {
-    if (node.type.name === 'table_cell' || node.type.name === 'table_header') {
+  // CellSelection（行/列/框选单元格）的 from/to 只覆盖第一个 range，
+  // 必须用 $anchorCell/$headCell 求矩形范围，否则边框等命令只作用于一个格子。
+  const anySel = state.selection as any
+  if (anySel.$anchorCell && anySel.$headCell) {
+    const a = cellPosMap.get(anySel.$anchorCell.pos)
+    const h = cellPosMap.get(anySel.$headCell.pos)
+    if (a && h) {
+      startRow = Math.min(a.row, h.row)
+      startCol = Math.min(a.col, h.col)
+      endRow = Math.max(a.row, h.row)
+      endCol = Math.max(a.col, h.col)
       cellFound = true
-      // 计算行列
-      const rowInfo = findRowCol(tableNode, pos - tablePos)
-      if (rowInfo) {
-        startRow = Math.min(startRow, rowInfo.row)
-        startCol = Math.min(startCol, rowInfo.col)
-        endRow = Math.max(endRow, rowInfo.row + (node.attrs.rowspan || 1) - 1)
-        endCol = Math.max(endCol, rowInfo.col + (node.attrs.colspan || 1) - 1)
-      }
     }
-  })
+  }
+
+  if (!cellFound) {
+    state.doc.nodesBetween($from.pos, $to.pos, (node: any, pos: number) => {
+      if (node.type.name === 'table_cell') {
+        // pos 为单元格节点起始位置
+        const rc = cellPosMap.get(pos)
+        if (rc) {
+          cellFound = true
+          startRow = Math.min(startRow, rc.row)
+          startCol = Math.min(startCol, rc.col)
+          endRow = Math.max(endRow, rc.row + (node.attrs.rowspan || 1) - 1)
+          endCol = Math.max(endCol, rc.col + (node.attrs.colspan || 1) - 1)
+        }
+      }
+    })
+  }
 
   if (!cellFound) {
     // 单光标在单元格内
     for (let d = $from.depth; d > 0; d--) {
       const node = $from.node(d)
       if (node.type.name === 'table_cell') {
-        const rowInfo = findRowCol(tableNode, $from.before(d) - tablePos)
-        if (rowInfo) {
-          startRow = endRow = rowInfo.row
-          startCol = endCol = rowInfo.col
+        const rc = cellPosMap.get($from.before(d))
+        if (rc) {
+          startRow = endRow = rc.row
+          startCol = endCol = rc.col
           cellFound = true
         }
         break
@@ -66,38 +110,6 @@ function getTableInfo(state: any): TableInfo | null {
 
   if (!cellFound) return null
   return { tablePos, tableNode, startRow, startCol, endRow, endCol }
-}
-
-// 找单元格在表格中的行列位置
-function findRowCol(tableNode: any, cellOffset: number): { row: number; col: number } | null {
-  let absOffset = 0
-  const colCounts: any[] = [] // 每行的列数（考虑 rowspan）
-
-  for (let r = 0; r < tableNode.childCount; r++) {
-    const row = tableNode.child(r)
-    let c = 0
-    // 跳过被 rowspan 占据的列
-    while (colCounts[r] && colCounts[r][c]) c++
-
-    for (let i = 0; i < row.childCount; i++) {
-      const cell = row.child(i)
-      if (absOffset === cellOffset) {
-        return { row: r, col: c }
-      }
-      const rs = cell.attrs.rowspan || 1
-      const cs = cell.attrs.colspan || 1
-      // 标记被占的位置
-      for (let ri = r; ri < r + rs; ri++) {
-        if (!colCounts[ri]) colCounts[ri] = []
-        for (let ci = c; ci < c + cs; ci++) {
-          colCounts[ri][ci] = 1
-        }
-      }
-      c += cs
-      absOffset++
-    }
-  }
-  return null
 }
 
 // 合并选中单元格
@@ -520,6 +532,104 @@ export function setCellVAlign(state: any, dispatch: any, vAlign: string): boolea
       }
     }
   }
+  if (!changed) return false
+  dispatch(tr)
+  return true
+}
+
+// ============ 单元格边框（对齐 MS Word 表格工具"边框"预设） ============
+// 边框四边编码：上/右/下/左（'1'=有线 '0'=无线），与 schema.table_cell.borders 一致。
+
+// 遍历表格全部单元格（考虑 rowspan/colspan 占位），回调 (cell, r, c, docPos, tr)。
+// 返回值：是否有任何单元格被回调（= 表格与选区有效）。
+function forEachCellInSelection(state: any, tr: any, fn: (cell: any, r: number, c: number, pos: number, tr: any) => void): boolean {
+  const info = getTableInfo(state)
+  if (!info) return false
+  const { tablePos, tableNode, startRow, startCol, endRow, endCol } = info
+  let rowOffset = 0
+  const occupied: number[][] = []
+  for (let r = 0; r < tableNode.childCount; r++) {
+    const row = tableNode.child(r)
+    let c = 0
+    while (occupied[r] && occupied[r][c]) c++
+    let cellOffset = 0
+    for (let i = 0; i < row.childCount; i++) {
+      const cell = row.child(i)
+      const rs = cell.attrs.rowspan || 1
+      const cs = cell.attrs.colspan || 1
+      const inSel = r >= startRow && r <= endRow && c >= startCol && c <= endCol
+      if (inSel) {
+        const pos = tablePos + 1 + rowOffset + 1 + cellOffset
+        fn(cell, r, c, pos, tr)
+      }
+      for (let ri = r; ri < r + rs; ri++) {
+        if (!occupied[ri]) occupied[ri] = []
+        for (let ci = c; ci < c + cs; ci++) occupied[ri][ci] = 1
+      }
+      c += cs
+      cellOffset += cell.nodeSize
+    }
+    rowOffset += row.nodeSize
+  }
+  return true
+}
+
+// 解码当前边框编码为 [top,right,bottom,left] 布尔；未自定义时四边全有（默认线）。
+function decodeSides(enc: string): boolean[] {
+  if (enc && enc.length === 4) return enc.split('').map(ch => ch === '1')
+  return [true, true, true, true]
+}
+
+// 边框预设（对齐 MS Word 下拉网格）：
+// all 所有框线 | outer 外侧框线 | inner 内部框线 | none 无框线
+// top 上框线 | bottom 下框线 | left 左框线 | right 右框线
+// innerH 内部横线 | innerV 内部竖线
+// opts.color / opts.width 提供时同时设置线色（hex）/线宽（pt，0=恢复默认 1px）。
+export function setCellBorders(state: any, dispatch: any, preset: string, opts?: { color?: string; width?: number }): boolean {
+  if (!dispatch) return !!getTableInfo(state)
+  const info = getTableInfo(state)
+  if (!info) return false
+  const { startRow, startCol, endRow, endCol } = info
+  const tr = state.tr
+  let changed = false
+  forEachCellInSelection(state, tr, (cell, r, c, pos, trRef) => {
+    let sides = decodeSides(cell.attrs.borders)
+    switch (preset) {
+      case 'all': sides = [true, true, true, true]; break
+      case 'none': sides = [false, false, false, false]; break
+      case 'outer':
+        // 外侧框线：仅选区外边缘有线，内部边缘保持原样（对齐 MS Word"外侧框线"）
+        sides = [
+          r === startRow ? true : sides[0],
+          c === endCol ? true : sides[1],
+          r === endRow ? true : sides[2],
+          c === startCol ? true : sides[3],
+        ]
+        break
+      case 'inner':
+        // 内部框线：仅内部边缘有线，外边缘保持原样（对齐 MS Word"内部框线"）
+        sides = [
+          r > startRow ? true : sides[0],
+          c < endCol ? true : sides[1],
+          r < endRow ? true : sides[2],
+          c > startCol ? true : sides[3],
+        ]
+        break
+      case 'innerH': sides = [r > startRow ? true : sides[0], sides[1], r < endRow ? true : sides[2], sides[3]]; break
+      case 'innerV': sides = [sides[0], c < endCol ? true : sides[1], sides[2], c > startCol ? true : sides[3]]; break
+      case 'top': if (r === startRow) sides[0] = true; break
+      case 'bottom': if (r === endRow) sides[2] = true; break
+      case 'left': if (c === startCol) sides[3] = true; break
+      case 'right': if (c === endCol) sides[1] = true; break
+      default: return
+    }
+    const enc = sides.map(b => (b ? '1' : '0')).join('')
+    const next: any = { ...cell.attrs, borders: enc }
+    if (opts && opts.color) next.borderColor = opts.color
+    if (opts && opts.width !== undefined) next.borderW = opts.width
+    trRef.setNodeMarkup(pos, undefined, next)
+    changed = true
+  })
   if (!changed) return false
   dispatch(tr)
   return true

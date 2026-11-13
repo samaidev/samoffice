@@ -240,12 +240,26 @@ export const schema = new Schema({
         vAlign: { default: '' },  // 单元格垂直对齐：'' = 顶对齐 | middle | bottom（对齐 MS Word 表格工具）
         isHeader: { default: false },
         borderW: { default: 0 },
+        // 边框四边开关编码（上/右/下/左，'1'=有线 '0'=无线）。'' = 未自定义（四边默认线）。
+        // 由表格工具栏"边框"预设（所有框线/外侧框线/无框线…）写入，保存到 UDM 往返。
+        borders: { default: '' },
+        borderColor: { default: '' },
       },
       toDOM: (node) => {
         const tag = node.attrs.isHeader ? 'th' : 'td'
+        const enc: string = node.attrs.borders || ''
+        const sides: boolean[] = enc.length === 4 ? enc.split('').map(ch => ch === '1') : [true, true, true, true]
+        const color = node.attrs.borderColor || '#cbd5e1'
         const bw = node.attrs.borderW
-        const border = bw && bw > 0 ? `${bw}pt solid #cbd5e1` : '1px solid #cbd5e1'
-        const s: string[] = [`border: ${border}`, 'padding: 6px 10px', `vertical-align: ${node.attrs.vAlign || 'top'}`]
+        const line = `${bw && bw > 0 ? bw + 'pt' : '1px'} solid ${color}`
+        const s: string[] = [
+          sides[0] ? `border-top: ${line}` : 'border-top: none',
+          sides[1] ? `border-right: ${line}` : 'border-right: none',
+          sides[2] ? `border-bottom: ${line}` : 'border-bottom: none',
+          sides[3] ? `border-left: ${line}` : 'border-left: none',
+          'padding: 6px 10px',
+          `vertical-align: ${node.attrs.vAlign || 'top'}`,
+        ]
         if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
         const attrs: any = { style: s.join('; ') }
         if (node.attrs.colspan > 1) attrs.colspan = node.attrs.colspan
@@ -254,14 +268,23 @@ export const schema = new Schema({
       },
       parseDOM: [{
         tag: 'td, th',
-        getAttrs: (dom: HTMLElement) => ({
-          colspan: parseInt(dom.getAttribute('colspan') || '1'),
-          rowspan: parseInt(dom.getAttribute('rowspan') || '1'),
-          align: dom.style.textAlign || '',
-          vAlign: dom.style.verticalAlign && dom.style.verticalAlign !== 'baseline' ? dom.style.verticalAlign : '',
-          isHeader: dom.tagName === 'TH',
-          borderW: 0,
-        })
+        getAttrs: (dom: HTMLElement) => {
+          const st = dom.style
+          const on = (v: string) => !!v && !/none|hidden/.test(v)
+          const touched = st.borderTop || st.borderRight || st.borderBottom || st.borderLeft
+          const enc = touched ? [on(st.borderTop), on(st.borderRight), on(st.borderBottom), on(st.borderLeft)].map(b => (b ? '1' : '0')).join('') : ''
+          const wm = (st.borderTopWidth || '').match(/^([\d.]+)pt$/)
+          return {
+            colspan: parseInt(dom.getAttribute('colspan') || '1'),
+            rowspan: parseInt(dom.getAttribute('rowspan') || '1'),
+            align: st.textAlign || '',
+            vAlign: st.verticalAlign && st.verticalAlign !== 'baseline' ? st.verticalAlign : '',
+            isHeader: dom.tagName === 'TH',
+            borderW: wm ? parseFloat(wm[1]) : 0,
+            borders: enc,
+            borderColor: '',
+          }
+        }
       }]
     },
 

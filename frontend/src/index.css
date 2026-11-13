@@ -649,6 +649,9 @@ input:focus, textarea:focus, select:focus {
  */
 .ribbon-scroll {
   overflow: visible;
+  /* 空间不足时自动换行，杜绝横向越界（弹出菜单仍用 overflow:visible 正常显示）。
+     宽度足够时保持单行，与 MS Office 观感一致。 */
+  flex-wrap: wrap;
   scrollbar-width: thin;
 }
 /* 窄屏兜底：用 flex-wrap 让 ribbon 自然换行，避免横向滚动裁剪弹出菜单 */
@@ -889,14 +892,14 @@ table td, table th {
 }
 
 /* === ProseMirror 表格 === */
-.ProseMirror table.pm-table {
+.ProseMirror table {
   border-collapse: collapse;
   width: 100%;
   margin: 12px 0;
   position: relative; /* 作为列宽手柄等绝对定位子元素的定位上下文 */
 }
-.ProseMirror table.pm-table td,
-.ProseMirror table.pm-table th {
+.ProseMirror table td,
+.ProseMirror table th {
   border: 1px solid #cbd5e1;
   padding: 6px 10px;
   vertical-align: top;
@@ -948,17 +951,17 @@ table td, table th {
 @keyframes slCover { from { opacity: 0; transform: scale(1.08) } to { opacity: 1; transform: scale(1) } }
 @keyframes slCut { from { opacity: 0.2 } 50% { opacity: 1 } to { opacity: 1 } }
 @keyframes slMorph { from { opacity: 0; transform: scale(0.92) rotate(-1deg) } to { opacity: 1; transform: scale(1) rotate(0) } }
-.ProseMirror table.pm-table th {
+.ProseMirror table th {
   background: #f1f5f9;
   font-weight: 600;
 }
-.ProseMirror table.pm-table .selectedCell {
+.ProseMirror table .selectedCell {
   position: relative;
   background: rgba(79, 70, 229, 0.15);
   box-shadow: inset 0 0 0 2px rgba(79, 70, 229, 0.3);
 }
 /* Table column resize handle (prosemirror-tables) */
-.ProseMirror table.pm-table .column-resize-handle {
+.ProseMirror table .column-resize-handle {
   position: absolute;
   right: -2px;
   top: 0;
@@ -968,17 +971,43 @@ table td, table th {
   cursor: col-resize;
   z-index: 10;
 }
-.ProseMirror table.pm-table.resizing {
+.ProseMirror table.resizing {
   cursor: col-resize;
 }
 /* Table selected cell outline */
-.ProseMirror table.pm-table td.selectedCell::before,
-.ProseMirror table.pm-table th.selectedCell::before {
+.ProseMirror table td.selectedCell::before,
+.ProseMirror table th.selectedCell::before {
   content: '';
   position: absolute;
   inset: 0;
   background: rgba(79, 70, 229, 0.1);
   pointer-events: none;
+}
+/* === 表格行/列选择边缘提示（对齐 MS Word）===
+ * 行首左缘 5px → 向右选择光标（点击/拖动选中整行）；
+ * 首行上缘 5px → 向下选择光标（点击/拖动选中整列）。
+ * 行为由 createTableRowColSelectPlugin 实现，这里只做光标提示。 */
+.ProseMirror table td,
+.ProseMirror table th {
+  position: relative;
+}
+.ProseMirror table td:first-child::after,
+.ProseMirror table th:first-child::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 100%;
+  cursor: e-resize;
+}
+.ProseMirror table tr:first-child td::after,
+.ProseMirror table tr:first-child th::after {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 5px;
+  cursor: s-resize;
 }
 
 /* === Image resize + selection + drag === */

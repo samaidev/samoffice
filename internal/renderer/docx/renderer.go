@@ -760,8 +760,41 @@ func renderTable(sb *strings.Builder, t *core.Table, images map[string]*embedIma
         sb.WriteString("</w:tbl>\n")
 }
 
-// renderTableCell 渲染 w:tc：tcPr（宽度/合并/表头底纹）+ 内容段落
+// renderTableCell 渲染 w:tc：tcPr（宽度/合并/边框/表头底纹/垂直对齐）+ 内容段落。
+// 注意 tcPr 子元素必须按 OOXML 顺序输出：tcW → gridSpan → vMerge → tcBorders → shd → vAlign。
 func renderTableCell(sb *strings.Builder, c *core.TableCell, widthTwips, span int, images map[string]*embedImage) {
+        // 先构建 tcBorders（元素顺序要求其在 shd 之前）
+        tcBorders := ""
+        if c.Borders != "" && len(c.Borders) == 4 {
+                color := strings.ToUpper(strings.TrimPrefix(strings.TrimSpace(c.BorderColor), "#"))
+                if color == "" {
+                        color = "CBD5E1"
+                }
+                sz := 4 // 默认 1px ≈ 4 eighths-of-a-point
+                if c.BorderW > 0 {
+                        sz = int(c.BorderW * 8)
+                        if sz < 2 {
+                                sz = 2
+                        }
+                }
+                sides := []struct {
+                        name string
+                        on   bool
+                }{{"top", c.Borders[0] == '1'}, {"right", c.Borders[1] == '1'}, {"bottom", c.Borders[2] == '1'}, {"left", c.Borders[3] == '1'}}
+                var tb strings.Builder
+                tb.WriteString("<w:tcBorders>")
+                // 注意：即使四边全 nil 也要输出 tcBorders——
+                // 单元格级 nil 边用于覆盖表格级 tblBorders（"无框线"预设依赖此语义）。
+                for _, sd := range sides {
+                        if sd.on {
+                                fmt.Fprintf(&tb, `<w:%s w:val="single" w:sz="%d" w:space="0" w:color="%s"/>`, sd.name, sz, color)
+                        } else {
+                                fmt.Fprintf(&tb, `<w:%s w:val="nil"/>`, sd.name)
+                        }
+                }
+                tb.WriteString("</w:tcBorders>")
+                tcBorders = tb.String()
+        }
         sb.WriteString("<w:tc><w:tcPr>")
         fmt.Fprintf(sb, `<w:tcW w:w="%d" w:type="dxa"/>`, widthTwips)
         if span > 1 {
@@ -770,6 +803,9 @@ func renderTableCell(sb *strings.Builder, c *core.TableCell, widthTwips, span in
         if c.RowSpan > 1 {
                 sb.WriteString(`<w:vMerge w:val="restart"/>`)
         }
+        // 单元格边框（前端表格工具栏"边框"预设）：Borders 四边编码 上/右/下/左（'1'=有线）
+        // 映射为 w:tcBorders；'0' 侧写 nil（无框线），与相邻单元格边框按 OOXML 冲突规则合并渲染。
+        sb.WriteString(tcBorders)
         if c.IsHeader {
                 // 表头底纹（浅蓝灰），与前端表头样式近似
                 sb.WriteString(`<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>`)
