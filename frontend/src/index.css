@@ -1139,6 +1139,20 @@ table td, table th {
   margin-bottom: 0 !important;
 }
 
+/* === 跨页表格边框模型切换（修复“表格跨页显示完全是错乱的”） ===
+   border-collapse:collapse 模式下，Chrome 的折叠边框解析发生在表格网格几何上：
+   被 relative top 推到下一页的行，会在【原网格位置】被表格重画一遍折叠边框，
+   页面上出现数条带完整边框的“幽灵空行”（页尾 2-3 条 + 下页顶 2 条，压进页边距）。
+   带断行的表格（分页引擎挂 .pg-brk-table 的 wrapper）必须切换为
+   border-collapse:separate + border-spacing:0：边框归各单元格自绘、
+   跟随行一起位移，鬼影彻底消失。
+   注意：Decoration.node 只能落在 DIV.tableWrapper 上，对 div 设
+   border-collapse 无效，必须用后代选择器作用到内层 <table>。 */
+.ProseMirror .pg-brk-table > table {
+  border-collapse: separate;
+  border-spacing: 0px;
+}
+
 /* === 护眼模式 (eye care) ===
    护眼绿只由「纸页层(每页)」提供（纸页背景在护眼模式下为护眼绿），
    ProseMirror 编辑区本身保持透明，页间留白保持工作区中性色，

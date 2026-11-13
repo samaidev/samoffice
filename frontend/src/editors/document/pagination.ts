@@ -1,5 +1,6 @@
 import { Plugin, PluginKey } from 'prosemirror-state'
 import { Decoration, DecorationSet, EditorView } from 'prosemirror-view'
+import { cellDomStyle } from './schema'
 
 export interface PageMetrics {
   /** 每页正文区高度（px）：整页高 - 上下边距 */
@@ -195,6 +196,8 @@ export function createPaginationPlugin(
       const subTops: { top: number; h: number }[][] = children.map(() => [])
       // 子块文档位置：node.forEach 给出 (child, offset) —— 绝对 from = 块 from + 1 + offset
       const subPos: { pos: number; size: number }[][] = children.map(() => [])
+      // 表格内单元格（cellNodes[k][si][ci] = {node, pos, size}）：逐格边框归一化用（见 cellBreaks）
+      const cellNodes: { node: any; pos: number; size: number }[][][] = children.map(() => [])
       for (let k = 0; k < K; k++) {
         if (!rowSplittable(nodes[k].type.name)) continue
         const nd = nodes[k]
@@ -207,6 +210,18 @@ export function createPaginationPlugin(
         const rows = nd.type.name === 'table'
           ? Array.from(el.querySelectorAll('tbody > tr'))
           : Array.from(el.querySelectorAll(':scope > li'))
+        if (nd.type.name === 'table') {
+          // 逐行收集单元格节点与位置（用于跨页表格的逐格边框归一化）。
+          // 样式从节点属性重建（cellDomStyle），绝不读 DOM —— DOM 已被上一轮
+          // 装饰污染（旧透明值被烘焙后永远无法撤销，曾导致段尾行底边框消失）。
+          nd.forEach((rowNode: any, rowOff: number) => {
+            const cells: { node: any; pos: number; size: number }[] = []
+            rowNode.forEach((cellNode: any, cellOff: number) => {
+              cells.push({ node: cellNode, pos: froms[k] + 1 + rowOff + 1 + cellOff, size: cellNode.nodeSize })
+            })
+            cellNodes[k].push(cells)
+          })
+        }
         for (const row of rows as HTMLElement[]) {
           const r = row.getBoundingClientRect()
           subTops[k].push({ top: (r.top - elTop) / z, h: row.offsetHeight })
@@ -240,6 +255,14 @@ export function createPaginationPlugin(
       // 子块级断点（表格行 / 列表条目）与表格位移补高
       const rowBreaks: { pos: number; size: number; mt: number; isTable: boolean }[] = []
       const tablePad = new Map<number, number>()
+      // 跨页表格逐格边框归一化（消除 separate 模式下相邻单元格边框叠加成 2px）：
+      // 非末列单元格把 border-right 颜色置透明、非段尾行单元格把 border-bottom
+      // 颜色置透明，使每条内部网格线只剩一侧可见 —— 与 MS Word 折叠边框视觉一致。
+      // 关键：只改【颜色】不改【宽度/样式】—— 边框仍占 1px 几何空间，
+      // 行高 / 表格高度与无装饰时完全一致 → 分页测量无反馈、无双稳态震荡。
+      // （曾试过 border-right/bottom:none：行高各省 1px，断行行号随装饰状态漂移，
+      //   分页在两个断点间反复翻转 —— 禁止。）
+      const cellBreaks: { pos: number; size: number; style: string }[] = []
 
       // 纯正向一次性计算：runningShift = 前面所有块累计注入的断页推下量。
       // 测量阶段（pg-measuring）已剔除全部断页 margin（块级 .pg-brk + 行级 .pg-linebreak），
@@ -381,7 +404,10 @@ export function createPaginationPlugin(
             const info = spos[si]
             if (!info) continue
             if (isTable) {
-              // 表格行：累计位移 > 0 的每一行都要 relative top（跟随断点行）
+              // 表格行：累计位移 > 0 的每一行都要 relative top（跟随断点行）。
+              // 样式整体替换即可：table_row 的 toDOM 是裸 <tr>（无原生内联样式），
+              // 绝不能拼接 DOM 现有样式 —— 那会把上一轮装饰值烘焙进新装饰，
+              // 字符串逐轮增长、永不收敛（每次事务多一次冗余 dispatch）。
               if (rowShift[si] > 0) {
                 rowBreaks.push({ pos: info.pos, size: info.size, mt: rowShift[si], isTable: true })
               }
@@ -404,6 +430,24 @@ export function createPaginationPlugin(
           contentMaxY = Math.max(contentMaxY, renderedSubBottom)
           if (isTable && subShift > 0) {
             tablePad.set(froms[k], subShift)
+            // 逐格边框归一化：仅在表格真正发生跨页时应用（未跨页表格保持 collapse 视觉）。
+            // - 非末列单元格：去 border-right（右侧线由右邻格的 border-left 提供）
+            // - 非段尾行单元格：去 border-bottom（下方线由下一行格的 border-top 提供）
+            // - 段尾行（每页视觉最后一行 + 表格最后一行）：保留 border-bottom，
+            //   使页尾断开处有完整底边框（MS Word 行为）
+            const cells = cellNodes[k]
+            for (let si = 0; si < cells.length; si++) {
+              const keepBottom = si === cells.length - 1 || (rowShift[si + 1] || 0) > (rowShift[si] || 0)
+              for (let ci = 0; ci < cells[si].length; ci++) {
+                const info = cells[si][ci]
+                const keepRight = ci === cells[si].length - 1
+                if (keepRight && keepBottom) continue // 无需调整的格子不发装饰，保持原生 toDOM 属性
+                let style = cellDomStyle(info.node)
+                if (!keepRight) style += ';border-right-color: transparent'
+                if (!keepBottom) style += ';border-bottom-color: transparent'
+                cellBreaks.push({ pos: info.pos, size: info.size, style })
+              }
+            }
           }
         } else if (forceBreak || !splittable(name) || keepLinesK) {
           // 整块跳页：块底超过"当前页内容区底边（下直角）"或强制分页时，
@@ -573,18 +617,44 @@ export function createPaginationPlugin(
           )
         }
       }
+      for (const cb of cellBreaks) {
+        // 跨页表格逐格边框归一化：单元格装饰（去重复的 right/bottom 边框线）。
+        // 位置合法性同上，异常时跳过避免整个分页失效。
+        if (cb.pos < 1 || cb.pos + cb.size > docSize) continue
+        decos.push(
+          Decoration.node(cb.pos, cb.pos + cb.size, {
+            style: cb.style,
+            class: 'pg-brk-cell',
+          }),
+        )
+      }
       for (const [tpos, pad] of tablePad) {
         // 表格行位移不改变布局高度：给 table 注入 margin-bottom 补足，
         // 使表格后的内容从正确的（推下后的）位置继续排布。
         // table 自带 inline style（border-collapse / 对齐 margin），
         // Decoration.node 的 style 会整体替换 —— 必须拼接原 style，不能覆盖。
+        //
+        // 关键修复（跨页表格“幽灵空行”，用户主诉“表格跨页显示完全是错乱的”）：
+        // border-collapse:collapse 模式下，Chrome 的折叠边框解析发生在表格网格几何上，
+        // 被 relative top 位移的行会在【原网格位置】被表格重画一遍折叠边框 ——
+        // 页面上出现数条带完整边框的“幽灵空行”（页尾 2-3 条 + 下页顶 2 条），
+        // 且下页顶部的幽灵行压进页边距，视觉完全错乱。
+        // 修复：给带断行的表格挂 pg-brk-table 类，由 index.css 中的
+        // .ProseMirror .pg-brk-table > table 切换内层 table 为
+        // border-collapse:separate + border-spacing:0 —— 边框归各单元格自绘、
+        // 跟随行一起位移，鬼影彻底消失。
+        // 注意：table 节点在 DOM 上渲染为 DIV.tableWrapper 包裹 <table>，
+        // Decoration 只能落在 wrapper 上，border-collapse 必须经 CSS 后代选择器
+        // 作用到内层 table（wrapper 上设 border-collapse 无效，实测验证）。
+        // wrapper（prosemirror-tables TableView 生成的 DIV.tableWrapper）无原生内联样式，
+        // 直接整体替换即可；拼接 DOM 现有样式会把上一轮 margin-bottom 烘焙进新装饰，
+        // 字符串逐轮增长导致每次事务都多一次冗余 dispatch。
         const idx = froms.indexOf(tpos)
         if (idx < 0) continue
         if (tpos < 1 || tpos + nodes[idx].nodeSize > docSize) continue
-        const oldStyle = (children[idx].getAttribute('style') || '').replace(/;\s*$/, '')
         decos.push(
           Decoration.node(tpos, tpos + nodes[idx].nodeSize, {
-            style: (oldStyle ? oldStyle + ';' : '') + 'margin-bottom: ' + pad + 'px',
+            style: 'margin-bottom: ' + pad + 'px',
             class: 'pg-brk-table',
           }),
         )

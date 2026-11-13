@@ -1,5 +1,30 @@
 import { Schema } from 'prosemirror-model'
 
+/**
+ * 单元格节点的内联样式（与 table_cell.toDOM 完全同源的唯一真相源）。
+ * 分页引擎（pagination.ts）为跨页表格生成逐格边框装饰时也用它重建基础样式：
+ * 装饰样式绝不能读 DOM（DOM 已含上一轮装饰 → 旧值被永久烘焙、无法撤销），
+ * 必须从节点属性重建 —— 这里就是那个“从节点属性重建”的入口。
+ * 支持四边独立边框编码 borders（上/右/下/左，'1'=有线 '0'=无线）与 borderColor。
+ */
+export function cellDomStyle(node: any): string {
+  const enc: string = node.attrs.borders || ''
+  const sides: boolean[] = enc.length === 4 ? enc.split('').map(ch => ch === '1') : [true, true, true, true]
+  const color = node.attrs.borderColor || '#cbd5e1'
+  const bw = node.attrs.borderW
+  const line = `${bw && bw > 0 ? bw + 'pt' : '1px'} solid ${color}`
+  const s: string[] = [
+    sides[0] ? `border-top: ${line}` : 'border-top: none',
+    sides[1] ? `border-right: ${line}` : 'border-right: none',
+    sides[2] ? `border-bottom: ${line}` : 'border-bottom: none',
+    sides[3] ? `border-left: ${line}` : 'border-left: none',
+    'padding: 6px 10px',
+    `vertical-align: ${node.attrs.vAlign || 'top'}`,
+  ]
+  if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
+  return s.join('; ')
+}
+
 // ProseMirror schema - 完整排版支持，对标 MS Word 核心功能
 export const schema = new Schema({
   nodes: {
@@ -247,21 +272,7 @@ export const schema = new Schema({
       },
       toDOM: (node) => {
         const tag = node.attrs.isHeader ? 'th' : 'td'
-        const enc: string = node.attrs.borders || ''
-        const sides: boolean[] = enc.length === 4 ? enc.split('').map(ch => ch === '1') : [true, true, true, true]
-        const color = node.attrs.borderColor || '#cbd5e1'
-        const bw = node.attrs.borderW
-        const line = `${bw && bw > 0 ? bw + 'pt' : '1px'} solid ${color}`
-        const s: string[] = [
-          sides[0] ? `border-top: ${line}` : 'border-top: none',
-          sides[1] ? `border-right: ${line}` : 'border-right: none',
-          sides[2] ? `border-bottom: ${line}` : 'border-bottom: none',
-          sides[3] ? `border-left: ${line}` : 'border-left: none',
-          'padding: 6px 10px',
-          `vertical-align: ${node.attrs.vAlign || 'top'}`,
-        ]
-        if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
-        const attrs: any = { style: s.join('; ') }
+        const attrs: any = { style: cellDomStyle(node) }
         if (node.attrs.colspan > 1) attrs.colspan = node.attrs.colspan
         if (node.attrs.rowspan > 1) attrs.rowspan = node.attrs.rowspan
         return [tag, attrs, 0]
