@@ -18,7 +18,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.6.2'
+const APP_VERSION = 'v0.6.3'
 
 // 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
 type SheetData = {
