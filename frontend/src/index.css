@@ -977,14 +977,17 @@ table td, table th {
 /* === 表格 NodeView（对齐 MS Word）===
  * wrapper 相对定位：承载左上角全选手柄。
  * 手柄悬停表格时出现（Word 行为），点击全选整个表格（CellSelection）。
- * 表格被选中（存在 selectedCell）时手柄保持可见，便于再次操作。 */
+ * 表格被选中（存在 selectedCell）时手柄保持可见，便于再次操作。
+ * 手柄位置：部分重叠表格左上角（约半格在外半格在内）——鼠标从表格内部移向手柄
+ * 的路径连续覆盖，不会在越过 wrapper 边界瞬间消失（修复"移动上去就消失"）；
+ * 悬停手柄本身经 DOM 祖先链维持 wrapper:hover；JS 另按几何判定（pm-shown，180ms 宽限 + 左上角 26px 热区）。*/
 .ProseMirror .tableWrapper {
   position: relative;
 }
 .ProseMirror .tableWrapper .pm-table-handle {
   position: absolute;
-  left: -18px;
-  top: -16px;
+  left: -9px;
+  top: -1px;
   width: 18px;
   height: 18px;
   display: none;
@@ -1000,7 +1003,8 @@ table td, table th {
   user-select: none;
 }
 .ProseMirror .tableWrapper:hover .pm-table-handle,
-.ProseMirror .tableWrapper:has(.selectedCell) .pm-table-handle {
+.ProseMirror .tableWrapper:has(.selectedCell) .pm-table-handle,
+.ProseMirror .pm-table-handle.pm-shown {
   display: flex;
 }
 /* Table selected cell outline */

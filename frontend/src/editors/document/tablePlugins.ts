@@ -72,6 +72,7 @@ export class DocTableView {
   colgroup: HTMLElement
   view: EditorView
   getPos: () => number | undefined
+  private destroyFn: (() => void) | null = null
 
   constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
     this.node = node
@@ -127,12 +128,48 @@ export class DocTableView {
     return true
   }
 
-  /** 左上角全选手柄（对齐 MS Word 表格移动手柄）：悬停表格时出现，点击全选。 */
+  /** 左上角全选手柄（对齐 MS Word 表格移动手柄）：悬停表格时出现，点击全选。
+   * 悬停稳定性（修复"移动上去就消失"）：
+   * 1. 手柄部分重叠表格左上角（CSS left/top 负值一半在表内），鼠标从表格内部移向手柄
+   *    的路径连续覆盖——悬停手柄时经 DOM 祖先链 tableWrapper:hover 依然成立，不会中途消失。
+   * 2. JS 驱动可见性（pm-shown 类挂在手柄自身）：分页装饰会整体重写 wrapper 的
+   *    class/style（pg-brk-table / margin-bottom），挂在 wrapper 上的状态类会被冲掉导致
+   *    闪烁——手柄自身类不受装饰影响。document mousemove 按表格包围盒判定：
+   *    在表内或左上角 26px 热区 → 显示；离开 → 180ms 宽限后隐藏（鼠标斜向移动不闪烁）。 */
   private attachHandle() {
     const h = document.createElement('div')
     h.className = 'pm-table-handle'
     h.setAttribute('contenteditable', 'false')
+    h.setAttribute('title', '点击全选表格')
     h.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 0 L8 2.2 H4 Z M6 12 L4 9.8 H8 Z M0 6 L2.2 4 V8 Z M12 6 L9.8 8 V4 Z" fill="currentColor"/><rect x="4.6" y="4.6" width="2.8" height="2.8" fill="currentColor"/></svg>'
+    // JS 悬停管理：宽限期隐藏，悬停手柄即续期
+    let hideTimer = 0
+    const show = () => {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0 }
+      h.classList.add('pm-shown')
+    }
+    const scheduleHide = () => {
+      if (hideTimer) clearTimeout(hideTimer)
+      hideTimer = window.setTimeout(() => { hideTimer = 0; h.classList.remove('pm-shown') }, 180)
+    }
+    this.dom.addEventListener('mouseenter', show)
+    this.dom.addEventListener('mouseleave', scheduleHide)
+    h.addEventListener('mouseenter', show)
+    h.addEventListener('mouseleave', scheduleHide)
+    // document 级兜底：wrapper class 被装饰重写/重建时 hover 判定仍可靠（按几何而非类名）
+    const onDocMove = (e: MouseEvent) => {
+      const r = this.table.getBoundingClientRect()
+      const inTable = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+      // 左上角热区：容忍鼠标在表格外侧朝手柄移动
+      const inCorner = e.clientX >= r.left - 26 && e.clientX <= r.left + 26 && e.clientY >= r.top - 26 && e.clientY <= r.top + 26
+      if (inTable || inCorner) show()
+      else if (h.classList.contains('pm-shown')) scheduleHide()
+    }
+    window.document.addEventListener('mousemove', onDocMove)
+    this.destroyFn = () => {
+      window.document.removeEventListener('mousemove', onDocMove)
+      if (hideTimer) clearTimeout(hideTimer)
+    }
     h.addEventListener('mousedown', (e) => {
       e.preventDefault()
       e.stopPropagation()
@@ -162,7 +199,10 @@ export class DocTableView {
     this.dom.appendChild(h)
   }
 
-  destroy() { /* 手柄随 dom 一起移除 */ }
+  destroy() {
+    // 清理 document 级 mousemove 监听（手柄悬停兜底），避免节点删除后泄漏
+    if (this.destroyFn) { this.destroyFn(); this.destroyFn = null }
+  }
 }
 
 // ============ 边框拖拽调列宽/行高 ============

@@ -140,6 +140,9 @@ function createTrailingParagraphPlugin() {
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
     <button onClick={onClick} disabled={disabled} title={title || label} {...rest}
+      // 对齐 MS Office：点击功能区按钮不夺走编辑器焦点（防止原生选区被浏览器折叠、
+      // ProseMirror DOMObserver 把 CellSelection 压塌成光标 —— 表格全选后点功能区丢选区的根因）
+      onMouseDown={(e: any) => { if (!disabled) e.preventDefault() }}
       className="flex flex-col items-center justify-center gap-0.5 px-1.5 py-1 rounded-md transition-colors min-w-[44px] disabled:opacity-40"
       style={{ background: active ? 'var(--color-primary-light)' : 'transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)' }}
       onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.background = 'var(--color-bg-alt)' }}
@@ -654,6 +657,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const pageRef = useRef<HTMLDivElement>(null)
   const sheetsLayerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  // 标记当前是否处于 PM DOMObserver.flush 调用栈内（用于识别 Chromium 回卷选区后的伪同步事务）
+  const inDomObserverFlushRef = useRef(false)
   // 当前选区是否包含可选中文本（用于右键菜单复制/剪切的可用态）
   const hasSelection = () => {
     const v = viewRef.current
@@ -1534,6 +1539,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         table: (node: any, view: any, getPos: any) => new DocTableView(node, view, getPos),
       },
       dispatchTransaction(tr) {
+        const prevSel = view.state.selection
+        // === 修复“全选表格后选择状态莫名丢失”：拦截 DOMObserver 源的 CellSelection 压塌 ===
+        // Chromium 在选区内有节点变动（分页装饰 / 拼写装饰重渲染）时会自行回卷 DOM 选区，
+        // PM 的 DOMObserver.flush 忠实同步这个回卷结果 —— 把活的 CellSelection 压塌成光标
+        // （特征：docChanged=false、selectionSet、meta 为空、来自 flush 调用栈）。
+        // 仅对从 flush 栈内派发的这类事务恢复原选区；用户主动操作（Esc/点空白/点其它单元格）
+        // 不经过 flush 栈，不受影响。
+        if (inDomObserverFlushRef.current && tr.selectionSet && !tr.docChanged &&
+            (tr as any).getMeta('pointer') === undefined && (tr as any).getMeta('app') === undefined && Object.keys((tr as any).meta || {}).length === 0 &&
+            prevSel instanceof CellSelection && !(tr.selection instanceof CellSelection)) {
+          tr = tr.setSelection(prevSel)
+        }
         const ns = view.state.apply(tr); view.updateState(ns)
         // 只有真正改动了文档内容才向外 emit。
         // 拼写检查装饰、选区变化等事务 docChanged=false，若也走 emit，
@@ -1657,6 +1674,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       },
     })
     viewRef.current = view; ;(window as any).__pmView = view
+    // 包装 DOMObserver.flush：标记"伪同步事务"的调用来源（配合 dispatchTransaction 恢复被压塌的 CellSelection）
+    try {
+      const dv = view as any
+      if (dv?.domObserver?.flush) {
+        const origFlush = dv.domObserver.flush.bind(dv.domObserver)
+        dv.domObserver.flush = (...args: any[]) => {
+          inDomObserverFlushRef.current = true
+          try { return origFlush(...args) } finally { inDomObserverFlushRef.current = false }
+        }
+      }
+    } catch { /* 旧版本 PM 无 domObserver 时跳过 */ }
     try { setFootnotes(extractFootnotes(doc)) } catch (e) { /* ignore */ }
     try { setComments(extractComments(doc)) } catch (e) { /* ignore */ }
     lastEmittedRef.current = document
@@ -1743,12 +1771,29 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   // 表格工具栏状态兜底同步：点击表格外的空白区/页边距时 DOM 选区变化不产生 PM 事务，
   // inTable 会卡在 true —— 用户看到的“表格编辑模式无法退出”。监听 selectionchange 刷新。
   // 注意：组件内 document 被 props.document（UDM 文档）遮蔽，必须用 window.document。
+  // 加固：编辑器失焦（如点击功能区/工具栏）时浏览器可能折叠 DOM 选区，但 PM 状态里的
+  // 表格选区（CellSelection）依然有效 —— 此时保持工具栏，对齐 Word“全选表格后点功能区
+  // 仍保持全选”。仅当 PM 选区也不再指向表格时才清 inTable。
   useEffect(() => {
     const onSelChange = () => {
-      const pmDom = viewRef.current?.dom as HTMLElement | undefined
+      const v = viewRef.current
+      const pmDom = v?.dom as HTMLElement | undefined
       if (!pmDom) return
       const anchor = window.getSelection()?.anchorNode
-      if (!anchor || !pmDom.contains(anchor)) { setInTable(false); return }
+      if (!anchor || !pmDom.contains(anchor)) {
+        const sel = v!.state.selection as any
+        let stillTable = false
+        try {
+          if (sel && sel.$anchorCell && sel.$headCell) stillTable = true
+          else if (sel && sel.$from) {
+            for (let d = sel.$from.depth; d > 0; d--) {
+              if (sel.$from.node(d).type.name === 'table') { stillTable = true; break }
+            }
+          }
+        } catch { /* ignore */ }
+        if (!stillTable) setInTable(false)
+        return
+      }
       const el = anchor.nodeType === 1 ? (anchor as HTMLElement) : anchor.parentElement
       setInTable(!!el?.closest?.('table'))
     }
@@ -3457,7 +3502,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
 
       {/* 表格工具栏 */}
       {inTable && (
-        <div className="px-3 py-1 flex items-center gap-1 flex-shrink-0 animate-fade-in" style={{ background: 'var(--color-primary-light)', borderBottom: '1px solid var(--color-border)' }}>
+        <div className="px-3 py-1 flex items-center gap-1 flex-shrink-0 animate-fade-in" style={{ background: 'var(--color-primary-light)', borderBottom: '1px solid var(--color-border)' }}
+          // 对齐 MS Office：点击表格工具栏（含边框/自动调整下拉）不夺走编辑器焦点。
+          // 否则浏览器折叠原生选区、PM DOMObserver 同步后 CellSelection 被清 ——
+          // “全选表格后点边框，选择状态消失且边框不生效”的根因。
+          // input/select/textarea 需要真实焦点行为，跳过。
+          onMouseDown={(e: any) => { const t = e.target as HTMLElement; if (!t.closest?.('input, select, textarea')) e.preventDefault() }}>
           <span className="text-xs font-medium px-2" style={{ color: 'var(--color-primary)' }}>{t('doc.tableTools')}</span>
           <button onClick={() => mergeCells(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.merge')} type="button">⊟</button>
           <button onClick={() => splitCell(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.split')} type="button">⊞</button>
@@ -3594,7 +3644,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         return (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setShowContextMenu(false)} />
-          <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: cx, top: cy, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}>
+          <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: cx, top: cy, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}
+          // 右键菜单项同样不夺走编辑器焦点：保持选区高亮与 CellSelection（对齐 MS Office）
+          onMouseDown={(e: any) => { if (!(e.target as HTMLElement).closest?.('input, select, textarea')) e.preventDefault() }}>
             <button onClick={() => exec('undo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↶ {t('doc.undo')}</button>
             <button onClick={() => exec('redo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↷ {t('doc.redo')}</button>
             <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />

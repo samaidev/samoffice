@@ -1,9 +1,14 @@
-; SamOffice 安装包脚本（Inno Setup 6.3+ / 7.x）
+﻿; SamOffice 安装包脚本（Inno Setup 6.3+ / 7.x）
 ; 版本号可由 CI 注入：iscc /DMyAppVersion=0.5.0 packaging/windows/SamOffice.iss
 ; 未注入时使用默认值。路径全部相对仓库根，本地/CI 通用。
 ; 安装界面支持英文/简体中文；默认安装到用户目录，装完创建桌面快捷方式
+;
+; 首页双语（对齐用户要求）：跳过 Inno 内建语言选择对话框（单语言），
+; 直接在欢迎页（安装引导首页）同时呈现中英文案 + 语言单选钮；
+; 选定语言后若与当前语言不同，则以 /LANG 重启安装程序，其余页面均为单一语言。
+; 注意：本文件含中文字符串字面量，必须保存为 UTF-8 with BOM（ISCC 按 BOM 识别编码）。
 #ifndef MyAppVersion
-#define MyAppVersion "0.6.0"
+#define MyAppVersion "0.5.0"
 #endif
 ; 中文语言文件路径可由 CI 注入（runner 预装的 Inno 可能缺 ChineseSimplified.isl）
 #ifndef CnMessages
@@ -28,6 +33,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
+; 首页双语：不弹内建语言对话框（其标题/按钮只有单一语言），语言选择并入双语欢迎页
+ShowLanguageDialog=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -52,3 +59,86 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 [UninstallDelete]
 ; 卸载时清理运行产生的用户数据目录（保留文档，用户数据在 文档/SamOffice 由应用管理）
 Type: files; Name: "{app}\*.log"
+
+[Code]
+var
+  RadioEn, RadioCn: TNewRadioButton;
+  SuppressExitConfirm: Boolean;
+
+// 双语欢迎标题/正文 + 语言单选钮（首页唯一会出现双语的页面，选定语言后其余页面单语言）
+procedure InitializeWizard();
+begin
+  WizardForm.WelcomeLabel1.Caption :=
+    'Welcome to the SamOffice Setup Wizard' #13#10
+    '欢迎安装 SamOffice 向导';
+  WizardForm.WelcomeLabel2.WordWrap := True;
+  WizardForm.WelcomeLabel2.Caption :=
+    'This wizard will install SamOffice {#MyAppVersion} on your computer.' #13#10
+    'It is recommended that you close all other applications before continuing. '
+    'Click Next to continue, or Cancel to exit Setup.' #13#10#13#10
+    '安装向导将在您的电脑上安装 SamOffice {#MyAppVersion}。' #13#10
+    '建议在继续之前关闭所有其他程序。点击"下一步"继续，或点击"取消"退出安装。';
+
+  RadioEn := TNewRadioButton.Create(WizardForm);
+  RadioEn.Parent := WizardForm.WelcomePage;
+  RadioEn.Left := WizardForm.WelcomeLabel2.Left;
+  RadioEn.Width := ScaleX(280);
+  RadioEn.Top := WizardForm.WelcomePage.ClientHeight - ScaleY(84);
+  RadioEn.Caption := 'English';
+  RadioEn.Checked := (ActiveLanguage = 'english');
+
+  RadioCn := TNewRadioButton.Create(WizardForm);
+  RadioCn.Parent := WizardForm.WelcomePage;
+  RadioCn.Left := RadioEn.Left;
+  RadioCn.Width := RadioEn.Width;
+  RadioCn.Top := RadioEn.Top + RadioEn.Height + ScaleY(8);
+  RadioCn.Caption := '简体中文 (Simplified Chinese)';
+  RadioCn.Checked := (ActiveLanguage = 'chinese');
+
+  // 首页按钮双语（离开首页后由 CurPageChanged 恢复单语言）
+  WizardForm.NextButton.Caption := 'Next >  下一步 >';
+  WizardForm.NextButton.Width := ScaleX(150);
+  WizardForm.CancelButton.Caption := 'Cancel  取消';
+  WizardForm.CancelButton.Width := ScaleX(120);
+end;
+
+// 离开首页后恢复当前语言的单一语言按钮标题
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID <> wpWelcome then
+  begin
+    WizardForm.NextButton.Caption := SetupMessage(msgButtonNext);
+    WizardForm.NextButton.Width := WizardForm.BackButton.Width;
+    WizardForm.CancelButton.Caption := SetupMessage(msgButtonCancel);
+    WizardForm.CancelButton.Width := WizardForm.BackButton.Width;
+  end;
+end;
+
+// 用户点了 Cancel：重启流程需要无确认直接关闭
+function CancelButtonClick(CurPageID: Integer; var Confirm: Boolean): Boolean;
+begin
+  Confirm := not SuppressExitConfirm;
+  SuppressExitConfirm := False;
+  Result := True;
+end;
+
+// 首页点"下一步"：所选语言与当前语言不同 → 以 /LANG 重启安装程序（其余页面即为该单一语言）
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Chosen, Params: String;
+  R: Integer;
+begin
+  Result := True;
+  if CurPageID = wpWelcome then
+  begin
+    if RadioCn.Checked then Chosen := 'chinese' else Chosen := 'english';
+    if Chosen <> ActiveLanguage then
+    begin
+      Params := '/LANG=' + Chosen;
+      SuppressExitConfirm := True;
+      Exec(ExpandConstant('{srcexe}'), Params, ExpandConstant('{src}'), SW_SHOW, ewNoWait, R);
+      Result := False;
+      WizardForm.Close;
+    end;
+  end;
+end;
