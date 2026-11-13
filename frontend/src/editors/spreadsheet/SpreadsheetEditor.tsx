@@ -526,7 +526,8 @@ function cellValue(data: Record<string, Cell>, ref: string): number | string {
   const r = parseInt(m[2], 10) - 1
   const cell = data[`${r}-${c}`]
   if (!cell) return 0
-  const v = (cell.value ?? '').trim()
+  // String() 防护：异常类型（如历史遗留的数组 value）不再 .trim() 抛错导致渲染崩溃
+  const v = (cell.value == null ? '' : String(cell.value)).trim()
   if (v === '') return 0
   const n = Number(v)
   return isNaN(n) ? v : n
@@ -604,10 +605,12 @@ function evalFormula(expr: string, data: Record<string, Cell>): number | string 
   expr = expr.trim()
   if (expr.startsWith('=')) expr = expr.slice(1)
   if (expr === '') return ''
-  const tokens = tokenize(expr)
-  let i = 0
-  const peek = () => tokens[i]
-  const next = () => tokens[i++]
+  try {
+    // tokenize 纳入 try：任何解析阶段异常统一返回 #ERROR，绝不让错误公式抛到渲染层导致前端崩溃
+    const tokens = tokenize(expr)
+    let i = 0
+    const peek = () => tokens[i]
+    const next = () => tokens[i++]
 
   function parseRangeRef(): { kind: 'ref' | 'range'; a: string; b?: string } {
     const a = next()
@@ -672,8 +675,10 @@ function evalFormula(expr: string, data: Record<string, Cell>): number | string 
     }
     return left
   }
-  try {
-    const res = parseAddSub()
+  let res = parseAddSub()
+    // 顶层区间引用（如 =A1:B2）返回数组：收拢为标量（单元素取该值，多元素取首格）。
+    // 否则数组对象会被存进 cell.value，后续 .trim()/重算引用比较都会炸（前端崩溃红屏根因）
+    if (Array.isArray(res)) res = res.length === 1 ? res[0] : (res.length ? res[0] : 0)
     return typeof res === 'number' && !isFinite(res) ? '#ERROR' : res
   } catch {
     return '#ERROR'
@@ -992,7 +997,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 数字格式化显示（只影响显示，不改存储值；与后端 xlsx fmt token 对应）
   const fmtDisplay = (cell: Cell): string => {
     // 统一走数字格式引擎：兼容历史 token（percent/currency/…）与新原生格式串（#,##0.00/0%/日期…）
-    return applyNumFmt(cell.value ?? '', cell.fmt)
+    // String() 防护：异常类型（如历史遗留的数组 value）不再让格式引擎抛错导致渲染崩溃
+    return applyNumFmt(cell.value == null ? '' : String(cell.value), cell.fmt)
   }
   const setCell = (r: number, c: number, value: string) => {
     pushHistory()
@@ -1010,28 +1016,35 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   // 数据变化时重算所有公式单元格的显示值（不改字体色，仅更新 value）
   useEffect(() => {
-    let changed = false
-    const next: Record<string, Cell> = {}
-    for (const key of Object.keys(data)) {
-      const cell = data[key]
-      if (cell.formula) {
-        const res = evalFormula(cell.formula, data)
-        const sres = res === '' ? '' : (typeof res === 'number' ? String(res) : res)
-        // 重算保护：求值结果为 #NAME?/#ERROR 等错误值且单元格已有缓存显示值时，
-        // 不改写 value（保留原显示值，避免覆盖后端算好的结果）
-        if (typeof sres === 'string' && sres.startsWith('#') && cell.value !== '') {
-          next[key] = cell
-        } else if (sres !== cell.value) {
-          next[key] = { ...cell, value: sres }
-          changed = true
+    // 兜底防护：公式求值任何异常都不允许冒泡到渲染层（否则 React 触发 ErrorBoundary 红屏崩溃）
+    try {
+      let changed = false
+      const next: Record<string, Cell> = {}
+      for (const key of Object.keys(data)) {
+        const cell = data[key]
+        if (cell.formula) {
+          const res = evalFormula(cell.formula, data)
+          // 统一字符串化：数组/对象等一律转字符串。此前直接存数组对象，
+          // 引用比较 sres !== cell.value 恒成立 → 无限重算；且数组 value 会让下游 .trim() 崩溃
+          const sres = res === '' ? '' : String(res)
+          // 重算保护：求值结果为 #NAME?/#ERROR 等错误值且单元格已有缓存显示值时，
+          // 不改写 value（保留原显示值，避免覆盖后端算好的结果）
+          if (sres.startsWith('#') && cell.value !== '') {
+            next[key] = cell
+          } else if (sres !== cell.value) {
+            next[key] = { ...cell, value: sres }
+            changed = true
+          } else {
+            next[key] = cell
+          }
         } else {
           next[key] = cell
         }
-      } else {
-        next[key] = cell
       }
+      if (changed) setData(next)
+    } catch (err) {
+      console.error('formula recalc failed', err)
     }
-    if (changed) setData(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
   // === 多区域选择（对齐 MS Excel）：主选区 selection + 附加区域 extraAreas ===
@@ -1423,8 +1436,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         const cell = nd[key]
         if (!cell.formula) continue
         const res = evalFormula(cell.formula, d)
-        const sres = res === '' ? '' : (typeof res === 'number' ? String(res) : res)
-        if (typeof sres === 'string' && sres.startsWith('#') && cell.value !== '') continue
+        // 统一字符串化（同自动重算）：避免数组/对象引用比较导致无限重算
+        const sres = res === '' ? '' : String(res)
+        if (sres.startsWith('#') && cell.value !== '') continue
         if (sres !== cell.value) { nd[key] = { ...cell, value: sres }; changed = true }
       }
       return changed ? nd : d
@@ -2622,6 +2636,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 transition-colors cursor-pointer select-none`}
                   style={{ zIndex: filterMenuCol === c ? 45 : 10, background: colSel ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
                   onMouseDown={e => {
+                    // 右键/中键不改变列选区（Excel 行为，防止右键撤销已选列）
+                    if (e.button !== 0) return
                     // 对齐 MS Excel：Ctrl+点击 追加/取消列选区（可拖拽扩展）；Shift+点击 从锚点扩展
                     if (e.ctrlKey || e.metaKey) {
                       e.preventDefault()
@@ -2702,6 +2718,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow ? 'sticky z-30' : ''}`}
                   style={{ background: rowInAnyArea(r) ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
                   onMouseDown={e => {
+                    // 右键/中键不改变行选区（Excel 行为，防止右键撤销已选行）
+                    if (e.button !== 0) return
                     // 对齐 MS Excel：Ctrl+点击 追加/取消行选区；Shift+点击 从锚点扩展；按下拖动连续多选
                     if (e.ctrlKey || e.metaKey) {
                       e.preventDefault()
@@ -2801,6 +2819,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                       boxShadow: shadowParts.length ? shadowParts.join(', ') : undefined,
                     }}
                       onMouseDown={e => {
+                        // 对齐 MS Excel：右键/中键不改变选区——右键落在选区内保留整个选区（含多区域），
+                        // 落在选区外由 onContextMenu 把选区移到该格。左键以下逻辑照常。
+                        if (e.button !== 0) return
                         // 公式引用点选：编辑以 = 开头的内容时，点击单元格插入其引用（Excel 行为）
                         if (refModeActive) { e.preventDefault(); insertCellRef(r, c, e.shiftKey || !!refDragRef.current); return }
                         // 对齐 MS Excel：Ctrl+点击 追加/取消选区，Ctrl+拖拽 框选新区域
