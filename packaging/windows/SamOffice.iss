@@ -68,6 +68,9 @@ var
 // 双语欢迎标题/正文 + 语言单选钮（首页唯一会出现双语的页面，选定语言后其余页面单语言）
 procedure InitializeWizard();
 begin
+  WizardForm.WelcomeLabel1.WordWrap := True;
+  WizardForm.WelcomeLabel1.AutoSize := False;
+  WizardForm.WelcomeLabel1.Height := ScaleY(56);
   WizardForm.WelcomeLabel1.Caption :=
     'Welcome to the SamOffice Setup Wizard' + #13#10 +
     '欢迎安装 SamOffice 向导';
@@ -114,12 +117,14 @@ begin
   end;
 end;
 
-// 用户点了 Cancel：重启流程需要无确认直接关闭
-function CancelButtonClick(CurPageID: Integer; var Confirm: Boolean): Boolean;
+// 用户点了 Cancel：重启流程需要无确认直接关闭（Confirm=False 跳过"退出安装?"确认框）
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
-  Confirm := not SuppressExitConfirm;
-  SuppressExitConfirm := False;
-  Result := True;
+  if SuppressExitConfirm then
+  begin
+    Confirm := False;
+    SuppressExitConfirm := False;
+  end;
 end;
 
 // 首页点"下一步"：所选语言与当前语言不同 → 以 /LANG 重启安装程序（其余页面即为该单一语言）
