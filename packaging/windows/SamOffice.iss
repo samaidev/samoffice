@@ -69,15 +69,15 @@ var
 procedure InitializeWizard();
 begin
   WizardForm.WelcomeLabel1.Caption :=
-    'Welcome to the SamOffice Setup Wizard' #13#10
+    'Welcome to the SamOffice Setup Wizard' + #13#10 +
     '欢迎安装 SamOffice 向导';
   WizardForm.WelcomeLabel2.WordWrap := True;
   WizardForm.WelcomeLabel2.Caption :=
-    'This wizard will install SamOffice {#MyAppVersion} on your computer.' #13#10
-    'It is recommended that you close all other applications before continuing. '
-    'Click Next to continue, or Cancel to exit Setup.' #13#10#13#10
-    '安装向导将在您的电脑上安装 SamOffice {#MyAppVersion}。' #13#10
-    '建议在继续之前关闭所有其他程序。点击"下一步"继续，或点击"取消"退出安装。';
+    'This wizard will install SamOffice {#MyAppVersion} on your computer.' + #13#10 +
+    'It is recommended that you close all other applications before continuing. ' +
+    'Click Next to continue, or Cancel to exit Setup.' + #13#10#13#10 +
+    '安装向导将在您的电脑上安装 SamOffice {#MyAppVersion}。' + #13#10 +
+    '建议在继续之前关闭所有其他程序。点击下一步继续，或点击取消退出安装。';
 
   RadioEn := TNewRadioButton.Create(WizardForm);
   RadioEn.Parent := WizardForm.WelcomePage;
