@@ -189,7 +189,9 @@ func (BulletList) BlockType() string { return "bulletList" }
 type Table struct {
         Rows  [][]TableCell `json:"rows"`
         Width []float64     `json:"width,omitempty"`
-        Style string        `json:"style,omitempty"`
+        // RowHeights 为行高（px，最小高度语义）：前端拖拽行边框后固化，docx 导出为 w:trHeight。
+        RowHeights []float64 `json:"rowHeights,omitempty"`
+        Style      string    `json:"style,omitempty"`
         // Border 为表格边框线宽（点，pt）。<=0 表示未解析到，由前端回退到默认 1px。
         Border float64 `json:"border,omitempty"`
 }

@@ -74,7 +74,10 @@ export interface BulletList {
 
 export interface Table {
   rows: TableCell[][]
+  /** 列宽（px 权重，按内容区宽归一化）：拖拽列边框/自动调整后固化，保存与 docx 往返 */
   width?: number[]
+  /** 行高（px，最小高度语义）：拖拽行边框后固化，保存与 docx 往返 */
+  rowHeights?: number[]
   style?: string
 }
 

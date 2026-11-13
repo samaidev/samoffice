@@ -719,8 +719,15 @@ func renderTable(sb *strings.Builder, t *core.Table, images map[string]*embedIma
         emitContinue := func(col int) {
                 fmt.Fprintf(sb, `<w:tc><w:tcPr><w:tcW w:w="%d" w:type="dxa"/><w:vMerge/></w:tcPr><w:p/></w:tc>`, gridW[col])
         }
-        for _, row := range t.Rows {
+        // 行高（前端拖拽行边框固化 / AutoFit）：px → twips（1px = 15 twips @96DPI），
+        // 输出 w:trHeight（hRule 缺省 atLeast，与前端 tr 最小高度语义一致）。
+        // 注意 trPr 必须是 w:tr 的第一个子元素。
+        for ri, row := range t.Rows {
                 sb.WriteString("<w:tr>")
+                if len(t.RowHeights) > ri && t.RowHeights[ri] > 0 {
+                        hTwips := int(t.RowHeights[ri] * 15)
+                        fmt.Fprintf(sb, `<w:trPr><w:trHeight w:val="%d"/></w:trPr>`, hTwips)
+                }
                 col := 0
                 for _, c := range row {
                         for col < cols && pending[col] > 0 {

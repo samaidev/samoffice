@@ -113,7 +113,13 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
     }
     case 'table': {
       const tb = b as any
-      const cellToPM = (cell: any) => {
+      // UDM width[]（列宽权重，px）→ colwidth：归一化到 NOMINAL_CONTENT_W px 后
+      // 写入首行对应网格列的单元格（跨列单元格取跨越列之和）。行高同理映射 rowHeights[]。
+      const widths: number[] = Array.isArray(tb.width) ? tb.width.map((w: any) => Number(w) || 0) : []
+      const rowHeights: number[] = Array.isArray(tb.rowHeights) ? tb.rowHeights.map((h: any) => Number(h) || 0) : []
+      const wSum = widths.reduce((a, w) => a + w, 0)
+      const NOMINAL_CONTENT_W = 650 // A4 内容区近似宽（px），仅当 UDM 带权重列宽时用于归一化
+      const cellToPM = (cell: any, rowIdx: number, colStart: number) => {
         let content: Node[]
         if (cell.blocks && cell.blocks.length) {
           content = cell.blocks.map((ib: Block) => blockToPM(ib, schema, comments))
@@ -122,11 +128,19 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
         } else {
           content = [schema.node('paragraph', {})]
         }
+        const cs = cell.colSpan || 1
+        let colwidth: number | null = null
+        if (wSum > 0) {
+          let w = 0
+          for (let k = 0; k < cs; k++) w += (widths[colStart + k] || 0)
+          if (w > 0) colwidth = Math.max(1, Math.round((w / wSum) * NOMINAL_CONTENT_W))
+        }
         return schema.node(
           'table_cell',
           {
-            colspan: cell.colSpan || 1,
+            colspan: cs,
             rowspan: cell.rowSpan || 1,
+            colwidth,
             align: cell.align || '',
             vAlign: (cell as any).vAlign || '',
             isHeader: !!cell.isHeader,
@@ -139,9 +153,18 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
       }
       const rows = (tb.rows || [])
         .filter((row: any[]) => row && row.length > 0)
-        .map((row: any[]) =>
-          schema.node('table_row', {}, row.map(cellToPM)),
-        )
+        .map((row: any[], rowIdx: number) => {
+          // 跟踪每行起始网格列（考虑 rowspan 占位）：简化处理 —— 用列累加器
+          // （本实现假设无跨行的复杂场景；rowspan 场景下 colwidth 仅作用于首行）
+          let colStart = 0
+          const cells = row.map((cell: any) => {
+            const n = cellToPM(cell, rowIdx, colStart)
+            colStart += (cell.colSpan || 1)
+            return n
+          })
+          const h = Math.round(rowHeights[rowIdx] || 0)
+          return schema.node('table_row', { height: h > 0 ? h : 0 }, cells)
+        })
       return schema.node('table', { align: tb.align || '' }, rows)
     }
     default:
@@ -323,27 +346,51 @@ function pmToBlock(node: Node): Block | null {
     case 'table': {
       // 单元格内容是 block+（段落），必须逐块序列化；此前误用 pmToInline
       // 导致单元格文字全部丢失（inline: []），保存重开后表格变成空表。
-      const rows = node.children.map((row: any) =>
-        row.children.map((cell: any) => {
+      // 列宽/行高：网格列宽取自首行各单元格 colwidth 之和（跨列均摊），
+      // 以 px 写入 UDM width[]（docx 写器按相对权重归一化到内容区宽，比例保持）；
+      // 仅当全部首行格都有 colwidth 时才输出 width，避免半定义状态。
+      const gridRows: { cells: any[]; gridCols: number }[] = node.children.map((row: any) => {
+        const cells: any[] = []
+        let c = 0
+        row.children.forEach((cell: any) => {
           const blocks: Block[] = []
           cell.forEach((cc: Node) => {
             const b = pmToBlock(cc)
             if (b) blocks.push(b)
           })
-          return {
+          const cs = (cell.attrs.colspan as number) || 1
+          cells.push({
             blocks: blocks.length ? blocks : [{ inline: [] }],
-            colSpan: (cell.attrs.colspan as number) || 1,
+            colSpan: cs,
             rowSpan: (cell.attrs.rowspan as number) || 1,
+            colwidth: Number(cell.attrs.colwidth) || 0,
             align: (cell.attrs.align as string) || '',
             vAlign: (cell.attrs.vAlign as string) || '',
             isHeader: !!cell.attrs.isHeader,
             borders: (cell.attrs.borders as string) || undefined,
             borderColor: (cell.attrs.borderColor as string) || undefined,
             borderW: (cell.attrs.borderW as number) || undefined,
-          } as any
-        }),
+          })
+          c += cs
+        })
+        return { cells, gridCols: c }
+      })
+      const cols = Math.max(0, ...gridRows.map((r) => r.gridCols))
+      const firstRow = gridRows[0]?.cells || []
+      const allW = cols > 0 && firstRow.length > 0 && firstRow.every((c: any) => (c.colwidth || 0) > 0)
+      const width = allW
+        ? firstRow.map((c: any) => Math.round(c.colwidth))
+        : undefined
+      const rowHeights = node.children
+        .map((row: any) => Math.round(Number((row.attrs as any)?.height) || 0))
+      const hasHeights = rowHeights.some((h) => h > 0)
+      const rows = gridRows.map(({ cells, gridCols: _gc }) =>
+        cells.map(({ colwidth: _cw, ...rest }: any) => rest),
       )
-      return { rows }
+      const out: any = { rows }
+      if (width) out.width = width
+      if (hasHeights) out.rowHeights = rowHeights
+      return out
     }
     default:
       return null

@@ -13,7 +13,8 @@ import { BUILTIN_STYLES, BUILTIN_STYLE_MAP, AppStyle, StyleFormat, styleDefToFor
 import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign, setCellBorders } from './tableCommands'
-import { columnResizing, tableEditing, CellSelection, cellAround } from 'prosemirror-tables'
+import { tableEditing, CellSelection, cellAround } from 'prosemirror-tables'
+import { DocTableView, createTableDragResizePlugin, autoFitTable } from './tablePlugins'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
 import { PrintDialog } from '../../components/PrintDialog'
@@ -940,6 +941,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [watermark, setWatermark] = useState('')
   const [showMiniToolbar, setShowMiniToolbar] = useState(false)
   const [miniToolbarPos, setMiniToolbarPos] = useState({ x: 0, y: 0 })
+  // 自动调整下拉（对齐 MS Word 表格工具「自动调整」：根据内容/根据窗口/固定列宽）
+  const [showAutoFitMenu, setShowAutoFitMenu] = useState(false)
   const [showContextMenu, setShowContextMenu] = useState(false)
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
   // 右键菜单触发时，光标/点击是否落在 text_box（文本框/形状）上
@@ -1126,6 +1129,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   // ===== 页面视图（Word 式独立纸页 + 页间留白 + 内容自动顺次流到下一页）=====
   const [pageCount, setPageCount] = useState(1)
   const [bodyTop, setBodyTop] = useState(0)
+  // 收起页间空白（对齐 MS Word 双击页间空白）：true 时页面拼接，页界仅余一条细分隔线，
+  // 双击分隔线恢复。视图级状态，不随文档保存。
+  const [whiteSpaceHidden, setWhiteSpaceHidden] = useState(false)
   // 由分页引擎回报的每张纸页矩形（编辑器相对坐标），用于绘制背景纸页层，保证与内容严格对齐
   const [pageRects, setPageRects] = useState<{ top: number; height: number }[]>([])
   // 分页引擎回报的真实内容底部（内容盒坐标系）：纸张层据此裁掉尾部无内容纸，
@@ -1133,13 +1139,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [contentMaxY, setContentMaxY] = useState(0)
   const pageContentPerPage = Math.max(50, pageHeightPx - docMargins.top - docMargins.bottom)
   const pageGap = Math.max(16, Math.round(pageHeightPx * 0.03))
-  const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100 })
-  metricsRef.current = { pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100 }
+  const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100, collapse: whiteSpaceHidden })
+  metricsRef.current = { pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100, collapse: whiteSpaceHidden }
   // 可见纸页：contentMaxY（>0 时）之后的纸页没有任何内容 —— 不渲染，
   // 避免文档尾部空段落/瞬态虚增撑出的整页空白（“文本后面大量空白页”）。
   // 过滤只裁尾部（前缀保留），脚注按页索引 footnotesByPage[i] 不受影响。
+  // collapse 模式下纸页 top 含 marginTop 偏移（页 i>0 的 top = marginTop + i*per），需先扣除。
   const visibleRects = contentMaxY > 0
-    ? pageRects.filter((r) => r.top < contentMaxY + 1)
+    ? pageRects.filter((r) => r.top - (whiteSpaceHidden ? docMargins.top : 0) < contentMaxY + 1)
     : pageRects
 
   // 容器高度随纸页与留白自动增高，避免多页文档被裁切
@@ -1183,6 +1190,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }, [document, zoom, pageSize, orientation, pageWidthPx, pageHeightPx, docMargins, showRuler, docHeader, docColumns])
 
   // 边距 / 缩放 / 分栏等影响分页的布局变化后，强制重新计算分页
+  // whiteSpaceHidden（页间空白收起/展开）改变页步长，同样需要重分页
   useEffect(() => {
     const v = viewRef.current
     if (!v) return
@@ -1190,7 +1198,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       v.dispatch(v.state.tr.setMeta('forcePaginate', true).setMeta('addToHistory', false)),
     )
     return () => cancelAnimationFrame(id)
-  }, [zoom, pageSize, orientation, docMargins, pageWidthPx, pageHeightPx, docColumns])
+  }, [zoom, pageSize, orientation, docMargins, pageWidthPx, pageHeightPx, docColumns, whiteSpaceHidden])
+
+  // 供 tablePlugins（AutoFit/拖拽）读取缩放比例：getBoundingClientRect 返回视觉像素，
+  // 布局坐标 = 视觉坐标 / (zoom/100)
+  useEffect(() => {
+    ;(window as any).__docZoom = zoom / 100
+  }, [zoom])
 
 
   useEffect(() => {
@@ -1224,7 +1238,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
           textblockTypeInputRule(/^```\s$/, schema.nodes.code_block),
         ]}),
-        columnResizing(), tableEditing(), spellCheckPlugin(), searchPlugin(),
+        tableEditing(), spellCheckPlugin(), searchPlugin(),
+        // 表格边框拖拽（对齐 MS Word）：竖直边框调列宽、水平边框调行高，
+        // 悬停边框显示 col-resize / row-resize 光标，拖拽实时跟随、松开提交事务。
+        // （columnResizing 已移除：其 TableView 由 DocTableView 接替，且它仅在首行提供
+        //   拖拽把手，与 Word「任意行边框皆可拖」的行为不一致。）
+        // zoom 经 window.__docZoom 读取（插件创建后 props 不会随 React 重渲染更新，
+        // 直接闭包捕获 zoom 会在缩放后读到旧值）。
+        createTableDragResizePlugin(() => (window as any).__docZoom || 1),
         createTableRowColSelectPlugin(), createTrailingParagraphPlugin(),
         createPaginationPlugin(() => metricsRef.current, setPageCount, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, (pages: number[]) => { blockPagesRef.current = pages; setBlockPages(pages) }),
         // 差异对比高亮（左侧：被删除段落标红），仅在并排对比时生效
@@ -1507,6 +1528,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           dom.style.display = 'none'
           return { dom, contentDOM: dom }
         },
+        // 表格 NodeView（对齐 MS Word）：div.tableWrapper > table > colgroup + tbody，
+        // 支持固定列宽（拖拽边框/AutoFit 后切 table-layout:fixed），
+        // 并承载左上角全选手柄（悬停显示、点击全选表格）。
+        table: (node: any, view: any, getPos: any) => new DocTableView(node, view, getPos),
       },
       dispatchTransaction(tr) {
         const ns = view.state.apply(tr); view.updateState(ns)
@@ -3506,6 +3531,38 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           <button onClick={() => exec('tableAlignLeft')} className="toolbar-btn" title={t('doc.tableAlignLeft') || '表格左对齐'} type="button">⟸</button>
           <button onClick={() => exec('tableAlignCenter')} className="toolbar-btn" title={t('doc.tableAlignCenter') || '表格居中'} type="button">⟺</button>
           <button onClick={() => exec('tableAlignRight')} className="toolbar-btn" title={t('doc.tableAlignRight') || '表格右对齐'} type="button">⟹</button>
+          <div className="toolbar-divider" />
+          {/* 自动调整（对齐 MS Word 表格工具「自动调整」）：根据内容/根据窗口/固定列宽 */}
+          <div className="relative">
+            <button onClick={() => setShowAutoFitMenu(v => !v)} className={`toolbar-btn ${showAutoFitMenu ? 'active' : ''}`}
+              title={t('doc.tblAutoFit') || '自动调整'} type="button">⇔</button>
+            {showAutoFitMenu && (
+              <>
+                <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={() => setShowAutoFitMenu(false)} />
+                <div className="absolute top-full left-0 mt-1 py-1.5 rounded-lg shadow-xl" style={{ zIndex: 95, background: 'var(--color-surface)', border: '1px solid var(--color-border)', width: 190 }}>
+                  {([
+                    ['content', t('doc.tblAutoFitContent') || '根据内容调整表格'],
+                    ['window', t('doc.tblAutoFitWindow') || '根据窗口调整表格'],
+                    ['fixed', t('doc.tblAutoFitFixed') || '固定列宽'],
+                  ] as [string, string][]).map(([mode, label]) => (
+                    <button key={mode} type="button"
+                      onClick={() => {
+                        const v = viewRef.current
+                        if (v) {
+                          const contentW = pageWidthPx - docMargins.left - docMargins.right
+                          autoFitTable(v, mode as 'content' | 'window' | 'fixed', contentW)
+                        }
+                        setShowAutoFitMenu(false)
+                      }}
+                      className="flex w-full items-center px-3 py-1.5 text-xs transition-colors"
+                      style={{ color: 'var(--color-text)' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-alt)' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>{label}</button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -3597,6 +3654,37 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       <div
         ref={pageRef}
         className="mx-auto animate-fade-in"
+        onDoubleClick={(e: any) => {
+          // 页间空白双击合并/分隔（对齐 MS Word）：
+          // - 常规模式：双击两页之间的空白带（页 i 内容区底 → 页 i+1 内容区顶）收起页间空白；
+          // - 收起模式：双击页界分隔线（±4px）恢复。
+          // 纸页层被上层 pm-host 覆盖，无法用独立命中区，故在容器层按坐标判定。
+          // 仅当点击落在空白带/分隔线上才生效 —— 文本块不会渲染在这些区域内，
+          // 因此不会误伤正文双击（选词）行为。
+          const pr = pageRef.current
+          if (!pr) return
+          const rect = pr.getBoundingClientRect()
+          const z = zoom / 100
+          // y = pm-host 顶坐标系（纸页层 rects[].top 同坐标系）：屏幕坐标 - pageRef 顶 - bodyTop
+          const y = (e.clientY - rect.top) / z - bodyTop
+          let hit = false
+          if (whiteSpaceHidden) {
+            // 收起模式：页 i>0 纸顶即页界分隔线（rects[i].top = marginTop + i*per）
+            for (let i = 1; i < visibleRects.length; i++) {
+              if (Math.abs(y - visibleRects[i].top) <= 4) { hit = true; break }
+            }
+            if (hit) { e.preventDefault(); e.stopPropagation(); setWhiteSpaceHidden(false) }
+          } else if (visibleRects.length >= 2) {
+            // 常规模式：空白带 = 页 i 内容区底（rects[i].top + marginTop + per）
+            //          → 页 i+1 内容区顶（rects[i+1].top + marginTop）
+            for (let i = 0; i < visibleRects.length - 1; i++) {
+              const bandTop = visibleRects[i].top + docMargins.top + pageContentPerPage
+              const bandBottom = visibleRects[i + 1].top + docMargins.top
+              if (y >= bandTop && y <= bandBottom) { hit = true; break }
+            }
+            if (hit) { e.preventDefault(); e.stopPropagation(); setWhiteSpaceHidden(true) }
+          }
+        }}
         onMouseDown={(e: any) => {
           // 点击页面空白区（页边距 / 纸页正文下方空白 / 尾页下方）：把光标放到最近可输入位置，
           // 对齐 MS Word"点击页面任意空白处即可开始输入"（修复表格后无法输入新文本的一部分场景）。
@@ -3642,8 +3730,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           {visibleRects.map((p, i) => (
             <Fragment key={i}>
               <div className={(showGridlines ? 'page-grid ' : '') + 'pg-paper'} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
-                {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾 */}
-                {(footnotesByPage[i] || []).length > 0 && (
+                {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾（收起页间空白时隐藏：页边距区已折叠） */}
+                {!whiteSpaceHidden && (footnotesByPage[i] || []).length > 0 && (
                   <div style={{
                     position: 'absolute',
                     left: docMargins.left,
@@ -3697,8 +3785,22 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   )
                 })()}
               </div>
-              {/* 每页底部页脚（富文本，解析自 docx footerN.xml / 可编辑；点击弹页脚编辑对话框） */}
-              {docFooterHF.text && (
+              {/* 收起页间空白：页界分隔线（MS Word 样式细蓝线），双击恢复页间空白
+                  （命中判定由 pageRef 的 onDoubleClick 统一处理，此层仅负责绘制） */}
+              {whiteSpaceHidden && i > 0 && (
+                <div style={{
+                  position: 'absolute',
+                  top: bodyTop + p.top,
+                  left: 0,
+                  width: pageWidthPx,
+                  height: 1,
+                  background: '#93b8dc',
+                  pointerEvents: 'none',
+                }} />
+              )}
+              {/* 每页底部页脚（富文本，解析自 docx footerN.xml / 可编辑；点击弹页脚编辑对话框）
+                  （收起页间空白时隐藏：页脚位于被折叠的下边距区内） */}
+              {docFooterHF.text && !whiteSpaceHidden && (
                 <div
                   onClick={() => setShowHFDialog({ target: 'footer' })}
                   title={t('doc.footerTitle')}
@@ -3722,8 +3824,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                   {docFooterHF.text}
                 </div>
               )}
-              {/* 每页底部页码（预览）：按真实页码填充模板 */}
-              {pageNumber?.enabled && (
+              {/* 每页底部页码（预览）：按真实页码填充模板（收起页间空白时隐藏） */}
+              {pageNumber?.enabled && !whiteSpaceHidden && (
                 <div style={{
                   position: 'absolute',
                   top: bodyTop + p.top + p.height - Math.round(docMargins.bottom * 0.55) - 8,

@@ -22,6 +22,12 @@ export function cellDomStyle(node: any): string {
     `vertical-align: ${node.attrs.vAlign || 'top'}`,
   ]
   if (node.attrs.align) s.push(`text-align: ${node.attrs.align}`)
+  // 列宽（对齐 MS Word 固定列宽模型）：colwidth 为 px 数值（数组形式仅存在于
+  // prosemirror-tables 习惯中，本项目统一用单数值 = 该单元格宽度）。
+  // 存在任一 colwidth 时表格由 table.toDOM 切换 table-layout:fixed，
+  // td width 即为硬约束（拖拽边框/自动调整写入）。
+  const cw = Number(node.attrs.colwidth) || 0
+  if (cw > 0) s.push(`width: ${Math.round(cw)}px`)
   return s.join('; ')
 }
 
@@ -240,6 +246,22 @@ export const schema = new Schema({
         if (align === 'center') { style += '; margin-left: auto; margin-right: auto' }
         else if (align === 'right') { style += '; margin-left: auto' }
         else if (align === 'left') { style += '; margin-right: auto' }
+        // 固定列宽模式（对齐 MS Word）：首行所有单元格均带 colwidth 时切换
+        // table-layout:fixed + 显式表格宽度 —— 拖拽边框/自动调整后的列宽成为硬约束，
+        // 不再随内容伸缩。未定义列宽的表格保持 auto 布局（内容自适应）。
+        if (node.childCount > 0) {
+          const firstRow = node.child(0)
+          let sum = 0
+          let allW = firstRow.childCount > 0
+          firstRow.forEach((cell: any) => {
+            const w = Number(cell.attrs.colwidth) || 0
+            if (w <= 0) allW = false
+            sum += w * (cell.attrs.colspan || 1)
+          })
+          if (allW && sum > 0) {
+            style += '; table-layout: fixed; width: ' + Math.round(sum) + 'px'
+          }
+        }
         return ['table', { class: className, style, 'data-align': align || 'left' }, 0]
       },
       parseDOM: [{
@@ -252,8 +274,23 @@ export const schema = new Schema({
     table_row: {
       content: 'table_cell+',
       tableRole: 'row',
-      toDOM: () => ['tr', 0],
-      parseDOM: [{ tag: 'tr' }]
+      attrs: {
+        // 行高（px，对齐 MS Word 拖拽水平边框调行高）。0 = 自适应内容。
+        // tr 的 height 在 HTML 表格模型里语义为“最小高度”：内容更高时行随之变高，
+        // 拖大无上限、拖小不低于内容自然高度 —— 与 Word“至少”行高行为一致。
+        height: { default: 0 },
+      },
+      toDOM: (node) => {
+        const h = Number(node.attrs.height) || 0
+        // 第三位 0 = 内容洞（单元格渲染位）。缺失会把 tr 当叶子节点 → 表格被渲染成空行。
+        return h > 0 ? ['tr', { style: `height: ${Math.round(h)}px` }, 0] : ['tr', 0]
+      },
+      parseDOM: [{
+        tag: 'tr',
+        getAttrs: (dom: HTMLElement) => ({
+          height: Math.round(parseFloat(dom.style.height) || 0),
+        })
+      }]
     },
     table_cell: {
       content: 'block+',
@@ -261,6 +298,9 @@ export const schema = new Schema({
       attrs: {
         colspan: { default: 1 },
         rowspan: { default: 1 },
+        // 列宽（px，0/null = 自动）。拖拽竖直边框 / AutoFit 写入；
+        // 全列均有值时 table.toDOM 切换 table-layout:fixed。
+        colwidth: { default: null },
         align: { default: '' },
         vAlign: { default: '' },  // 单元格垂直对齐：'' = 顶对齐 | middle | bottom（对齐 MS Word 表格工具）
         isHeader: { default: false },
@@ -288,6 +328,7 @@ export const schema = new Schema({
           return {
             colspan: parseInt(dom.getAttribute('colspan') || '1'),
             rowspan: parseInt(dom.getAttribute('rowspan') || '1'),
+            colwidth: Math.round(parseFloat(st.width) || 0) || null,
             align: st.textAlign || '',
             vAlign: st.verticalAlign && st.verticalAlign !== 'baseline' ? st.verticalAlign : '',
             isHeader: dom.tagName === 'TH',

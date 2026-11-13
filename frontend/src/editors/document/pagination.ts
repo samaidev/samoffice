@@ -15,6 +15,11 @@ export interface PageMetrics {
   pageHeightPx: number
   /** 缩放比例（1 = 100%），用于把 getBoundingClientRect 的视觉像素归一化为布局像素 */
   zoom: number
+  /** 收起页间空白（对齐 MS Word 双击页间空白）：
+   * true = 页步长压到正文区高度 per，内容区逐页紧贴拼接，
+   * 纸页只画内容条（页0保留顶部边距区），页间以 1px 分隔线分界；
+   * false = 常规纸张模型（pageStep = pageHeightPx + gap）。 */
+  collapse?: boolean
 }
 
 /** 单张纸页矩形，坐标为“编辑器内容相对坐标”（与子节点 offsetTop 同坐标系） */
@@ -150,7 +155,11 @@ export function createPaginationPlugin(
       //     推下的 margin-top = 目标纸坐标 - 该元素自然连续坐标（一次性正向算出，无自反馈）。
       const pageHeightPx = m.pageHeightPx
       const gap = m.gap
-      const pageStep = pageHeightPx + gap // 相邻纸顶间距
+      // 页步长：常规 = 整页高 + 页间留白；收起页间空白（collapse，MS Word 双击页间
+      // 空白合并页面的行为）= 正文区高度 per，内容区逐页紧贴 —— 页间的上下边距
+      // 与留白全部折叠，仅在页界处留一条细分隔线。
+      const collapse = !!m.collapse
+      const pageStep = collapse ? per : (pageHeightPx + gap) // 相邻纸顶间距
       // 坐标统一到“正文内容盒坐标系”（offsetTop 体系，已不含 editor 的 marginTop padding）。
       // 因此第 n 页内容区顶 = n*pageStep（不再额外加 marginTop），断点判定直接与此比较。
       const pageTopOf = (n: number) => n * pageStep
@@ -681,16 +690,17 @@ export function createPaginationPlugin(
       // 签名必须包含 style（margin/top 值）：子块断点的 pos 集合可能稳定而 mt 微调
       // （前面块高度变化），只比 from/to 会漏发 dispatch → 模型与渲染脱节。
       // 关键修复（2026-10-08 监督者）：比较必须【顺序无关】！
-      // cur.find() 返回按文档位置排序的装饰，而 decos 按“块级→子块→表pad→行级”分组构建；
-      // 当 tablePad（pg-brk-table，位置先于 rowBreak 却构建在后）等装饰出现时，
-      // 两个【集合完全相同】的装饰序列因顺序不同而永远不相等 →
-      // 每帧 dispatch 同一集合 → 每秒~17次事务自激循环 →
-      // ① CPU 满转 ② 每次事务把原生选区重写回旧位置（点击落点立即被吞，
-      //    用户表现为“鼠标点文本无法激活光标”）③ React 每秒重渲染多次。
-      // 修复：两侧装饰各自按 sig 排序后再比较；顺序无关即等价集合。
-      const decoSig = (d: any) =>
-        d.from + ':' + d.to + ':' + ((d.attrs && d.attrs.style) || '') +
-        (d.spec?.widget ? 'w' + (d.spec?.mt !== undefined ? d.spec.mt : '') : '')
+      // 关键修复（2026-11-13）：prosemirror-state 1.4.x 的 Decoration 把 attrs/spec 存在
+      // d.type.attrs / d.type.spec（d.attrs/d.spec 恒为 undefined）—— 旧签名永远读不到
+      // style，导致【同位置不同样式】的装饰（页间空白收起/展开切换 pageStep 后 mt 全变）
+      // 被判为等集合而永不重派发，DOM 停留旧位移。兼容新旧两种存储形状。
+      const decoSig = (d: any) => {
+        const t = d.type || d
+        const attrs = (t && t.attrs) || {}
+        const spec = (t && t.spec) || d.spec || {}
+        return d.from + ':' + d.to + ':' + (attrs.style || '') +
+          (spec.widget ? 'w' + (spec.mt !== undefined ? spec.mt : '') : '')
+      }
       const normSig = (arr: any[]) => arr.map(decoSig).sort().join('|')
       const curSig = cur ? normSig(cur.find()) : ''
       const newSig = normSig(decos)
@@ -745,14 +755,24 @@ export function createPaginationPlugin(
         }
       } catch { /* ignore */ }
 
-      // 纸张矩形：高度恒为 pageHeightPx，绝对不会因为内容/跨页而变化。
+      // 纸张矩形：常规模式高度恒为 pageHeightPx，绝对不会因为内容/跨页而变化；
+      // 收起页间空白（collapse）时纸页连续拼接：页 0 保留顶部边距区（marginTop + per），
+      // 其余页只画内容条（per），纸与纸首尾相接，页界由 React 层画 1px 分隔线。
       if (onPages) {
         const rects: PageRect[] = []
         for (let i = 0; i < pageCount; i++) {
-          // 纸页顶（含上边距空白）相对编辑器 host 顶 = i*pageStep（content-box 体系下，
-          // 第 i 页内容区顶为 i*pageStep，纸页顶比它高 marginTop，但纸页层用 bodyTop+top 定位，
-          // bodyTop 已是编辑器 host 顶，故此处直接等于内容区顶偏移，无需再加/减 marginTop）。
-          rects.push({ top: pageTopOf(i), height: pageHeightPx })
+          if (collapse) {
+            // 坐标系：bodyTop = pm-host 顶（比内容坐标 0 高出 marginTop）；
+            // 页 0 纸顶 = pm-host 顶（覆盖顶部边距白区），页 i>0 纸顶恰在第 i 页内容区顶。
+            rects.push(i === 0
+              ? { top: 0, height: m.marginTop + per }
+              : { top: m.marginTop + i * per, height: per })
+          } else {
+            // 纸页顶（含上边距空白）相对编辑器 host 顶 = i*pageStep（content-box 体系下，
+            // 第 i 页内容区顶为 i*pageStep，纸页顶比它高 marginTop，但纸页层用 bodyTop+top 定位，
+            // bodyTop 已是编辑器 host 顶，故此处直接等于内容区顶偏移，无需再加/减 marginTop）。
+            rects.push({ top: pageTopOf(i), height: pageHeightPx })
+          }
         }
         // lastPageSig 同时包含 contentMaxY： maxY 微调而纸张数不变时也要回报 React，
         // 否则纸张过滤层停留旧值（可见纸张集合与内容脱节）。

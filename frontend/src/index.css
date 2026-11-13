@@ -957,10 +957,10 @@ table td, table th {
 }
 .ProseMirror table .selectedCell {
   position: relative;
-  background: rgba(79, 70, 229, 0.15);
-  box-shadow: inset 0 0 0 2px rgba(79, 70, 229, 0.3);
+  background: rgba(79, 70, 229, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(79, 70, 229, 0.35);
 }
-/* Table column resize handle (prosemirror-tables) */
+/* Table column resize handle (prosemirror-tables) — 已由 tablePlugins 边框拖拽替代，保留样式兼容 */
 .ProseMirror table .column-resize-handle {
   position: absolute;
   right: -2px;
@@ -973,6 +973,35 @@ table td, table th {
 }
 .ProseMirror table.resizing {
   cursor: col-resize;
+}
+/* === 表格 NodeView（对齐 MS Word）===
+ * wrapper 相对定位：承载左上角全选手柄。
+ * 手柄悬停表格时出现（Word 行为），点击全选整个表格（CellSelection）。
+ * 表格被选中（存在 selectedCell）时手柄保持可见，便于再次操作。 */
+.ProseMirror .tableWrapper {
+  position: relative;
+}
+.ProseMirror .tableWrapper .pm-table-handle {
+  position: absolute;
+  left: -18px;
+  top: -16px;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #4f46e5;
+  background: #ffffff;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  cursor: move;
+  z-index: 20;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  user-select: none;
+}
+.ProseMirror .tableWrapper:hover .pm-table-handle,
+.ProseMirror .tableWrapper:has(.selectedCell) .pm-table-handle {
+  display: flex;
 }
 /* Table selected cell outline */
 .ProseMirror table td.selectedCell::before,
@@ -1146,11 +1175,14 @@ table td, table th {
    带断行的表格（分页引擎挂 .pg-brk-table 的 wrapper）必须切换为
    border-collapse:separate + border-spacing:0：边框归各单元格自绘、
    跟随行一起位移，鬼影彻底消失。
-   注意：Decoration.node 只能落在 DIV.tableWrapper 上，对 div 设
-   border-collapse 无效，必须用后代选择器作用到内层 <table>。 */
+   注意 1：Decoration.node 只能落在 DIV.tableWrapper 上，对 div 设
+   border-collapse 无效，必须用后代选择器作用到内层 <table>。
+   注意 2：table 元素的内联 style（toDOM 写入 border-collapse:collapse）优先级
+   高于任何类选择器 —— 必须 !important 才能真正切换（实测内联样式压住规则，
+   导致跨页表格下半段竖向边框消失 + 页界处幽灵框，Round 12 残留问题根因）。 */
 .ProseMirror .pg-brk-table > table {
-  border-collapse: separate;
-  border-spacing: 0px;
+  border-collapse: separate !important;
+  border-spacing: 0px !important;
 }
 
 /* === 护眼模式 (eye care) ===
