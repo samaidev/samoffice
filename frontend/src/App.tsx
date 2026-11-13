@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createBackend } from './services/backend'
+import { loadRecentFiles, recordRecentFile } from './services/recentFiles'
 import type { Backend, Document, SpellError } from './types/udm'
 import type { SlideData } from './lib/openroute'
 import { DocumentEditor } from './editors/document/DocumentEditor'
@@ -351,11 +352,7 @@ ${t('sample.md.more')}
       : decision.tab === 'pdf' ? 'pdf'
       : 'document'
     try {
-      const name = path.split(/[\\/]/).pop() || path
-      const recent: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
-      const filtered = recent.filter(r => r.path !== path)
-      filtered.unshift({ name, path })
-      localStorage.setItem('samoffice_recent_files', JSON.stringify(filtered.slice(0, 5)))
+      recordRecentFile(path)
     } catch {}
     // 先保存当前激活窗口的编辑内容（保证切换/打开不会丢失改动）
     let savedSnapshot: Partial<OpenWindow> | null = null
@@ -1049,7 +1046,7 @@ ${t('sample.md.more')}
 
     // 保存成功后同步当前窗口标签的路径与文件名，并把当前内容记为新的"已保存"基线
     // （导出 PDF 不算保存原文档，故那条分支不调用本函数）
-    const syncActivePath = (target: string) =>
+    const syncActivePath = (target: string) => {
       setWindows(prev => prev.map(w => {
         if (w.id !== activeWindowId) return w
         const merged = { ...w, ...captureActive(), type: w.type }
@@ -1060,6 +1057,11 @@ ${t('sample.md.more')}
           savedFingerprint: fingerprintOf(merged),
         } as OpenWindow
       }))
+      // 保存成功 = 该文件进入"最近打开"列表（修复用户主诉：新建文件保存后
+      // 不出现在 Files 菜单的最近列表 —— 旧实现只在打开时记录，保存从不记录）。
+      // 记录逻辑与 openResult 完全一致（去重/排序/上限），收敛到公共模块。
+      recordRecentFile(target)
+    }
 
     const isLocal = backend.mode === 'local'
     if (!isLocal) {
@@ -1400,7 +1402,7 @@ ${t('sample.md.more')}
     fileItems.push({ icon: '📕', label: t('app.exportPdf'), onClick: () => handleSave('pdf', { forceDialog: true }), shortcut: 'Ctrl+P' })
   }
   // Recent files
-  const recentFiles: { name: string; path: string }[] = JSON.parse(localStorage.getItem('samoffice_recent_files') || '[]')
+  const recentFiles: { name: string; path: string }[] = loadRecentFiles()
   if (recentFiles.length > 0) {
     fileItems.push({ icon: '🕐', label: t('app.recentFiles') || 'Recent Files', onClick: () => {}, shortcut: '' })
     recentFiles.slice(0, 5).forEach((f, i) => {
