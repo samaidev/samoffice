@@ -170,45 +170,29 @@ func applyTableGrid(tbl *core.Table, taps []*tapDef) {
 			b += td.widths[i]
 		}
 	}
-	// 3. 垂直合并：起点格(VMerge==3)向下吞并连续占位格(VMerge==1)
-	for r := 0; r < len(tbl.Rows); r++ {
-		for j := 0; j < len(tbl.Rows[r]); j++ {
-			c := &tbl.Rows[r][j]
-			if c.VMerge != 3 {
-				continue
-			}
-			span := 1
-			for rr := r + 1; rr < len(tbl.Rows); rr++ {
-				if j < len(tbl.Rows[rr]) && tbl.Rows[rr][j].VMerge == 1 {
-					span++
-					tbl.Rows[rr][j].VMerge = -1 // 标记删除
-				} else {
-					break
-				}
-			}
-			if span > 1 {
-				c.RowSpan = span
-			}
-		}
-	}
-	// 4. 删除占位格，并清掉临时 VMerge 标记；整行被上方 rowspan 覆盖则删除该行，
-	//    否则会产出没有任何单元格的空 table_row，导致前端 ProseMirror 校验失败。
-	out := make([][]core.TableCell, 0, len(tbl.Rows))
+	// 3. 垂直合并（vMerge）：不吞行、不删占位格、不发 RowSpan。
+	// 曾经的实现（VMerge==3 起点，向下吞并 VMerge==1 占位格并整行删除）产出的
+	// UDM 形状是『占位行被删 + 起点格 RowSpan=2』。但 docx 路径（parser/docx）
+	// 对 vMerge continue 的处理是【保留占位格、RowSpan 恒 1】—— 两条路径形状
+	// 不一致。前端的 rowspan 语义按 docx 形状设计：rowspan=2 要求下方行
+	// 【物理省略】被覆盖格；而 .doc 路径删掉的是【整行占位行】，若起点行的
+	// 下一行是另一个 rowspan 起点（连续两段 vMerge 区，本文件表1 的真实结构），
+	// 两个 rowspan 在网格上互相踩位 → 下行所有格可用列位为 0 → cellW=0 +
+	// table-layout:fixed → 内容逐字竖排成 1400+px 畸形行（用户主诉
+	// 『表格边框不全』的根因之一）。
+	// 与 docx 路径对齐：占位格（VMerge==1）清空内容保留结构，RowSpan 不输出。
+	// 视觉效果与 Word 一致（合并区第二行是空的），语义合并不还原 —— 与
+	// docx 路径行为统一，前端无需感知差异。
 	for r := range tbl.Rows {
-		cleaned := make([]core.TableCell, 0, len(tbl.Rows[r]))
-		for _, c := range tbl.Rows[r] {
-			if c.VMerge == -1 {
-				continue
+		for j := range tbl.Rows[r] {
+			c := &tbl.Rows[r][j]
+			if c.VMerge == 1 {
+				// 占位格：清空内容（Word 中它本来就不显示），保留网格结构
+				c.Inline = nil
 			}
 			c.VMerge = 0
-			cleaned = append(cleaned, c)
 		}
-		if len(cleaned) == 0 {
-			continue // 整行被上方 rowspan 覆盖，无需保留
-		}
-		out = append(out, cleaned)
 	}
-	tbl.Rows = out
 }
 
 // scanTableBorder 从表格行 grpprl 中解析 sprmTTableBorders(0xD620) 的边框线宽（pt）。
@@ -315,10 +299,30 @@ func extractPicture(data []byte, fc int) (core.InlineImage, bool) {
 	dyaGoal := int(int16(binary.LittleEndian.Uint16(data[fc+30:])))
 	mx := int(binary.LittleEndian.Uint16(data[fc+32:]))
 	my := int(binary.LittleEndian.Uint16(data[fc+34:]))
+	// payload 起点必须用 PICF 自带的 cbHeader（44/68 均存在；Word 内嵌 OLE 对象如
+	// MathType/Equation 公式图常见 68），不能写死 44 —— 否则从头中间读起，
+	// 魔数永远匹配不到，图片被静默丢弃。
 	payload := data[fc+cbHeader : fc+lcb]
 	mime, off := findImageMagic(payload)
 	if mime == "" {
-		return img, false // WMF/EMF 等浏览器不可显示的格式暂不提取
+		// WMF/EMF 矢量图（MathType/Equation 公式对象、旧图表等）：浏览器不可直接显示。
+		// 保底输出 1px 透明 PNG 占位 + 实测尺寸，前端按占位图渲染出
+		// 正确大小的图文框（比静默丢弃好 —— 至少保留版式空间且内容位置可见）。
+		png1px, _ := base64.StdEncoding.DecodeString(placeholderPNG)
+		img.Src = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png1px)
+		if img.Width == 0 && dxaGoal > 0 {
+			img.Width = float64(dxaGoal) / 20
+		}
+		if img.Height == 0 && dyaGoal > 0 {
+			img.Height = float64(dyaGoal) / 20
+		}
+		if img.Width == 0 {
+			img.Width = 100
+		}
+		if img.Height == 0 {
+			img.Height = 40
+		}
+		return img, true
 	}
 	img.Src = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(payload[off:])
 	if mx == 0 {
@@ -638,3 +642,7 @@ func parsePageNumberConfig(table []byte, f fibOff, runes []rune, cpAt []uint32,
 	}
 	return nil
 }
+
+// placeholderPNG：1x1 透明 PNG（iVBORw0... 是标准最小 PNG 的 base64）。
+// 用于 WMF/EMF 矢量图占位：前端按 Width/Height 拉伸显示图文框。
+const placeholderPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="

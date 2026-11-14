@@ -26,8 +26,6 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
   const [error, setError] = useState('')
   const [fileName, setFileName] = useState('')
   const [pdfUrl, setPdfUrl] = useState(initialUrl || '')
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const renderTaskRef = useRef<any>(null)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [showThumbs, setShowThumbs] = useState(true)
   const [thumbnails, setThumbnails] = useState<{ page: number; dataUrl: string }[]>([])
@@ -141,52 +139,120 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
     }
   }, [])
 
-  // 渲染当前页
+  // ==== 连续滚动模式 ====
+  // 页面尺寸（第 1 页基准，仅用于占位高度；渲染后按各自实际尺寸修正）
+  const [pageSizes, setPageSizes] = useState<{ w: number; h: number }[]>([])
+  // 已渲染页集合（滚动到附近才渲染，离开视口即释放回占位）
+  const [renderedPages, setRenderedPages] = useState<Set<number>>(new Set())
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const pageRefs = useRef<(HTMLDivElement | null)[]>([])
+  const renderTasksRef = useRef<Map<number, any>>(new Map())
+
+  // 读取每页基础尺寸（无渲染，开销小）
   useEffect(() => {
-    if (!pdfDoc || !canvasRef.current) return
+    if (!pdfDoc) {
+      setPageSizes([])
+      setRenderedPages(new Set())
+      return
+    }
     let cancelled = false
-
-    const renderPage = async () => {
-      try {
-        const page = await pdfDoc.getPage(pageNum)
-        if (cancelled || !canvasRef.current) return
-
-        const canvas = canvasRef.current
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return
-
-        const dpr = window.devicePixelRatio || 1
-        const viewport = page.getViewport({ scale: scale * dpr })
-        canvas.width = viewport.width
-        canvas.height = viewport.height
-        canvas.style.width = `${viewport.width / dpr}px`
-        canvas.style.height = `${viewport.height / dpr}px`
-
-        if (renderTaskRef.current) {
-          renderTaskRef.current.cancel()
+    ;(async () => {
+      const sizes: { w: number; h: number }[] = []
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
+        try {
+          const pg = await pdfDoc.getPage(i)
+          const vp = pg.getViewport({ scale: 1 })
+          sizes.push({ w: vp.width, h: vp.height })
+        } catch {
+          sizes.push({ w: 595, h: 842 }) // A4 兜底
         }
+        if (cancelled) return
+      }
+      if (!cancelled) setPageSizes(sizes)
+    })()
+    return () => { cancelled = true }
+  }, [pdfDoc])
 
-        const renderTask = page.render({
-          canvasContext: ctx,
-          viewport,
-        })
-        renderTaskRef.current = renderTask
-        await renderTask.promise
-      } catch (e: any) {
-        if (e?.name !== 'RenderingCancelledException') {
-          console.error('Render error:', e)
-        }
+  // 滚动 → 计算当前页（视口中线所在页）
+  const handleScroll = useCallback(() => {
+    const sc = scrollRef.current
+    if (!sc || !pdfDoc || pageSizes.length === 0) return
+    const mid = sc.scrollTop + sc.clientHeight / 2
+    let acc = 0
+    for (let i = 0; i < pageSizes.length; i++) {
+      acc += pageSizes[i].h * scale + 16 // 16 = 页间距
+      if (mid < acc) {
+        if (i + 1 !== pageNum) setPageNum(i + 1)
+        break
       }
     }
+  }, [pdfDoc, pageSizes, scale, pageNum])
 
-    renderPage()
-    return () => {
-      cancelled = true
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel()
+  // 渲染器：连续模式下渲染指定页 canvas（不依赖 canvasRef）
+  const renderPageTo = useCallback(async (n: number) => {
+    if (!pdfDoc) return
+    const holder = pageRefs.current[n - 1]
+    if (!holder) return
+    try {
+      const pg = await pdfDoc.getPage(n)
+      const canvas = document.createElement('canvas')
+      const dpr = window.devicePixelRatio || 1
+      const viewport = pg.getViewport({ scale: scale * dpr })
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+      canvas.style.width = `${viewport.width / dpr}px`
+      canvas.style.height = `${viewport.height / dpr}px`
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      // 同页旧任务取消
+      renderTasksRef.current.get(n)?.cancel()
+      const task = pg.render({ canvasContext: ctx, viewport })
+      renderTasksRef.current.set(n, task)
+      await task.promise
+      if (holder.isConnected) {
+        holder.innerHTML = ''
+        holder.appendChild(canvas)
+      }
+    } catch (e: any) {
+      if (e?.name !== 'RenderingCancelledException') {
+        console.error('[PdfViewer] render page', n, e)
       }
     }
-  }, [pdfDoc, pageNum, scale])
+  }, [pdfDoc, scale])
+
+  // 视口内页面按需渲染：pageNum±1 渲染、其余释放
+  useEffect(() => {
+    if (!pdfDoc || pageSizes.length === 0) return
+    const want = new Set<number>()
+    for (let d = -1; d <= 1; d++) {
+      const n = pageNum + d
+      if (n >= 1 && n <= numPages) want.add(n)
+    }
+    setRenderedPages(prev => {
+      const next = new Set<number>()
+      want.forEach(n => { if (prev.has(n)) next.add(n) })
+      return next
+    })
+    // 渲染缺失页（异步）
+    want.forEach(n => {
+      if (!renderedPages.has(n)) {
+        renderPageTo(n)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDoc, pageNum, scale, pageSizes])
+
+  // goToPage 滚动定位（连续模式下把目标页滚到视口顶部）
+  const goToPage = (n: number) => {
+    if (n < 1 || n > numPages) return
+    const sc = scrollRef.current
+    if (sc && pageSizes.length > 0) {
+      let top = 0
+      for (let i = 0; i < n - 1; i++) top += pageSizes[i].h * scale + 16
+      sc.scrollTo({ top, behavior: 'smooth' })
+    }
+    setPageNum(n)
+  }
 
   // 打开文件
   const handleOpenFile = () => {
@@ -226,11 +292,12 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
     }
   }
 
-  // 打印当前页 (通过 canvas 渲染到打印窗口)
+  // 打印当前页 (从连续滚动模式的页容器取 canvas)
   const handlePrintCurrentPage = () => {
-    if (!canvasRef.current || !pdfDoc) return
-    const canvas = canvasRef.current
-    const dataUrl = canvas.toDataURL('image/png')
+    if (!pdfDoc) return
+    const canvas = pageRefs.current[pageNum - 1]?.querySelector('canvas')
+    if (!canvas) return
+    const dataUrl = (canvas as HTMLCanvasElement).toDataURL('image/png')
     const printWin = window.open('', '_blank', 'width=800,height=600')
     if (!printWin) return
     printWin.document.write(`
@@ -247,11 +314,7 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
     printWin.document.close()
   }
 
-  // 页面跳转
-  const goToPage = (n: number) => {
-    if (n < 1 || n > numPages) return
-    setPageNum(n)
-  }
+  // （goToPage 已上移到连续滚动区块）
 
   // 缩放
   const zoomIn = () => setScale(s => Math.min(3, s + 0.2))
@@ -466,8 +529,14 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
           </div>
         )}
 
-        {/* PDF 渲染区 */}
-        <div className="flex-1 overflow-auto flex justify-center p-4" style={{ background: 'var(--color-bg-alt)' }} data-testid="pdf-canvas-area">
+        {/* PDF 渲染区（连续滚动：全部页垂直排列，按需渲染视口附近 ±1 页） */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-auto flex justify-center p-4"
+          style={{ background: 'var(--color-bg-alt)' }}
+          data-testid="pdf-canvas-area"
+        >
         {loading && (
           <div className="flex flex-col items-center justify-center h-full">
             <div className="animate-spin text-4xl mb-4">⏳</div>
@@ -502,13 +571,32 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
           </div>
         )}
 
-        {pdfDoc && (
-          <canvas
-            ref={canvasRef}
-            data-testid="pdf-canvas"
-            className="shadow-lg"
-            style={{ background: 'white', borderRadius: '4px' }}
-          />
+        {pdfDoc && pageSizes.length > 0 && (
+          <div className="flex flex-col items-center gap-4">
+            {pageSizes.map((ps, i) => {
+              const n = i + 1
+              return (
+                <div
+                  key={n}
+                  ref={el => { pageRefs.current[i] = el }}
+                  data-testid={`pdf-page-${n}`}
+                  className="shadow-lg relative flex-shrink-0"
+                  style={{
+                    width: ps.w * scale,
+                    height: ps.h * scale,
+                    background: 'white',
+                    borderRadius: '4px',
+                  }}
+                >
+                  {!renderedPages.has(n) && (
+                    <div className="absolute inset-0 flex items-center justify-center text-sm" style={{ color: '#cbd5e1' }}>
+                      {n}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         )}
         </div>
       </div>

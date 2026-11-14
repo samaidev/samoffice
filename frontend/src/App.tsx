@@ -19,7 +19,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.7.1'
+const APP_VERSION = 'v0.7.2'
 
 // 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
 type SheetData = {
@@ -519,7 +519,34 @@ ${t('sample.md.more')}
     ;(window as any).__setDocForTest = (d: any) => {
       activateWindowData({ type: 'document', path: 'e2e-test.docx', title: 'E2E', doc: d })
     }
-    return () => { ;(window as any).__setDocForTest = undefined }
+    ;(window as any).__setPdfForTest = (url: string, name: string) => {
+      const sig = { url, name, nonce: Date.now() }
+      setPdfOpenSignal(sig)
+      activateWindowData({ type: 'pdf', path: name, title: name, pdf: sig })
+    }
+    // server 模式打开 xlsx：上传后走 openResult 正规流程（解析→建表格窗口）
+    ;(window as any).__setSheetForTest = async (name: string) => {
+      const base = window.location.origin
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.xlsx,.xls,.csv'
+      // E2E 由 playwright setInputFiles 触发；此处只挂 onchange
+      input.onchange = async () => {
+        const file = input.files?.[0]
+        if (!file) return
+        const form = new FormData()
+        form.append('file', file)
+        const r = await fetch(`${base}/api/doc/open`, { method: 'POST', body: form })
+        const result = await r.json()
+        await openResult({ ...result, path: file.name, serverPath: result.path })
+      }
+      input.click()
+    }
+    return () => {
+      ;(window as any).__setDocForTest = undefined
+      ;(window as any).__setPdfForTest = undefined
+      ;(window as any).__setSheetForTest = undefined
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   })
   // SlideEditor 快照回流：同理重设幻灯片窗口基线

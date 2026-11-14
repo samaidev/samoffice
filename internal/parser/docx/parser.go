@@ -2145,16 +2145,25 @@ func writeNodeLatex(sb *strings.Builder, n *ommlNode) {
 				close = strings.Trim(b.text, "\"")
 			}
 		}
+		// 空 begChr/endChr 表示"无定界符"（Word 里常见）：\left 必须带一个定界符，
+		// 否则 KaTeX 报错；且 \left 与后续内容之间必须有空格，防止黏成 \leftPM。
+		// 无边框时用 "." （\left. 是合法的"空定界符"）。
+		if open == "" {
+			open = "."
+		}
+		if close == "" {
+			close = "."
+		}
 		// 多个 e 之间用分隔符连接
 		es := n.childrenOf("e")
-		sb.WriteString("\\left" + open)
+		sb.WriteString("\\left " + open)
 		for i, e := range es {
 			if i > 0 {
 				sb.WriteString(sep)
 			}
 			writeChildrenLatex(sb, e)
 		}
-		sb.WriteString("\\right" + close)
+		sb.WriteString("\\right " + close)
 	case "nary": // 求和/积分等大型运算符
 		chr := naryChrOf(n)
 		sb.WriteString(chr)
