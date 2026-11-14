@@ -767,6 +767,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [editCell, setEditCell] = useState<{ r: number; c: number; buf: string } | null>(null)
   const [formulaBarFocused, setFormulaBarFocused] = useState(false)
   const gridRef = useRef<HTMLDivElement>(null)
+  // 表格滚动容器（overflow-auto）：活动单元格/粘贴区域自动滚进可视区用
+  const scrollRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLElement | null>(null)
   const fbInputRef = useRef<HTMLInputElement | null>(null)
   // Shift+方向键/Shift+点击 扩展选区时的固定锚点（Excel 行为）
@@ -784,6 +786,46 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const colLeft = (c: number) => { let x = showHeadings ? 48 : 0; for (let i = 0; i < c; i++) x += curColWidths[i] || 80; return x }
   const rowH = (r: number) => curRowHeights[r] || 28
   const rowTop = (r: number) => { let y = 0; for (let i = 0; i < r; i++) y += rowH(i); return y }
+
+  // === 表格自动扩充（无限表格体验，对齐 Google Sheets / Excel 扩表习惯）===
+  // 行列不足时扩表：exact=false（导航扩表）按块扩（+GROW_*，按住方向键可连续下探）；
+  // exact=true（粘贴/写入）精确扩到内容所需行列数。上限：行 3000（非虚拟化 DOM 渲染上限），
+  // 列 702（"ZZ"，colName 双字母列名支持上限）。
+  // 用函数式更新读取最新行列数，避免快速连按时闭包里的旧值导致扩表失效。
+  const MAX_GRID_ROWS = 3000, MAX_GRID_COLS = 702
+  const GROW_ROWS = 20, GROW_COLS = 6
+  const ensureGrid = (minRows: number, minCols: number, exact = false) => {
+    // 快路径：当前闭包行列已满足则直接返回，避免每次按键都进更新队列
+    //（行列收缩如删除行后组件会重渲染、闭包刷新，快路径不会用到旧的大值）
+    if (minRows <= rows && minCols <= cols) return
+    setRows(r => minRows > r ? Math.min(MAX_GRID_ROWS, exact ? minRows : Math.max(minRows, r + GROW_ROWS)) : r)
+    setCols(c => minCols > c ? Math.min(MAX_GRID_COLS, exact ? minCols : Math.max(minCols, c + GROW_COLS)) : c)
+  }
+  // 把 (r, c) 单元格滚进可视区：用 getBoundingClientRect 实测坐标，
+  // 自动补偿 CSS zoom 缩放与 sticky 表头(h-8)/行头列的遮挡
+  const ensureVisible = (r: number, c: number) => {
+    requestAnimationFrame(() => {
+      const sc = scrollRef.current
+      const grid = gridRef.current
+      if (!sc || !grid) return
+      const td = grid.querySelector<HTMLElement>(`td[data-cell="${r}-${c}"]`)
+      if (!td) return
+      const z = zoom / 100 || 1
+      const scr = sc.getBoundingClientRect()
+      const box = td.getBoundingClientRect()
+      const headH = (showHeadings ? 32 : 0) * z + 4
+      const headW = (showHeadings ? 48 : 0) * z + 4
+      if (box.top < scr.top + headH) sc.scrollTop += (box.top - (scr.top + headH)) / z
+      else if (box.bottom > scr.bottom - 4) sc.scrollTop += (box.bottom - scr.bottom + 4) / z
+      if (box.left < scr.left + headW) sc.scrollLeft += (box.left - (scr.left + headW)) / z
+      else if (box.right > scr.right - 4) sc.scrollLeft += (box.right - scr.right + 4) / z
+    })
+  }
+  // 活动单元格变化（方向键/回车/Tab 导航）时视图跟随滚动
+  useEffect(() => {
+    ensureVisible(active.r, active.c)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active.r, active.c])
   // 编辑后把当前 sheet 内容同步回 sheetData，保证切换 sheet 不丢数据
   useEffect(() => {
     setSheetData(sd => ({ ...sd, [activeId]: data }))
@@ -927,8 +969,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       // 单元格导航（方向键 / Tab / Enter），仅在非输入框时拦截
       if (!mod && !inInput) {
         const move = (dr: number, dc: number) => {
-          const nr = Math.max(0, Math.min(rows - 1, active.r + dr))
-          const nc = Math.max(0, Math.min(cols - 1, active.c + dc))
+          const nr = Math.max(0, active.r + dr)
+          const nc = Math.max(0, active.c + dc)
+          // 下/右越界时自动扩表（无限表格体验），不再被钉在最后一行/列
+          ensureGrid(nr + 1, nc + 1)
           selectCell(nr, nc)
         }
         if (e.key === 'ArrowUp') { e.preventDefault(); move(-1, 0); return }
@@ -1150,8 +1194,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     else setCellFmt(r, c, { formula: '', value: buf })
     setEditCell(null)
     if (move) {
-      const nr = Math.max(0, Math.min(rows - 1, r + move.dr))
-      const nc = Math.max(0, Math.min(cols - 1, c + move.dc))
+      const nr = Math.max(0, r + move.dr)
+      const nc = Math.max(0, c + move.dc)
+      // Enter/Tab 提交后下/右越界自动扩表
+      ensureGrid(nr + 1, nc + 1)
       selectCell(nr, nc)
     }
     setTimeout(() => gridRef.current?.focus(), 0)
@@ -1299,8 +1345,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       return
     }
     const move = (dr: number, dc: number) => {
-      const nr = Math.max(0, Math.min(rows - 1, active.r + dr))
-      const nc = Math.max(0, Math.min(cols - 1, active.c + dc))
+      const nr = Math.max(0, active.r + dr)
+      const nc = Math.max(0, active.c + dc)
+      // 下/右越界时自动扩表（无限表格体验），不再被钉在最后一行/列
+      ensureGrid(nr + 1, nc + 1)
       selectCell(nr, nc)
     }
     const arrowDR = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : 0
@@ -1343,11 +1391,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       return
     }
     if (mod) return // 其余 Ctrl 组合（C/V/X/Z/Y/F/B/I/U/L…）交给 window 全局处理器
-    if (e.shiftKey && isArrow) { e.preventDefault(); e.stopPropagation(); extendTo(Math.max(0, Math.min(rows - 1, active.r + arrowDR)), Math.max(0, Math.min(cols - 1, active.c + arrowDC))); return }
+    if (e.shiftKey && isArrow) {
+      e.preventDefault(); e.stopPropagation()
+      // Shift+方向键扩展选区越过下/右边界时同样自动扩表
+      const nr = Math.max(0, active.r + arrowDR), nc = Math.max(0, active.c + arrowDC)
+      ensureGrid(nr + 1, nc + 1)
+      extendTo(nr, nc)
+      return
+    }
     if (isArrow) { e.preventDefault(); e.stopPropagation(); move(arrowDR, arrowDC); return }
     if (key === 'Tab') { e.preventDefault(); e.stopPropagation(); move(0, e.shiftKey ? -1 : 1); return }
     if (key === 'Enter') { e.preventDefault(); e.stopPropagation(); move(e.shiftKey ? -1 : 1, 0); return }
-    if (key === 'PageDown' || key === 'PageUp') { e.preventDefault(); e.stopPropagation(); const d = key === 'PageDown' ? 20 : -20; if (e.shiftKey) extendTo(Math.max(0, Math.min(rows - 1, active.r + d)), active.c); else move(d, 0); return }
+    if (key === 'PageDown' || key === 'PageUp') { e.preventDefault(); e.stopPropagation(); const d = key === 'PageDown' ? 20 : -20; if (e.shiftKey) { const nr = Math.max(0, active.r + d); ensureGrid(nr + 1, cols); extendTo(nr, active.c) } else move(d, 0); return }
     if (key === 'F2') { e.preventDefault(); e.stopPropagation(); startEdit(active.r, active.c); return }
     if (key === 'Escape') {
       // Excel 行为：Esc 先收拢多格/多区域选区为活动格单格选区；其余（关查找条/面板）交给 window Esc 处理器
@@ -1631,23 +1686,35 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     const { r1, c1, r2, c2, cells, isCut } = clipboard
     const h = r2 - r1 + 1, w = c2 - c1 + 1
     const srcRect = isCut ? { r1, c1, r2, c2 } : null
+    // 目标区域超出当前行列时自动扩表（不再被裁切/不可见）
+    ensureGrid(baseR + h, baseC + w, true)
+    const dst = { r1: baseR, c1: baseC, r2: baseR + h - 1, c2: baseC + w - 1 }
     setData(d => {
       const nd = { ...d }
-      // 写入目标
+      // 写入目标：整块矩形替换（源空单元格同样覆盖目标，对齐 Excel 粘贴语义）
       for (let r = 0; r < h; r++)
         for (let c = 0; c < w; c++) {
           const key = `${r}-${c}`
-          if (cells[key]) nd[`${baseR + r}-${baseC + c}`] = { ...cells[key] }
+          const dstKey = `${baseR + r}-${baseC + c}`
+          if (cells[key]) nd[dstKey] = { ...cells[key] }
+          else delete nd[dstKey]
         }
-      // 剪切：清除源区域
+      // 剪切：清除源区域——但跳过与目标区域重叠的部分。
+      // 修复：剪切后粘贴到与源区域有重叠的位置时，重叠处刚写入的粘贴值
+      // 会被源区域清除逻辑误删，导致整块数据被清空（MS Excel 行为：重叠处保留粘贴值）。
       if (isCut && srcRect) {
         for (let r = srcRect.r1; r <= srcRect.r2; r++)
-          for (let c = srcRect.c1; c <= srcRect.c2; c++)
+          for (let c = srcRect.c1; c <= srcRect.c2; c++) {
+            if (r >= dst.r1 && r <= dst.r2 && c >= dst.c1 && c <= dst.c2) continue
             delete nd[`${r}-${c}`]
+          }
       }
       return nd
     })
     if (isCut) setClipboard(null)
+    // 对齐 Excel：粘贴后选区覆盖目标矩形，并把目标区域滚进可视区
+    commitSelection({ r1: baseR, c1: baseC, r2: dst.r2, c2: dst.c2, mode: 'cell' })
+    ensureVisible(dst.r2, dst.c2)
   }
   // 把外部 TSV 文本按活动格为起点粘贴（支持从 Excel/记事本/微信等复制的内容），返回是否成功
   const pasteText = (txt: string): boolean => {
@@ -1655,12 +1722,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     pushHistory()
     const baseR = active.r, baseC = active.c
     const lines = txt.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n')
+    // 自动扩表：粘贴内容超出当前行列数时按需扩充，不再裁切丢失数据
+    let lineCols = 0
+    for (const line of lines) { const n = line.split('\t').length; if (n > lineCols) lineCols = n }
+    ensureGrid(baseR + lines.length, baseC + lineCols, true)
+    const endR = baseR + lines.length - 1, endC = baseC + lineCols - 1
     setData(d => {
       const nd = { ...d }
       lines.forEach((line, ri) => {
         line.split('\t').forEach((val, ci) => {
           const r = baseR + ri, c = baseC + ci
-          if (r >= rows || c >= cols) return
           const existing = d[`${r}-${c}`] || { value: '' }
           if (val.startsWith('=')) nd[`${r}-${c}`] = { ...existing, formula: val, value: '' }
           else nd[`${r}-${c}`] = { ...existing, formula: '', value: val }
@@ -1668,6 +1739,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       })
       return nd
     })
+    // 对齐 Excel：粘贴后选区覆盖粘贴区域，并滚动到区域末尾可见
+    commitSelection({ r1: baseR, c1: baseC, r2: endR, c2: endC, mode: 'cell' })
+    ensureVisible(endR, endC)
     return true
   }
 
@@ -2608,7 +2682,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       )}
 
       {/* 表格主体（工作簿视图：分页参考线 / 页边距参考线叠加显示） */}
-      <div className="flex-1 overflow-auto p-2 sm:p-3 relative" style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
+      <div className="flex-1 overflow-auto p-2 sm:p-3 relative" ref={scrollRef} style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
         ...(viewMode === 'pageBreak' ? {
           backgroundImage: 'repeating-linear-gradient(to right, transparent 0, transparent calc(7 * 80px - 1px), #f59e0b calc(7 * 80px - 1px), #f59e0b calc(7 * 80px), transparent calc(7 * 80px)), repeating-linear-gradient(to bottom, transparent 0, transparent calc(46 * 28px - 1px), #f59e0b calc(46 * 28px - 1px), #f59e0b calc(46 * 28px), transparent calc(46 * 28px))',
           backgroundRepeat: 'no-repeat',
@@ -2806,7 +2880,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   // 选区叠加层：半透明蓝叠在原填充色上（MS Excel 行为——填充色仍隐约可见）
                   const selOverlay = `linear-gradient(rgba(59,130,246,0.22), rgba(59,130,246,0.22)), ${cell.bg || '#ffffff'}`
                   return (
-                    <td key={c} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
+                    <td key={c} data-cell={`${r}-${c}`} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
                       background: sel ? (isActive ? (cell.bg || '#ffffff') : selOverlay) : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
