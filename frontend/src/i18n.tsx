@@ -2,7 +2,7 @@
 // 默认英文，可切换中文
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 
-export type Lang = 'en' | 'zh'
+export type Lang = 'en' | 'zh' | 'mixed'
 
 // 翻译字典：en 为默认(完整)，zh 为中文
 const dict: Record<string, { en: string; zh: string }> = {
@@ -246,6 +246,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.search': { en: 'Search', zh: '搜索' },
   'doc.align': { en: 'Align', zh: '对齐' },
   'doc.cancel': { en: 'Cancel', zh: '取消' },
+  'doc.ok': { en: 'OK', zh: '确定' },
   'doc.save': { en: 'Save', zh: '保存' },
   'doc.quote': { en: 'Quote', zh: '引用' },
   'doc.code': { en: 'Code', zh: '代码' },
@@ -1143,7 +1144,7 @@ const LANG_STORAGE_KEY = 'samoffice_lang'
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(() => {
     const saved = localStorage.getItem(LANG_STORAGE_KEY)
-    return saved === 'zh' || saved === 'en' ? saved : 'en'
+    return saved === 'zh' || saved === 'en' || saved === 'mixed' ? saved : 'en'
   })
 
   const setLang = useCallback((l: Lang) => {
@@ -1167,7 +1168,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       // Key not found, return key itself
       text = key
     } else {
-      text = lang === 'zh' ? entry.zh : entry.en
+      // mixed（中英混合拼写检查）不是 UI 语言，界面文案回退中文
+      text = lang === 'zh' || lang === 'mixed' ? entry.zh : entry.en
     }
     return applyParams(text, params)
   }, [lang])

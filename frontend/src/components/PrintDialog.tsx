@@ -77,7 +77,7 @@ export const defaultPrintSettings: PrintSettings = {
 }
 
 // 纸张尺寸 (mm)
-const PAPER_SIZES: Record<string, { w: number; h: number }> = {
+export const PAPER_SIZES: Record<string, { w: number; h: number }> = {
   A4: { w: 210, h: 297 },
   A3: { w: 297, h: 420 },
   A5: { w: 148, h: 210 },

@@ -1731,10 +1731,11 @@ ${t('sample.md.more')}
           className="text-xs rounded-md px-1 py-1"
           style={{ minWidth: '52px', background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', height: 26, ['--wails-draggable' as any]: 'no-drag' }}
           value={lang}
-          onChange={v => setLang(v as 'en' | 'zh')}
+          onChange={v => setLang(v as 'en' | 'zh' | 'mixed')}
           options={[
             { label: '中文', value: 'zh' },
             { label: 'EN', value: 'en' },
+            { label: '中英', value: 'mixed' },
           ]}
         />
 

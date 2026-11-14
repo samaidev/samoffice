@@ -5,7 +5,7 @@ import { EditorView, Decoration, DecorationSet } from 'prosemirror-view'
 import { schema } from './schema'
 import { createPaginationPlugin } from './pagination'
 import { keymap } from 'prosemirror-keymap'
-import { baseKeymap, toggleMark, setBlockType, wrapIn } from 'prosemirror-commands'
+import { baseKeymap, toggleMark, setBlockType, wrapIn, splitBlockAs } from 'prosemirror-commands'
 import { history, undo, redo } from 'prosemirror-history'
 import { inputRules, wrappingInputRule, textblockTypeInputRule } from 'prosemirror-inputrules'
 import { udmToProseMirror, proseMirrorToUDM } from './convert'
@@ -17,7 +17,7 @@ import { tableEditing, CellSelection, cellAround } from 'prosemirror-tables'
 import { DocTableView, createTableDragResizePlugin, autoFitTable } from './tablePlugins'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
-import { PrintDialog } from '../../components/PrintDialog'
+import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
 import { Ruler } from '../../components/Ruler'
 import { MathEditorModal } from './MathEditorModal'
@@ -703,14 +703,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [activeComment, setActiveComment] = useState<string | null>(null)
 
   const editFootnote = (f: FootnoteData) => {
+    // 打开应用内编辑弹窗（不依赖 window.prompt —— 桌面 WebView 里不可靠）
+    setFootnoteEdit({ num: f.num, text: f.text || '', sectionPos: f.sectionPos })
+  }
+  // 弹窗确认：写回 footnote_item 节点
+  const saveFootnoteEdit = () => {
     const v = viewRef.current
-    if (!v) return
-    const newText = prompt(t('doc.prompt.footnote') || '编辑脚注内容：', f.text)
-    if (newText === null) return
-    const node = v.state.doc.nodeAt(f.sectionPos)
-    if (!node || node.type.name !== 'footnote_item') return
-    const item = schema.nodes.footnote_item.create({ num: f.num }, newText ? schema.text(newText) : null)
-    v.dispatch(v.state.tr.replaceWith(f.sectionPos, f.sectionPos + node.nodeSize, item))
+    const fe = footnoteEdit
+    if (!v || !fe) return
+    const node = v.state.doc.nodeAt(fe.sectionPos)
+    if (!node || node.type.name !== 'footnote_item') { setFootnoteEdit(null); return }
+    const item = schema.nodes.footnote_item.create({ num: fe.num }, fe.text.trim() ? schema.text(fe.text) : null)
+    v.dispatch(v.state.tr.replaceWith(fe.sectionPos, fe.sectionPos + node.nodeSize, item))
+    setFootnoteEdit(null)
   }
   const deleteFootnote = (f: FootnoteData) => {
     const v = viewRef.current
@@ -956,6 +961,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [docFooterHF, setDocFooterHF] = useState<HeaderFooterContent>({ text: '' })
   // 页眉页脚编辑对话框：target 指定当前编辑的是页眉还是页脚
   const [showHFDialog, setShowHFDialog] = useState<null | { target: 'header' | 'footer' }>(null)
+  // 脚注编辑弹窗：WebView(桌面端)对 window.prompt 支持不可靠（无弹窗/无返回值），
+  // 用户报告"无法编辑角注文本内容"。改用应用内 modal 输入框。
+  const [footnoteEdit, setFootnoteEdit] = useState<null | { num: number; text: string; sectionPos: number }>(null)
   // 打开文档时从 UDM 初始化页眉/页脚（含样式），无则保持空
   useEffect(() => {
     const h = (document as any)?.header as HeaderFooterContent | undefined
@@ -1132,7 +1140,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               }
             }
             return false
-          } }),
+          },
+          // 对齐 MS Word：回车新建段落继承当前段落的全部格式属性（对齐/缩进/
+          // 行距/样式名/边框底纹等）。baseKeymap 的 splitBlock 在段末回车时用
+          // {type: defaultBlockAt(...)} 创建新段 —— 只带类型不带 attrs，全部
+          // 属性回到 schema 默认值（E2E round21 复现：居中段落回车后新段 align=""）。
+          // splitBlockAs 传入回调用原段 attrs 创建新段，实现 Word 的格式跟随。
+          // 特例（Word 同款）：空段落上回车 = 连续两次空行，第二次回车退回正文
+          // 样式 —— 通过 attrs.style 为空时仍继承（Word 实际清样式），先保持简单继承。
+          'Enter': splitBlockAs((node: any) => {
+            // node = 正被拆分的光标所在块。非段落（列表项/引用等）返回 null 走默认逻辑。
+            if (!node || node.type.name !== 'paragraph') return null
+            return { type: node.type, attrs: { ...node.attrs } }
+          }) }),
         keymap(baseKeymap), history(),
         inputRules({ rules: [
           textblockTypeInputRule(/^#\s$/, schema.nodes.heading, () => ({ level: 1 })),
@@ -1387,9 +1407,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             },
           }
         },
-        math: (node, _view, getPos) => {
+        math: (node: any, _view: any, getPos: any) => {
           const dom = window.document.createElement(node.attrs.inline ? 'span' : 'div')
           dom.className = 'sam-math' + (node.attrs.inline ? ' sam-math-inline' : '')
+          // 公式字号：atom 节点不受 fontSize mark 影响，NodeView 直接应用
+          // font-size（KaTeX 内部尺寸按 em 级联，根节点缩放即整体缩放）。
+          const applyFontSize = () => {
+            const fs = node.attrs.fontSize
+            if (fs) { dom.style.fontSize = parseFloat(fs) + 'px' }
+            else { dom.style.fontSize = '' }
+          }
+          applyFontSize()
           const render = () => {
             const latex = node.attrs.latex || ''
             if ((window as any).katex && latex) {
@@ -1404,8 +1432,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               dom.textContent = latex ? `⟨formula:${latex}⟩` : '公式'
             }
             dom.setAttribute('data-latex', latex)
+            dom.setAttribute('data-font-size', node.attrs.fontSize || '')
             dom.title = '双击编辑公式'
             dom.style.cursor = 'pointer'
+            applyFontSize()
           }
           render()
           dom.addEventListener('dblclick', (e) => {
@@ -1425,6 +1455,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             dom,
             stopEvent: () => true,
             ignoreMutation: () => true,
+            // setFontSize 改 attrs.fontSize 时重渲染并应用新字号
+            update(newNode: any) {
+              if (newNode.type.name !== 'math') return false
+              node = newNode
+              render()
+              return true
+            },
           }
         },
         footnote_section: () => {
@@ -2421,6 +2458,26 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     const v = viewRef.current; if (!v) return
     const { state, dispatch } = v
     const { from, to, empty } = state.selection
+    // 公式是 atom 节点：选区覆盖公式时写字号 attr（NodeView update 应用），
+    // 而非 fontSize mark（mark 只作用于文本，对公式无效 —— 用户报告
+    // "公式无法设置字体大小"的根因）。
+    if (!empty) {
+      const tr2 = state.tr
+      let touchedMath = 0
+      state.doc.nodesBetween(from, to, (n: any, pos: number) => {
+        if (n.type.name === 'math') {
+          const px = parseFloat(size)
+          tr2.setNodeMarkup(pos, undefined, { ...n.attrs, fontSize: isNaN(px) ? '' : String(px) })
+          touchedMath++
+        }
+        return true
+      })
+      if (touchedMath > 0) {
+        dispatch(tr2)
+        v.focus()
+        return
+      }
+    }
     const mark = schema.marks.fontSize.create({ size })
     if (empty) {
       // 无选区：存入 storedMarks，待下次输入生效（不在每次按键时抢占焦点）
@@ -2446,6 +2503,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       // 兼容旧文档可能残留的 pt 单位：pt 需换算成 px 再作基准
       return s.includes('pt') ? num * 96 / 72 : num
     }
+    // 公式节点：以选区/光标处的公式 fontSize attr 为基准（mark 不覆盖 atom 节点）
+    let mathNode: any = null, mathPos = -1
+    state.doc.nodesBetween(Math.max(0, from - 1), Math.min(state.doc.content.size, (state.selection as any).to + 1), (n: any, pos: number) => {
+      if (!mathNode && n.type.name === 'math') { mathNode = n; mathPos = pos }
+      return !mathNode
+    })
+    if (mathNode && mathNode.attrs.fontSize) cur = readSize(mathNode.attrs.fontSize)
     if (empty) {
       const ms = state.storedMarks ? state.storedMarks : $from.marks()
       const fm = ms.find(m => m.type.name === 'fontSize')
@@ -2454,8 +2518,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       const fm = state.doc.nodeAt(from)?.marks.find(m => m.type.name === 'fontSize')
       if (fm) cur = readSize(fm.attrs.size)
     }
-    const base = isNaN(cur) ? 15 : cur
+    const base = isNaN(cur) ? (mathNode ? 16 : 15) : cur
     const next = Math.max(1, Math.round(base + delta))
+    // 公式：直接写 attr（不经 mark）
+    if (mathNode) {
+      v.dispatch(state.tr.setNodeMarkup(mathPos, undefined, { ...mathNode.attrs, fontSize: String(next) }))
+      v.focus()
+      return
+    }
     setFontSize(`${next}px`)
     v.focus()
   }
@@ -3754,13 +3824,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           {visibleRects.map((p, i) => (
             <Fragment key={i}>
               <div className={(showGridlines ? 'page-grid ' : '') + 'pg-paper'} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
-                {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾（收起页间空白时隐藏：页边距区已折叠） */}
-                {!whiteSpaceHidden && (footnotesByPage[i] || []).length > 0 && (
+                {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾。
+                    收起页间空白时不再整区隐藏 —— 折叠的是页【间】空白（上下边距区），
+                    页底脚注区属于当前页内容，隐藏会让所有脚注凭空消失（用户报告：
+                    双击合并跨页后脚注看不见）。改为跟随显示，仅位置贴纸底。 */}
+                {(footnotesByPage[i] || []).length > 0 && (
                   <div style={{
                     position: 'absolute',
                     left: docMargins.left,
                     right: docMargins.right,
-                    bottom: Math.round(docMargins.bottom * 0.55) + 18,
+                    bottom: whiteSpaceHidden ? 4 : Math.round(docMargins.bottom * 0.55) + 18,
                     borderTop: '1px solid var(--color-border)',
                     padding: '4px 0',
                     fontSize: '0.82em',
@@ -4095,6 +4168,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           onSave={(pn) => { setPageNumber(pn); setShowPageNumDialog(false); emitDoc(pn) }}
         />
       )}
+      {/* 脚注内容编辑弹窗：替代 window.prompt（桌面 WebView 对 JS 原生对话框支持不可靠） */}
+      {footnoteEdit && (
+        <div className="modal-overlay" onMouseDown={() => setFootnoteEdit(null)}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 420 }}>
+            <div className="modal-title">{(t('doc.prompt.footnote') || '编辑脚注内容：').replace(/[:：]\s*$/, '')} #{footnoteEdit.num}</div>
+            <textarea
+              autoFocus
+              value={footnoteEdit.text}
+              onChange={(e) => setFootnoteEdit({ ...footnoteEdit, text: e.target.value })}
+              rows={4}
+              className="text-xs px-2 py-1 rounded border w-full"
+              style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveFootnoteEdit() }}
+            />
+            <div className="flex justify-end gap-2 mt-2">
+              <button className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={() => setFootnoteEdit(null)}>{t('doc.cancel') || '取消'}</button>
+              <button className="btn btn-primary btn-sm" onClick={saveFootnoteEdit} disabled={!footnoteEdit.text.trim()}>{t('doc.ok') || '确定'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 页眉/页脚编辑对话框（对齐 MS Word：文字 + 对齐/字号/加粗/斜体/颜色，保存写回 docx） */}
       {showHFDialog && (
         <HeaderFooterDialog
@@ -4166,17 +4260,35 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         onClose={() => setPrintDialogOpen(false)}
         editorType="word"
         printSelector=".ProseMirror"
-        renderPreview={(settings) => (
-          <div className="text-xs leading-relaxed" style={{ color: '#000' }}>
-            <h1 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>{document.meta?.title || t('app.untitled')}</h1>
-            {(document.blocks || []).slice(0, 6).map((b: any, i: number) => (
-              <p key={i} style={{ marginBottom: '4px', textIndent: b.inline?.[0]?.content ? '2em' : 0 }}>
-                {(b.inline || []).map((r: any) => r.content).join('').slice(0, 80)}
-              </p>
-            ))}
-            <div style={{ marginTop: '12px', fontSize: '10px', color: '#999' }}>- 1 -</div>
-          </div>
-        )}
+        renderPreview={(settings) => {
+          // 真实文档预览：克隆 .ProseMirror DOM（保留字号/加粗/表格/图片/公式/脚注等
+          // 全部真实格式）。旧版手工拼前 6 段纯文本，与真实文档毫无关系 ——
+          // 用户报告"打印预览格式完全是错的"。
+          // 克隆时机：renderPreview 在对话框打开时渲染一次，此时读取编辑器实时 DOM。
+          const src = editorRef.current?.querySelector('.ProseMirror') as HTMLElement | null
+          if (!src) return <div className="h-full flex items-center justify-center text-gray-400 text-sm">{t('print.previewEmpty') || '无预览内容'}</div>
+          const clone = src.cloneNode(true) as HTMLElement
+          // 清理编辑态装饰：分页占位/手柄/选中高亮等不进预览
+          clone.querySelectorAll('.pm-table-handle, .selectedCell, .spell-error, .pg-linebreak, .ProseMirror-selectednode').forEach(n => {
+            n.classList.remove('pm-shown', 'selectedCell', 'spell-error', 'ProseMirror-selectednode')
+            if (n.classList.contains('pm-table-handle') || n.classList.contains('pg-linebreak')) n.remove()
+          })
+          clone.removeAttribute('contenteditable')
+          clone.style.padding = '0'
+          clone.style.background = 'transparent'
+          // 内容区宽 = 纸宽 - 左右边距（预览容器已按 1.5 倍缩放纸尺寸，内容同坐标系）；
+          // 文档实际以 pageWidthPx 渲染，横向等比压缩到预览内容宽。
+          const contentW = Math.max(50, (PAPER_SIZES[settings.paperSize]?.w || 210) - settings.margins.left - settings.margins.right)
+          const scaleW = (contentW * 1.5) / pageWidthPx
+          return (
+            <div style={{ width: '100%', height: '100%', overflow: 'hidden', color: '#000' }}>
+              <div
+                style={{ transform: `scale(${Math.min(1, scaleW)})`, transformOrigin: 'top left', width: pageWidthPx + 'px' }}
+                dangerouslySetInnerHTML={{ __html: clone.innerHTML }}
+              />
+            </div>
+          )
+        }}
       />
       {showMathModal && (
         <MathEditorModal

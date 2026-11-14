@@ -435,17 +435,22 @@ export const schema = new Schema({
       attrs: {
         latex: { default: '' },
         inline: { default: false },
+        // 公式字号（px 数值字符串，'' 跟随正文默认）：公式是 atom 节点，
+        // 字符级 fontSize mark 无法作用 —— 单独 attr + NodeView 应用 font-size。
+        fontSize: { default: '' },
       },
       toDOM: (node) => {
         const latex = node.attrs.latex || ''
         const wrap = node.attrs.inline ? 'span' : 'div'
-        return [wrap, { class: 'sam-math', 'data-latex': latex }, `⟨formula:${latex}⟩`]
+        const style = node.attrs.fontSize ? `font-size:${node.attrs.fontSize}px` : ''
+        return [wrap, { class: 'sam-math', 'data-latex': latex, 'data-font-size': node.attrs.fontSize || '', ...(style ? { style } : {}) }, `⟨formula:${latex}⟩`]
       },
       parseDOM: [{
         tag: 'div.sam-math, span.sam-math',
         getAttrs: (dom: any) => ({
           latex: dom.getAttribute('data-latex') || (dom.textContent || '').replace(/^⟨formula:/, '').replace(/⟩$/, ''),
           inline: dom.tagName.toLowerCase() === 'span',
+          fontSize: dom.getAttribute('data-font-size') || '',
         }),
       }, {
         tag: 'p',
@@ -609,7 +614,9 @@ export const schema = new Schema({
       group: 'inline',
       atom: true,
       attrs: { content: { default: '' }, num: { default: 1 } },
-      toDOM: (node) => ['sup', { class: 'footnote-ref', title: node.attrs.content, 'data-footnote-num': node.attrs.num, style: 'color: #4f46e5; cursor: pointer; font-size: 0.7em; vertical-align: super' }, `[${node.attrs.num}]`],
+      // 对齐 MS Word：正文脚注引用为【纯上标数字】（无方括号），随正文字号缩放。
+      // 旧版 [n] 方括号视觉上不像 Word；line-height:0 防止上标撑高行距。
+      toDOM: (node) => ['sup', { class: 'footnote-ref', title: node.attrs.content, 'data-footnote-num': node.attrs.num, style: 'color: #4f46e5; cursor: pointer; font-size: 0.75em; line-height: 0; vertical-align: super' }, String(node.attrs.num)],
       parseDOM: [{ tag: 'sup.footnote-ref', getAttrs: (dom: HTMLElement) => ({ content: dom.getAttribute('title') || '', num: parseInt(dom.getAttribute('data-footnote-num') || '1') }) }],
     },
 

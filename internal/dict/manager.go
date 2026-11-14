@@ -167,11 +167,31 @@ func (m *Manager) RegisterLang(lang string, words map[string]int) error {
 }
 
 // SpellCheck 检查一段文本中的拼写错误（按词切分，跳过标点和数字）
+//
+// lang 取值：
+//   - "zh" / "en" / ... ：单语言模式（保持旧行为）
+//   - "mixed"：中英混合模式 —— 含 CJK 的 token 走中文词典（jieba 分词），
+//     纯拉丁 token 走英文词典，一段中英文混排文本两种错误都能查出。
 func (m *Manager) SpellCheck(text, lang string) []SpellError {
 	m.EnsureReady() // 词典可能仍在异步加载（桌面版窗口先于词典出现）
 	m.mu.RLock()
 	idx, ok := m.dicts[lang]
 	zhSeg := m.zhSeg
+	// mixed 模式预取两本词典（'mixed' 本身无独立词典 —— 存在性检查改为
+	// 至少一本子词典可用，否则静默空结果）
+	var enIdx *symspell.SymSpell
+	if lang == "mixed" {
+		enIdx, _ = m.dicts["en"]
+		zhIdx, zhOk := m.dicts["zh"]
+		if !ok && zhOk {
+			idx = zhIdx
+			ok = true
+		}
+		// 'mixed' 无独立词典：en 或 zh 任一可用即放行
+		if !ok && enIdx != nil {
+			ok = true
+		}
+	}
 	m.mu.RUnlock()
 	if !ok {
 		return []SpellError{}
@@ -180,7 +200,42 @@ func (m *Manager) SpellCheck(text, lang string) []SpellError {
 	var errs []SpellError = make([]SpellError, 0)
 	var tokens []token
 
-	if lang == "zh" && zhSeg != nil {
+	if lang == "mixed" && zhSeg != nil && zhSeg.HasWord("的") && containsCJK(text) {
+		// 混合模式分词（双通道）：jieba 只对 CJK 子串分词（拉丁子串 jieba 会
+		// 整段当一个 token，无法做英文拼写检查）；拉丁子串回退 tokenize。
+		// 逐字符扫描切出 CJK / 拉丁 子串区间，分别用对应分词器。
+		inCJK := false
+		start := 0
+		runes := []rune(text)
+		flush := func(end int) {
+			if end <= start {
+				return
+			}
+			sub := string(runes[start:end])
+			if inCJK {
+				for _, t := range zhSeg.SegmentForSpellCheck(sub) {
+					tokens = append(tokens, token{word: t.Word, start: start + t.Start, end: start + t.End})
+				}
+			} else {
+				for _, t := range tokenize(sub) {
+					tokens = append(tokens, token{word: t.word, start: start + t.start, end: start + t.end})
+				}
+			}
+		}
+		for i, r := range runes {
+			c := isCJK(r)
+			if i == 0 {
+				inCJK = c
+				continue
+			}
+			if c != inCJK {
+				flush(i)
+				start = i
+				inCJK = c
+			}
+		}
+		flush(len(runes))
+	} else if lang == "zh" && zhSeg != nil {
 		// 中文：用 jieba 词典分词
 		for _, t := range zhSeg.SegmentForSpellCheck(text) {
 			tokens = append(tokens, token{word: t.Word, start: t.Start, end: t.End})
@@ -194,38 +249,62 @@ func (m *Manager) SpellCheck(text, lang string) []SpellError {
 		if isSkipWord(t.word) {
 			continue
 		}
-		// 中文：单字 token 跳过（无意义）
-		if lang == "zh" && len([]rune(t.word)) <= 1 {
+		// 每个 token 实际使用的语言：mixed 模式按是否含 CJK 路由
+		tokLang := lang
+		if lang == "mixed" {
+			if containsCJK(t.word) {
+				tokLang = "zh"
+			} else if enIdx != nil {
+				tokLang = "en"
+			} else {
+				continue // 英文词典未加载，拉丁词无法校验
+			}
+		}
+		// 中文 token：单字跳过（无意义）、纯非 CJK 跳过
+		if tokLang == "zh" {
+			if len([]rune(t.word)) <= 1 {
+				continue
+			}
+			if !containsCJK(t.word) {
+				continue
+			}
+		}
+		// 英文 token：跳过包含 CJK 字符的 token（避免中文词被英文词典误报）
+		if tokLang != "zh" && containsCJK(t.word) {
 			continue
 		}
-		// 中文：纯非 CJK token 跳过
-		if lang == "zh" && !containsCJK(t.word) {
-			continue
+		// 该 token 对应的词典索引：mixed 模式下英文 token 用预取的 en 词典；
+		// 单语言模式（lang=en）直接用主词典 idx（重构时误把 en 单语言也指向
+		// 仅 mixed 预取的 enIdx=nil，导致英文拼写检查全部静默跳过）。
+		tokIdx := idx
+		if lang == "mixed" && tokLang == "en" {
+			tokIdx = enIdx
 		}
-		// 非中文语言：跳过包含 CJK 字符的 token（避免中文词被英文词典误报）
-		if lang != "zh" && containsCJK(t.word) {
+		if tokIdx == nil {
 			continue
 		}
 		lower := strings.ToLower(t.word)
-		if cands := idx.Lookup(lower, 0); len(cands) > 0 && cands[0].Distance == 0 {
+		if cands := tokIdx.Lookup(lower, 0); len(cands) > 0 && cands[0].Distance == 0 {
 			continue // 正确
 		}
 		// 中文：用分词器词典双重验证（jieba 词典为准）
-		if lang == "zh" && zhSeg != nil && zhSeg.HasWord(lower) {
+		if tokLang == "zh" && zhSeg != nil && zhSeg.HasWord(lower) {
 			continue
 		}
-		// 检查用户词库
-		if has, _ := m.user.Has(lower, lang); has {
-			continue
+		// 检查用户词库（nil 保护：单测/嵌入模式无用户词库）
+		if m.user != nil {
+			if has, _ := m.user.Has(lower, tokLang); has {
+				continue
+			}
 		}
-		suggests := idx.Lookup(lower, 8)
+		suggests := tokIdx.Lookup(lower, 8)
 		words := make([]string, 0, len(suggests))
 		for _, c := range suggests {
 			words = append(words, c.Word)
 		}
 		errs = append(errs, SpellError{
 			Word:    t.word,
-			Lang:    lang,
+			Lang:    tokLang,
 			Start:   t.start,
 			End:     t.end,
 			Suggest: words,
