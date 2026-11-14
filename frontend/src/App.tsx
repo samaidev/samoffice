@@ -19,7 +19,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.6.7'
+const APP_VERSION = 'v0.6.8'
 
 // 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
 type SheetData = {
@@ -559,6 +559,9 @@ ${t('sample.md.more')}
   const [filesOpen, setFilesOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [spellPanelOpen, setSpellPanelOpen] = useState(false)
+  const [apiDialogOpen, setApiDialogOpen] = useState(false)
+  const [apiDocText, setApiDocText] = useState('')
+  const [apiLiveBase, setApiLiveBase] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('samoffice_theme') as Theme) || 'auto'
@@ -577,6 +580,32 @@ ${t('sample.md.more')}
     toastTimer.current = setTimeout(() => setToast(''), 2500)
   }, [])
 
+  // === API 文档按钮：拉取 SamOffice-API.md，自动复制到剪贴板并弹窗展示 ===
+  // 复制给智能体后，智能体即可通过 /api/lib/* 与 /api/doc/* 直接创建、编辑、保存、打开各类文档。
+  const copyTextToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+        return true
+      }
+    } catch {}
+    // 回退：临时 textarea + execCommand（Wails WebView2 / 旧浏览器兼容）
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
+  }
+
   // Escape 关闭顶栏弹出菜单（Files 下拉、移动端汉堡菜单）
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
@@ -584,10 +613,11 @@ ${t('sample.md.more')}
       if (filesOpen) { setFilesOpen(false); e.preventDefault() }
       else if (menuOpen) { setMenuOpen(false); e.preventDefault() }
       else if (spellPanelOpen) { setSpellPanelOpen(false); e.preventDefault() }
+      else if (apiDialogOpen) { setApiDialogOpen(false); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [filesOpen, menuOpen, spellPanelOpen])
+  }, [filesOpen, menuOpen, spellPanelOpen, apiDialogOpen])
 
   // 主题应用
   useEffect(() => {
@@ -629,6 +659,32 @@ ${t('sample.md.more')}
     }
     return ''
   }
+
+  // === API 文档按钮：拉取 SamOffice-API.md，自动复制到剪贴板并弹窗展示 ===
+  // 复制给智能体后，智能体即可通过 /api/lib/* 与 /api/doc/* 直接创建、编辑、保存、打开各类文档。
+  const openApiDialog = useCallback(async () => {
+    let md = ''
+    try {
+      const resp = await fetch('SamOffice-API.md', { cache: 'no-store' })
+      md = resp.ok ? await resp.text() : ''
+    } catch {}
+    if (!md) {
+      showToast(t('app.apiCopyFailed'))
+      return
+    }
+    let base = ''
+    try { base = await getApiBase() } catch {}
+    setApiLiveBase(base)
+    // 复制文本 = 文档 + 当前实例基地址（智能体拿到即可直接调用）
+    const liveNote = base
+      ? `\n> **当前运行实例**：BASE = ${base} （立即可用，health 检查 GET ${base}/api/health）\n`
+      : ''
+    const full = md + '\n---\n' + liveNote
+    setApiDocText(full)
+    setApiDialogOpen(true)
+    const ok = await copyTextToClipboard(full)
+    showToast(ok ? t('app.apiCopied') : t('app.apiCopyFailed'))
+  }, [getApiBase, showToast, t])
 
   useEffect(() => {
     try { (window as any).go?.main?.App?.LogError?.('MOUNT_OK') } catch {}
@@ -1637,6 +1693,18 @@ ${t('sample.md.more')}
           {backend?.mode === 'local' ? t('app.local') : t('app.remote')}
         </div>
 
+        {/* API 按钮：打开并自动复制 SamOffice 全量 API 接口文档（MD），粘贴给智能体即可直创/编辑/保存/打开文档 */}
+        <button
+          onClick={openApiDialog}
+          data-testid="api-doc-btn"
+          data-tooltip={t('app.apiDoc')}
+          aria-label={t('app.apiDoc')}
+          className="px-2 py-1 text-xs font-semibold rounded-md flex items-center gap-1 flex-shrink-0 transition-all hover:bg-white/25"
+          style={{ background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.25)', ['--wails-draggable' as any]: 'no-drag' }}
+        >
+          <span style={{ letterSpacing: '0.02em' }}>API</span>
+        </button>
+
         {/* 拼写错误徽章 */}
         {spellErrors.length > 0 && (
           <button
@@ -1843,6 +1911,56 @@ ${t('sample.md.more')}
                   )}
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* API 接口文档弹窗：展示全量 API（MD 原文），打开时已自动复制到剪贴板 */}
+      {apiDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in-fast"
+          style={{ background: 'rgba(15, 23, 42, 0.5)' }}
+          onClick={() => setApiDialogOpen(false)}
+          data-testid="api-doc-dialog"
+        >
+          <div
+            className="w-full max-w-4xl max-h-[85vh] flex flex-col rounded-xl overflow-hidden shadow-2xl"
+            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--color-border)' }}>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge flex-shrink-0" style={{ background: 'var(--color-primary-50)', color: 'var(--color-primary)' }}>API</span>
+                <span className="text-sm font-semibold truncate" style={{ color: 'var(--color-text)' }}>{t('app.apiDoc')}</span>
+                {apiLiveBase && (
+                  <span className="text-xs font-mono px-2 py-0.5 rounded flex-shrink-0" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-primary)' }} title={t('app.apiDoc')}>{apiLiveBase}</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={async () => {
+                    const ok = await copyTextToClipboard(apiDocText)
+                    showToast(ok ? t('app.apiCopied') : t('app.apiCopyFailed'))
+                  }}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-md transition-all"
+                  style={{ background: 'var(--color-primary)', color: '#fff' }}
+                >{t('app.apiCopy')}</button>
+                <button
+                  onClick={() => setApiDialogOpen(false)}
+                  className="px-1.5"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >✕</button>
+              </div>
+            </div>
+            <div className="px-4 py-2 text-xs" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text-secondary)', borderBottom: '1px solid var(--color-border)' }}>
+              {t('app.apiHint')}
+            </div>
+            <div className="flex-1 overflow-auto">
+              <pre
+                className="text-xs leading-relaxed p-4"
+                style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', color: 'var(--color-text)', margin: 0, userSelect: 'text' }}
+              >{apiDocText}</pre>
             </div>
           </div>
         </div>

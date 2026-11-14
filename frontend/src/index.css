@@ -282,6 +282,12 @@ body {
      优先用西文字体占位避免中文被无衬线（微软雅黑）抢走，从而让宋体真正生效 */
   font-family: "Segoe UI", "Calibri", "SimSun", "宋体", "NSimSun",
     "Microsoft YaHei", "DengXian", "等线", serif;
+  /* 对齐 MS Word 的空格语义（xml:space="preserve"）：
+     连续空格逐个占位、run 边界空格不折叠、行尾空格悬挂不占位。
+     缺省 normal 会把 “中  文” 折叠成 “中 文”，占位宽度错误。 */
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 .ProseMirror h1 {
   font-size: 30px;

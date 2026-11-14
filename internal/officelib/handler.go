@@ -60,8 +60,13 @@ type DocGridSpec struct {
 }
 
 // DocMargins 页边距规格 (cm)
+// 注意：每个字段独立 json tag（联合 tag 如 `json:"top,bottom"` 在 encoding/json 中
+// 无效——所有字段都会被命名为 "top"，其余键被丢弃，智能体传参将错位）。
 type DocMargins struct {
-        Top, Bottom, Left, Right float64 `json:"top,bottom,left,right"`
+        Top    float64 `json:"top"`
+        Bottom float64 `json:"bottom"`
+        Left   float64 `json:"left"`
+        Right  float64 `json:"right"`
 }
 
 // DocElement docx 元素（多态）
@@ -310,7 +315,8 @@ type PptBgAurora struct {
 
 // PptAuroraGlow 装饰性发光圆
 type PptAuroraGlow struct {
-        X, Y  int    `json:"x"`  // EMU
+        X     int    `json:"x"`  // EMU
+        Y     int    `json:"y"`  // EMU
         R     int    `json:"r"`  // 半径 EMU
         Color string `json:"color"`
         Alpha int    `json:"alpha"` // 0-100
@@ -319,8 +325,10 @@ type PptAuroraGlow struct {
 // PptShape 自定义形状
 type PptShape struct {
         Type     string  `json:"type"`     // rect/roundRect/ellipse/triangle/diamond/star5/rightArrow
-        X, Y     int     `json:"x,y"`      // EMU
-        W, H     int     `json:"w,h"`      // EMU
+        X        int     `json:"x"`        // EMU
+        Y        int     `json:"y"`        // EMU
+        W        int     `json:"w"`        // EMU
+        H        int     `json:"h"`        // EMU
         Fill     string  `json:"fill"`
         Gradient string  `json:"gradient"` // "4f46e5,818cf8"
         Stroke   string  `json:"stroke"`
@@ -355,7 +363,10 @@ type PptTextRun struct {
 
 // PptCard 现代卡片
 type PptCard struct {
-        X, Y, W, H int    `json:"x,y,w,h"`
+        X          int    `json:"x"`
+        Y          int    `json:"y"`
+        W          int    `json:"w"`
+        H          int    `json:"h"`
         Fill       string `json:"fill"`
         Stroke     string `json:"stroke"`
         Glass      bool   `json:"glass"`
@@ -375,7 +386,10 @@ type PptCard struct {
 
 // PptKPICard KPI 卡片
 type PptKPICard struct {
-        X, Y, W, H int    `json:"x,y,w,h"`
+        X           int    `json:"x"`
+        Y           int    `json:"y"`
+        W           int    `json:"w"`
+        H           int    `json:"h"`
         Value      string `json:"value"`      // 大数字
         Label      string `json:"label"`      // 标签
         ValueColor string `json:"valueColor"`
@@ -384,7 +398,10 @@ type PptKPICard struct {
 
 // PptCodeBlock 代码块
 type PptCodeBlock struct {
-        X, Y, W, H int      `json:"x,y,w,h"`
+        X         int      `json:"x"`
+        Y         int      `json:"y"`
+        W         int      `json:"w"`
+        H         int      `json:"h"`
         Lines      []string `json:"lines"`
         FontSize   int      `json:"fontSize"` // pt
         BgColor    string   `json:"bgColor"`
@@ -392,7 +409,10 @@ type PptCodeBlock struct {
 
 // PptText 自由文本块
 type PptText struct {
-        X, Y, W, H int    `json:"x,y,w,h"`
+        X         int    `json:"x"`
+        Y         int    `json:"y"`
+        W         int    `json:"w"`
+        H         int    `json:"h"`
         Text       string `json:"text"`
         FontSize   int    `json:"fontSize"` // pt
         FontBold   bool   `json:"fontBold"`
@@ -406,7 +426,10 @@ type PptText struct {
 
 // PptPill pill 标签
 type PptPill struct {
-        X, Y, W, H int    `json:"x,y,w,h"`
+        X     int    `json:"x"`
+        Y     int    `json:"y"`
+        W     int    `json:"w"`
+        H     int    `json:"h"`
         Text       string `json:"text"`
         Color      string `json:"color"`
 }
@@ -603,7 +626,10 @@ type PdfSpec struct {
 
 // PdfMargins 页边距 (pt)
 type PdfMargins struct {
-        Top, Bottom, Left, Right float64 `json:"top,bottom,left,right"`
+        Top    float64 `json:"top"`
+        Bottom float64 `json:"bottom"`
+        Left   float64 `json:"left"`
+        Right  float64 `json:"right"`
 }
 
 // PdfElement PDF 元素 (多态)

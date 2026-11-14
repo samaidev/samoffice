@@ -27,6 +27,7 @@ import (
 	"github.com/zai/samoffice/internal/dict"
 	"github.com/zai/samoffice/internal/dict/hunspell"
 	"github.com/zai/samoffice/internal/dict/userdict"
+	"github.com/zai/samoffice/internal/officelib"
 	"github.com/zai/samoffice/internal/parser"
 	"github.com/zai/samoffice/internal/server/api"
 )
@@ -72,6 +73,9 @@ func main() {
 	h := api.New(parser.NewRegistry(), dictMgr)
 	h.Register(r)
 	r.GET("/api/doc/local", h.LocalFileOpen)
+	// officelib：智能体直创 API（/api/lib/doc|xls|ppt|pdf/create 与 print），
+	// 与桌面版内嵌 HTTP 服务保持一致，API 文档见 frontend/public/SamOffice-API.md。
+	officelib.Register(r)
 
 	if static != "" {
 		fileServer := http.FileServer(http.Dir(static))
