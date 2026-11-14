@@ -1474,7 +1474,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           lastEmittedRef.current = udm
           onChangeRef.current(udm)
         }
-        if (onSpellCheckRef.current) onSpellCheckRef.current(ns.doc.textContent)
+        // 仅文档内容真实变化时才触发拼写检查 —— 旧版对所有事务（含 spell 装饰事务自身）
+        // 无条件调用，形成 "spell 事务 → onSpellCheck → setSpellErrors(新数组引用) →
+        // spell 事务" 的 518ms 死循环（500ms 防抖 + 请求耗时）。循环中装饰反复重建、
+        // 表格 NodeView 被连续重绘（实测静置 4s 重建 5 次+），点击/选区在 DOM 重建间隙
+        // 全部落空 —— "表格内文字无法编辑/无法全选/样式无法应用"的统一根因。
+        if (tr.docChanged && onSpellCheckRef.current) onSpellCheckRef.current(ns.doc.textContent)
         updateActiveState(ns)
         if (ns.doc.childCount !== pmBlockCount) setPmBlockCount(ns.doc.childCount)
         try { setFootnotes(extractFootnotes(ns.doc)) } catch (e) { /* ignore */ }
@@ -2782,7 +2787,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   }
   const insertLink = () => { const url = prompt('URL:'); if (url) { const v = viewRef.current; if (!v) return; const sel = v.state.selection; if (!sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.link.create({ href: url }))) } }
 
-  useEffect(() => { if (viewRef.current) { const v = viewRef.current; v.dispatch(setSpellErrors(v.state.tr, spellErrors)); v.updateState(v.state); setTick(t => t + 1) } }, [spellErrors])
+  // 拼写装饰同步：仅当错误【内容】真正变化时才 dispatch —— 引用相同或内容一致时
+  // 直接跳过（v.updateState(v.state) + setTick 会整体重渲染，旧版每次 fetch 回包都执行，
+  // 是 spell 事务高频重建装饰/NodeView 的放大器）。
+  const lastSpellSigRef = useRef('')
+  useEffect(() => {
+    if (!viewRef.current) return
+    const sig = spellErrors.map(e => e.word).join('\u0001') + '#' + spellErrors.length
+    if (sig === lastSpellSigRef.current) return
+    lastSpellSigRef.current = sig
+    const v = viewRef.current
+    v.dispatch(setSpellErrors(v.state.tr, spellErrors))
+  }, [spellErrors])
 
   // 键盘缩放: Ctrl+= 放大, Ctrl+- 缩小, Ctrl+0 重置 (仅当焦点不在输入框时, 或允许组合键)
   useEffect(() => {

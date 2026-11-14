@@ -19,7 +19,11 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.7.2'
+const APP_VERSION = 'v0.7.3'
+
+// 模块级空拼写错误数组：空结果复用同一引用，避免每次 setSpellErrors(新 [])
+// 触发 DocumentEditor [spellErrors] effect（装饰重建 + setTick 重渲染）。
+const EMPTY_SPELL_ERRORS: SpellError[] = []
 
 // 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
 type SheetData = {
@@ -852,12 +856,15 @@ ${t('sample.md.more')}
     if (spellTimer.current) clearTimeout(spellTimer.current)
     spellTimer.current = setTimeout(async () => {
       if (!backend || !text.trim()) {
-        setSpellErrors([])
+        setSpellErrors(EMPTY_SPELL_ERRORS)
         return
       }
       try {
         const errs = await backend.spellCheck(text, lang)
-        setSpellErrors(errs)
+        // 引用稳定：结果为空时复用模块级空数组。旧版每次 fetch 都 setSpellErrors(新[])
+        // → DocumentEditor [spellErrors] effect 重跑 → dispatch spell 事务 → （修复前）
+        // 又触发 onSpellCheck —— 518ms 死循环。空结果复用引用可斩断最后一环。
+        setSpellErrors(errs.length ? errs : EMPTY_SPELL_ERRORS)
       } catch (e) {
         console.error('spell check failed', e)
       }

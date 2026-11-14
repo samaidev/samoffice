@@ -1544,8 +1544,14 @@ ol.ref-list > li::before {
 }
 
 /* === 数学公式节点 === */
+/* display:block 在含大量公式块的长文档中触发 Chromium 合成层 hit-test 失效
+   （表格区域点击/选区全部落空，E2E round20 二分定位：block 版死区、
+   inline-block 版可点）。inline-block + width:100% + border-box 视觉等价
+   （独占一行、全宽）。 */
 .sam-math {
-  display: block;
+  display: inline-block;
+  width: 100%;
+  box-sizing: border-box;
   margin: 8px 0;
   padding: 4px 8px;
   background: var(--color-bg-subtle);
