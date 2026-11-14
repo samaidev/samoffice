@@ -10,7 +10,13 @@ import { Schema } from 'prosemirror-model'
 export function cellDomStyle(node: any): string {
   const enc: string = node.attrs.borders || ''
   const sides: boolean[] = enc.length === 4 ? enc.split('').map(ch => ch === '1') : [true, true, true, true]
-  const color = node.attrs.borderColor || '#cbd5e1'
+  // 边框色兼容两种来源格式：前端颜色选择器存 "#rrggbb"，docx 解析器存 "rrggbb"（无 #，
+  // core.TableCell 约定）。无 # 的裸十六进制是非法 CSS（"0.5pt solid 000000" 整条声明
+  // 会被浏览器丢弃 → 边框消失），此处统一归一化补 #。
+  const rawColor: string = (node.attrs.borderColor || '').trim()
+  const color = /^#?[0-9a-fA-F]{3,8}$/.test(rawColor)
+    ? (rawColor.startsWith('#') ? rawColor : '#' + rawColor)
+    : '#cbd5e1'
   const bw = node.attrs.borderW
   const line = `${bw && bw > 0 ? bw + 'pt' : '1px'} solid ${color}`
   const s: string[] = [

@@ -1567,6 +1567,30 @@ func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
         }
 }
 
+// 表格边框模型（对齐 OOXML / MS Word）：
+//  1. 表格级 tblBorders（top/left/bottom/right/insideH/insideV）作为缺省；
+//  2. 单元格 tcBorders 显式覆盖对应侧（nil/none = 显式无线）；
+//  3. 未指定的侧按位置回退（见 finalizeTableBorders）；
+//  4. 任何位置都无定义 → 该侧无线（Word 行为）；
+//  5. color="auto" → 黑色（Word 将 auto 渲染为黑）——此前被忽略导致前端
+//     回退到浅灰 #CBD5E1，是用户看到"边框缺失/太浅"的主因。
+
+type tblBorderSide struct {
+        specified bool // 该侧在 tblBorders 中有定义
+        on        bool // val != nil/none
+        sz        int  // 线宽（eighths-of-a-point）
+        color     string
+}
+
+// cellBorderExplicit 单元格 tcBorders 中显式声明的边（逐侧）：
+// unspecified(-1) / off(0) / on(1)，以及 on 侧的线宽与线色。
+type cellBorderExplicit struct {
+        side     [4]int8
+        sz       [4]int
+        color    [4]string
+        hasTC    bool // 该单元格出现过 tcBorders
+}
+
 // parseTable 解析 <w:tbl>，返回 *core.Table。容错：未知或残缺元素跳过。
 func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int, ntf map[int]string, media *docMedia) core.Block {
         tbl := &core.Table{Rows: [][]core.TableCell{}}
@@ -1575,14 +1599,54 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
         var curCellInline []core.Inline
         inTcPr := false
         inTcBorders := false
+        inTblBorders := false
+
+        // 表格级边框（tblBorders）
+        var tblB [6]tblBorderSide // 0=top 1=left 2=bottom 3=right 4=insideH 5=insideV
+        tblHasBorders := false
+        // 逐格显式边框信息（与 tbl.Rows 平行）
+        var cellInfos [][]cellBorderExplicit
+        var curRowInfos []cellBorderExplicit
+        var curInfo cellBorderExplicit
+
+        // borderVal 解析 w:val：nil/none → 无线；其余（single/double/dashed…）→ 有线
+        borderOn := func(val string) bool { return val != "nil" && val != "none" }
+        // borderColor 解析 w:color：auto/空 → 黑（Word 语义）；十六进制原样（去 #）
+        borderColor := func(c string) string {
+                c = strings.TrimSpace(c)
+                if c == "" || c == "auto" {
+                        return "000000"
+                }
+                return strings.TrimPrefix(c, "#")
+        }
+        // tblBorders 侧索引
+        tblSideIdx := func(name string) int {
+                switch name {
+                case "top":
+                        return 0
+                case "left":
+                        return 1
+                case "bottom":
+                        return 2
+                case "right":
+                        return 3
+                case "insideH":
+                        return 4
+                case "insideV":
+                        return 5
+                }
+                return -1
+        }
 
         flushCell := func() {
                 if curCellInline != nil {
                         curCell.Inline = curCellInline
                 }
                 curRow = append(curRow, curCell)
+                curRowInfos = append(curRowInfos, curInfo)
                 curCell = core.TableCell{}
                 curCellInline = nil
+                curInfo = cellBorderExplicit{side: [4]int8{-1, -1, -1, -1}}
         }
 
         for {
@@ -1595,11 +1659,98 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                         switch t.Name.Local {
                         case "tr":
                                 curRow = []core.TableCell{}
+                                curRowInfos = nil
                         case "tc":
                                 curCell = core.TableCell{}
                                 curCellInline = []core.Inline{}
+                                curInfo = cellBorderExplicit{side: [4]int8{-1, -1, -1, -1}}
                         case "tcPr":
                                 inTcPr = true
+                        case "tblBorders":
+                                // 表格级边框缺省（w:tblPr 内）
+                                inTblBorders = true
+                                tblHasBorders = true
+                        case "insideH", "insideV":
+                                if inTblBorders {
+                                        idx := tblSideIdx(t.Name.Local)
+                                        if idx >= 0 {
+                                                val, sz, color := "", 0, ""
+                                                for _, a := range t.Attr {
+                                                        switch a.Name.Local {
+                                                        case "val":
+                                                                val = a.Value
+                                                        case "sz":
+                                                                if n, e := strconv.Atoi(a.Value); e == nil {
+                                                                        sz = n
+                                                                }
+                                                        case "color":
+                                                                color = a.Value
+                                                        }
+                                                }
+                                                tblB[idx] = tblBorderSide{specified: true, on: borderOn(val), sz: sz, color: borderColor(color)}
+                                        }
+                                }
+                        case "tcBorders":
+                                // 单元格边框（前端表格工具"边框"预设导出为 w:tcBorders）
+                                if inTcPr {
+                                        inTcBorders = true
+                                        curInfo.hasTC = true
+                                        // 各侧初始"未指定"；逐侧显式声明
+                                        curInfo.side = [4]int8{-1, -1, -1, -1}
+                                }
+                        case "top", "right", "bottom", "left":
+                                if inTblBorders {
+                                        // 表格级侧边框
+                                        idx := tblSideIdx(t.Name.Local)
+                                        if idx >= 0 {
+                                                val, sz, color := "", 0, ""
+                                                for _, a := range t.Attr {
+                                                        switch a.Name.Local {
+                                                        case "val":
+                                                                val = a.Value
+                                                        case "sz":
+                                                                if n, e := strconv.Atoi(a.Value); e == nil {
+                                                                        sz = n
+                                                                }
+                                                        case "color":
+                                                                color = a.Value
+                                                        }
+                                                }
+                                                tblB[idx] = tblBorderSide{specified: true, on: borderOn(val), sz: sz, color: borderColor(color)}
+                                        }
+                                } else if inTcBorders {
+                                        val, sz, color := "", 0, ""
+                                        for _, a := range t.Attr {
+                                                switch a.Name.Local {
+                                                case "val":
+                                                        val = a.Value
+                                                case "sz":
+                                                        if n, e := strconv.Atoi(a.Value); e == nil {
+                                                                sz = n
+                                                        }
+                                                case "color":
+                                                        color = a.Value
+                                                }
+                                        }
+                                        sideIdx := 0
+                                        switch t.Name.Local {
+                                        case "top":
+                                                sideIdx = 0
+                                        case "right":
+                                                sideIdx = 1
+                                        case "bottom":
+                                                sideIdx = 2
+                                        case "left":
+                                                sideIdx = 3
+                                        }
+                                        if borderOn(val) {
+                                                curInfo.side[sideIdx] = 1
+                                                curInfo.sz[sideIdx] = sz
+                                                curInfo.color[sideIdx] = borderColor(color)
+                                        } else {
+                                                curInfo.side[sideIdx] = 0
+                                        }
+                                }
                         case "gridSpan":
                                 if inTcPr {
                                         for _, a := range t.Attr {
@@ -1639,56 +1790,6 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                                                 curCell.RowSpan = 1
                                         }
                                 }
-                        case "tcBorders":
-                                // 单元格边框（前端表格工具"边框"预设导出为 w:tcBorders）
-                                if inTcPr {
-                                        inTcBorders = true
-                                        // 默认四边有线；逐侧根据 w:val=nil/none 关闭
-                                        curCell.Borders = "1111"
-                                }
-                        case "top", "right", "bottom", "left":
-                                if inTcBorders {
-                                        val, sz, color := "", 0, ""
-                                        for _, a := range t.Attr {
-                                                switch a.Name.Local {
-                                                case "val":
-                                                        val = a.Value
-                                                case "sz":
-                                                        if n, e := strconv.Atoi(a.Value); e == nil {
-                                                                sz = n
-                                                        }
-                                                case "color":
-                                                        color = a.Value
-                                                }
-                                        }
-                                        sideIdx := 0
-                                        switch t.Name.Local {
-                                        case "top":
-                                                sideIdx = 0
-                                        case "right":
-                                                sideIdx = 1
-                                        case "bottom":
-                                                sideIdx = 2
-                                        case "left":
-                                                sideIdx = 3
-                                        }
-                                        b := []byte(curCell.Borders)
-                                        if len(b) == 4 {
-                                                if val == "nil" || val == "none" {
-                                                        b[sideIdx] = '0'
-                                                } else {
-                                                        b[sideIdx] = '1'
-                                                        // 线宽（eighths-of-a-point → pt）/线色：仅在有效时记录一次
-                                                        if curCell.BorderW == 0 && sz > 0 {
-                                                                curCell.BorderW = float64(sz) / 8
-                                                        }
-                                                        if curCell.BorderColor == "" && color != "" && color != "auto" {
-                                                                curCell.BorderColor = strings.TrimPrefix(color, "#")
-                                                        }
-                                                }
-                                                curCell.Borders = string(b)
-                                        }
-                                }
                         case "p":
                                 for _, b := range parseParagraph(dec, footnotes, fn, ntf, media, nil) {
                                         if b == nil {
@@ -1708,16 +1809,133 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                                 inTcPr = false
                         case "tcBorders":
                                 inTcBorders = false
+                        case "tblBorders":
+                                inTblBorders = false
                         case "tc":
                                 flushCell()
                         case "tr":
                                 tbl.Rows = append(tbl.Rows, curRow)
+                                cellInfos = append(cellInfos, curRowInfos)
                         case "tbl":
+                                // === 边框最终化：显式侧 + 表格级回退 → 逐格 Borders 编码 ===
+                                finalizeTableBorders(tbl, cellInfos, tblB, tblHasBorders)
                                 return tbl
                         }
                 }
         }
+        // XML 截断（无 </w:tbl>）时也要最终化，避免边框全空
+        finalizeTableBorders(tbl, cellInfos, tblB, tblHasBorders)
         return tbl
+}
+
+// finalizeTableBorders 按 OOXML 回退规则计算每个单元格的四侧边框编码与线宽/线色。
+// side: 0=top 1=right 2=bottom 3=left（与 core.TableCell.Borders 编码一致）
+// 回退：首行 top→tbl.top / 非首行→insideH；末行 bottom→tbl.bottom / 非末行→insideH；
+// 首列 left→tbl.left / 非首列→insideV；末列 right→tbl.right / 非末列→insideV；
+// 无任何定义 → 无线（Word 行为）。
+func finalizeTableBorders(tbl *core.Table, cellInfos [][]cellBorderExplicit, tblB [6]tblBorderSide, tblHasBorders bool) {
+        if len(tbl.Rows) == 0 {
+                return
+        }
+        lastRow := len(tbl.Rows) - 1
+        // 每行的网格总列数（gridSpan 累计；gridCols 缺失时用首行的累计值）
+        rowGridCols := func(r int) int {
+                n := 0
+                for _, c := range tbl.Rows[r] {
+                        sp := c.ColSpan
+                        if sp < 1 {
+                                sp = 1
+                        }
+                        n += sp
+                }
+                return n
+        }
+        for r := range tbl.Rows {
+                rowN := rowGridCols(r)
+                if rowN == 0 {
+                        continue
+                }
+                // 网格列游标（跨列单元格占据多列）
+                colIdx := 0
+                for c := range tbl.Rows[r] {
+                        cell := &tbl.Rows[r][c]
+                        var info cellBorderExplicit
+                        if r < len(cellInfos) && c < len(cellInfos[r]) {
+                                info = cellInfos[r][c]
+                        }
+                        sp := cell.ColSpan
+                        if sp < 1 {
+                                sp = 1
+                        }
+                        endCol := colIdx + sp - 1
+                        enc := [4]byte{'0', '0', '0', '0'}
+                        widthSet, colorSet := false, false
+                        for side := 0; side < 4; side++ {
+                                on := false
+                                var wc int
+                                var col string
+                                if info.side[side] == 1 {
+                                        // 显式有线
+                                        on = true
+                                        wc = info.sz[side]
+                                        col = info.color[side]
+                                } else if info.side[side] == 0 {
+                                        // 显式无线（nil/none 覆盖表格级缺省）
+                                        on = false
+                                } else if tblHasBorders {
+                                        // 未指定 → 表格级回退
+                                        var fb tblBorderSide
+                                        switch side {
+                                        case 0: // top
+                                                if r == 0 {
+                                                        fb = tblB[0]
+                                                } else {
+                                                        fb = tblB[4]
+                                                }
+                                        case 2: // bottom
+                                                if r == lastRow {
+                                                        fb = tblB[2]
+                                                } else {
+                                                        fb = tblB[4]
+                                                }
+                                        case 3: // left
+                                                if colIdx == 0 {
+                                                        fb = tblB[1]
+                                                } else {
+                                                        fb = tblB[5]
+                                                }
+                                        case 1: // right
+                                                if endCol >= rowN-1 {
+                                                        fb = tblB[3]
+                                                } else {
+                                                        fb = tblB[5]
+                                                }
+                                        }
+                                        on = fb.on
+                                        wc = fb.sz
+                                        col = fb.color
+                                }
+                                // tblB 未定义该侧（specified=false → on=false）自然无线
+                                if on {
+                                        enc[side] = '1'
+                                        if !widthSet && wc > 0 {
+                                                cell.BorderW = float64(wc) / 8
+                                                widthSet = true
+                                        }
+                                        if !colorSet && col != "" {
+                                                cell.BorderColor = col
+                                                colorSet = true
+                                        }
+                                }
+                        }
+                        // 完全无定义且无 tcBorders：保持空编码（前端按四边默认线渲染，
+                        // 兼容无任何边框信息的极简表格——与旧行为一致，避免误伤）。
+                        if info.hasTC || tblHasBorders {
+                                cell.Borders = string(enc[:])
+                        }
+                        colIdx += sp
+                }
+        }
 }
 
 // === OMML → LaTeX 转换（覆盖常见结构）===

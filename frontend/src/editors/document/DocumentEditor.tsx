@@ -195,106 +195,8 @@ function ColorGrid({ colors, onPick, onClear, clearLabel, customLabel }: { color
 // 修复点：1) 用 ref 实测宽度做边界收敛，旧版硬编码 300px 在扩充按钮后估不准；
 // 2) 颜色面板默认向下弹出，空间不足时自动翻转到上方（旧版固定向上，贴近顶部时被裁剪）；
 // 3) 补齐 MS Word mini 栏应有的高频按钮：字号、字色、高亮、对齐、标题。
-function SelectionMiniToolbar(props: {
-  pos: { x: number; y: number }
-  activeMarks: Set<string>
-  activeColor: string
-  activeFontSize: string
-  fontSizeOptions: { label: string; value: string }[]
-  exec: (cmd: string) => void
-  setTextColor: (c: string) => void
-  clearColor: () => void
-  setHighlight: (c: string) => void
-  setFontSize: (v: string) => void
-  t: (k: string) => string
-  onClosePopup: () => void
-}) {
-  const { pos, activeMarks, activeColor, activeFontSize, fontSizeOptions, exec, setTextColor, clearColor, setHighlight, setFontSize, t } = props
-  const [colorOpen, setColorOpen] = useState(false)
-  const [hlOpen, setHlOpen] = useState(false)
-  const [measured, setMeasured] = useState({ w: 380, h: 38 })
-  const barRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (barRef.current) {
-      const r = barRef.current.getBoundingClientRect()
-      setMeasured({ w: Math.ceil(r.width), h: Math.ceil(r.height) })
-    }
-  }, [])
-
-  const vw = window.innerWidth, vh = window.innerHeight
-  let mx = pos.x - measured.w / 2
-  let my = pos.y - measured.h - 8
-  if (mx + measured.w > vw - 8) mx = vw - measured.w - 8
-  if (mx < 8) mx = 8
-  if (my < 8) my = pos.y + 12 // 放到选区下方
-  if (my + measured.h > vh - 8) my = Math.max(8, vh - measured.h - 8)
-
-  const popupOpensUp = my + measured.h + 220 > vh
-
-  const btn = (onClick: () => void, label: React.ReactNode, title: string, active?: boolean) => (
-    <button onClick={onClick} className={`toolbar-btn ${active ? 'active' : ''}`} title={title} type="button" style={{ width: 28, height: 28 }}>{label}</button>
-  )
-
-  return (
-    <div ref={barRef} className="fixed z-50 flex items-center gap-0.5 px-1.5 py-1 rounded-lg shadow-xl animate-fade-in"
-      style={{ left: mx, top: my, background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}
-      onMouseDown={e => { if (!(e.target as HTMLElement).closest('input')) e.preventDefault() }}>
-      {btn(() => exec('bold'), <b>B</b>, t('doc.bold') + ' Ctrl+B', activeMarks.has('bold'))}
-      {btn(() => exec('italic'), <i>I</i>, t('doc.italic') + ' Ctrl+I', activeMarks.has('italic'))}
-      {btn(() => exec('underline'), <u>U</u>, t('doc.underline') + ' Ctrl+U', activeMarks.has('underline'))}
-      <Dropdown
-        className="text-xs rounded-md px-1 ribbon-input"
-        style={{ width: 62, height: 26, fontSize: 12 }}
-        editable
-        inputMode="text"
-        inputValue={activeFontSize.replace(/px$/, '')}
-        value={activeFontSize}
-        onInputChange={(raw: string) => { const r = resolveFontSizeInput(raw); if (r) setFontSize(r) }}
-        onChange={(v: string) => setFontSize(v)}
-        options={fontSizeOptions}
-        title={t('doc.fontSize')}
-      />
-      <div className="toolbar-divider" />
-      <div className="relative">
-        <button className="toolbar-btn" title={t('doc.textColor')} type="button" style={{ width: 28, height: 28 }}
-          onClick={() => { setColorOpen(!colorOpen); setHlOpen(false) }}>
-          <IconFontColor color={activeColor || '#111111'} />
-        </button>
-        {colorOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setColorOpen(false)} />
-            <div className="absolute ribbon-popup" style={{ ...(popupOpensUp ? { bottom: '100%', marginBottom: 6, top: 'auto' } : { top: '100%', marginTop: 6, bottom: 'auto' }), left: 0, right: 'auto', zIndex: 51 } as any}>
-              <ColorGrid colors={COLORS} onPick={c => { setTextColor(c); setColorOpen(false) }} onClear={clearColor} clearLabel={t('doc.autoColor')} customLabel={t('doc.customColor')} />
-            </div>
-          </>
-        )}
-      </div>
-      <div className="relative">
-        <button className="toolbar-btn" title={t('doc.highlight')} type="button" style={{ width: 28, height: 28 }}
-          onClick={() => { setHlOpen(!hlOpen); setColorOpen(false) }}>
-          <IconHighlight />
-        </button>
-        {hlOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setHlOpen(false)} />
-            <div className="absolute ribbon-popup" style={{ ...(popupOpensUp ? { bottom: '100%', marginBottom: 6, top: 'auto' } : { top: '100%', marginTop: 6, bottom: 'auto' }), left: 0, right: 'auto', zIndex: 51 } as any}>
-              <ColorGrid colors={HL_COLORS} onPick={c => { setHighlight(c); setHlOpen(false) }} />
-            </div>
-          </>
-        )}
-      </div>
-      <div className="toolbar-divider" />
-      {btn(() => exec('alignLeft'), <IconAlignLeft />, t('doc.alignLeft'))}
-      {btn(() => exec('alignCenter'), <IconAlignCenter />, t('doc.alignCenter'))}
-      {btn(() => exec('alignRight'), <IconAlignRight />, t('doc.alignRight'))}
-      <div className="toolbar-divider" />
-      {btn(() => exec('h1'), 'H1', t('doc.heading1'))}
-      {btn(() => exec('h2'), 'H2', t('doc.heading2'))}
-      {btn(() => exec('h3'), 'H3', t('doc.heading3'))}
-    </div>
-  )
-}
+// SelectionMiniToolbar 已于 round17 移除：悬浮格式工具栏与选区位置冲突、遮挡正文，干扰编辑。
+// 加粗/字号/颜色等格式功能保留在 Ribbon「开始」选项卡与右键菜单。
 
 function StyleEditor({ name, initial, onCancel, onSave }: { name: string; initial: StyleFormat; onCancel: () => void; onSave: (f: StyleFormat) => void }) {
   const { t } = useI18n()
@@ -944,8 +846,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [tableBorderColor, setTableBorderColor] = useState('#000000')
   const [tableBorderWidth, setTableBorderWidth] = useState(1)
   const [watermark, setWatermark] = useState('')
-  const [showMiniToolbar, setShowMiniToolbar] = useState(false)
-  const [miniToolbarPos, setMiniToolbarPos] = useState({ x: 0, y: 0 })
   // 自动调整下拉（对齐 MS Word 表格工具「自动调整」：根据内容/根据窗口/固定列宽）
   const [showAutoFitMenu, setShowAutoFitMenu] = useState(false)
   const [showContextMenu, setShowContextMenu] = useState(false)
@@ -1584,10 +1484,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       handleDOMEvents: {
         focus: () => { setFocused(true); return false },
         blur: () => { setFocused(false); return false },
-        mouseup: (view: any, e: any) => {
-          const v = viewRef.current
-          if (v && !v.state.selection.empty) { setShowMiniToolbar(true); setMiniToolbarPos({ x: e.clientX, y: e.clientY }) }
-          else { setShowMiniToolbar(false) }
+        mouseup: () => {
+          // round17：Mini 浮动工具栏已移除（干扰编辑），不再在选区时弹出
           return false
         },
         contextmenu: (view: any, e: any) => {
@@ -2260,7 +2158,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       case 'dropCap': setParaAttr('dropCap', !activeAttrs.dropCap); break
       case 'toggleRTL': setParaAttr('rtl', !activeAttrs.rtl); break
     }
-    v.focus(); setShowMiniToolbar(false); setShowMiniColorPopup(false); setShowContextMenu(false)
+    v.focus(); setShowMiniColorPopup(false); setShowContextMenu(false)
   }
 
   // === 修订：收集所有 insert_track / delete_track 变更区间 ===
@@ -2890,13 +2788,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       if (e.key !== 'Escape') return
       if (showContextMenu) { setShowContextMenu(false); e.preventDefault() }
       else if (showMiniColorPopup) { setShowMiniColorPopup(false); e.preventDefault() }
-      else if (showMiniToolbar) { setShowMiniToolbar(false); e.preventDefault() }
       else if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
       else if (searchOpen) { setSearchOpen(false); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [showContextMenu, showMiniColorPopup, showMiniToolbar, anyPanelOpen, searchOpen])
+  }, [showContextMenu, showMiniColorPopup, anyPanelOpen, searchOpen])
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('doc.ribbon.home') }, { id: 'insert', label: t('doc.ribbon.insert') }, { id: 'layout', label: t('doc.ribbon.layout') }, { id: 'review', label: t('doc.ribbon.review') }, { id: 'view', label: t('doc.ribbon.view') },
@@ -3616,23 +3513,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         </div>
       )}
 
-      {/* Mini 浮动工具栏 — 实测宽度边界收敛 + 弹出方向自适应 + 补齐 MS Word 高频按钮 */}
-      {showMiniToolbar && (
-        <SelectionMiniToolbar
-          pos={miniToolbarPos}
-          activeMarks={activeMarks}
-          activeColor={activeColor}
-          activeFontSize={activeFontSize}
-          fontSizeOptions={FONT_SIZES.map(s => ({ label: s.name, value: s.value }))}
-          exec={exec}
-          setTextColor={setTextColor}
-          clearColor={clearTextColor}
-          setHighlight={setHighlight}
-          setFontSize={setFontSize}
-          t={t}
-          onClosePopup={() => setShowMiniColorPopup(false)}
-        />
-      )}
+      {/* Mini 浮动工具栏 — round17 移除：与选区/光标位置冲突，遮挡正文且干扰编辑
+        *（用户主诉"太影响编辑了"）。加粗/斜体/字号/颜色等全部功能在 Ribbon 开始
+        * 选项卡与右键菜单中均有入口，不受影响。 */}
 
       {/* 右键菜单 — 边界检测防止越界 */}
       {showContextMenu && (() => {
@@ -3701,7 +3584,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         ref={leftScrollRef}
         onScroll={() => syncScroll('left')}
         className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''} ${(splitWindow || compareTarget) ? 'flex' : ''}`}
-        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', flex: compareTarget ? '1 1 50%' : '1 1 auto', minWidth: 0, borderRight: compareTarget ? '2px solid var(--color-border)' : 'none' }}
+        style={{ background: 'var(--color-bg-alt)', position: 'relative', zIndex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', flex: compareTarget ? '1 1 50%' : '1 1 auto', minWidth: 0, borderRight: compareTarget ? '2px solid var(--color-border)' : 'none', overflowAnchor: 'none' }}
       >
       <div
         ref={pageRef}
@@ -4109,7 +3992,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             ref={compareRef}
             onScroll={() => syncScroll('right')}
             className={`flex-1 overflow-auto ${showMarks ? 'show-edit-marks' : ''}`}
-            style={{ position: 'relative', zIndex: 1 }}
+            style={{ position: 'relative', zIndex: 1, overflowAnchor: 'none' }}
           />
         </div>
       )}

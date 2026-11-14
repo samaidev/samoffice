@@ -444,16 +444,33 @@ export function createPaginationPlugin(
             // - 非段尾行单元格：去 border-bottom（下方线由下一行格的 border-top 提供）
             // - 段尾行（每页视觉最后一行 + 表格最后一行）：保留 border-bottom，
             //   使页尾断开处有完整底边框（MS Word 行为）
+            // 邻格感知（round17 修复）：仅当邻格确实有对应边（border-top/left = '1'）
+            // 时才把本格的边透明化。docx 导入的自定义边框表格中，相邻行的边框
+            // 组合各异（如 [1010] 行无线、表头仅底线）——旧逻辑无条件透明化，
+            // 一旦邻格不提供线，该处网格线就整条消失（"边框漏线"）。
             const cells = cellNodes[k]
+            // 解析单元格四边编码：'1'=有 '0'=无；空编码=四边默认有（schema 语义）
+            const sideOn = (node: any, idx: number): boolean => {
+              const enc: string = node?.attrs?.borders || ''
+              if (enc.length !== 4) return true
+              return enc[idx] === '1'
+            }
             for (let si = 0; si < cells.length; si++) {
               const keepBottom = si === cells.length - 1 || (rowShift[si + 1] || 0) > (rowShift[si] || 0)
               for (let ci = 0; ci < cells[si].length; ci++) {
                 const info = cells[si][ci]
                 const keepRight = ci === cells[si].length - 1
                 if (keepRight && keepBottom) continue // 无需调整的格子不发装饰，保持原生 toDOM 属性
+                // 邻格是否提供共享线：右侧线由右邻格 border-left 提供、
+                // 底部线由下一行同列格 border-top 提供（跨行/跨列对不齐时视为不提供，保守保留）
+                const rightNeighbor = cells[si][ci + 1]
+                const bottomNeighbor = si + 1 < cells.length ? cells[si + 1][ci] : undefined
+                const dropRight = !keepRight && rightNeighbor && sideOn(rightNeighbor.node, 3)
+                const dropBottom = !keepBottom && bottomNeighbor && sideOn(bottomNeighbor.node, 0)
+                if (!dropRight && !dropBottom) continue
                 let style = cellDomStyle(info.node)
-                if (!keepRight) style += ';border-right-color: transparent'
-                if (!keepBottom) style += ';border-bottom-color: transparent'
+                if (dropRight) style += ';border-right-color: transparent'
+                if (dropBottom) style += ';border-bottom-color: transparent'
                 cellBreaks.push({ pos: info.pos, size: info.size, style })
               }
             }
