@@ -472,6 +472,16 @@ body {
 .spell-error:hover {
   background: rgba(225, 29, 72, 0.18);
 }
+/* 拼写面板点击定位后的闪烁高亮 */
+@keyframes spell-jump-flash-anim {
+  0%, 100% { background: rgba(225, 29, 72, 0.06); }
+  25%, 75% { background: rgba(245, 158, 11, 0.45); }
+}
+.spell-jump-flash {
+  animation: spell-jump-flash-anim 0.8s ease-in-out 2;
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
 
 /* === 输入控件 === */
 input, textarea, select {

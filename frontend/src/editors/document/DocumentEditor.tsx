@@ -1572,6 +1572,45 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       },
     })
     viewRef.current = view; ;(window as any).__pmView = view
+    // 拼写面板点击定位（App 层调用）：在文档中找 word 首次出现 → 选中 + 滚动 + 闪烁。
+    // 返回 false 表示未找到（App 层提示）。挂在 window 上与 __pmView 同生命周期。
+    // 注意：绝不能闭包捕获 view —— React StrictMode 双挂载时 cleanup 顺序不定，
+    // 最终留在 window 上的可能是【旧实例（已 destroy）】的函数，其 view.state.doc
+    // 是过期空文档 → 永远 no-hit。每次调用时从 viewRef.current 取当前活跃 view。
+    ;(window as any).__docJumpToWord = (word: string): boolean => {
+      try {
+        const v = viewRef.current
+        if (!word || !v) return false
+        const w = word.toLowerCase()
+        let hit: { from: number; to: number } | null = null
+        // 注意：descendants 回调 return false = 不深入该节点子树。
+        // 非文本节点（段落/表格等容器）必须 return true 才能继续深入找文本，
+        // 只有已命中时才 return false 提前剪枝。
+        v.state.doc.descendants((node: any, pos: number) => {
+          if (hit) return false
+          if (!node.isText || !node.text) return true
+          const idx = node.text.toLowerCase().indexOf(w)
+          if (idx >= 0) hit = { from: pos + idx, to: pos + idx + word.length }
+          return !hit
+        })
+        if (!hit) return false
+        const h = hit as { from: number; to: number }
+        v.dispatch(v.state.tr
+          .setSelection(TextSelection.create(v.state.doc, h.from, h.to))
+          .scrollIntoView())
+        v.focus()
+        // 闪烁高亮：给包含该词的拼写错误装饰 DOM 加动画类（样式见 index.css）
+        try {
+          v.dom.querySelectorAll('.spell-error').forEach((el) => {
+            if (el.textContent && el.textContent.toLowerCase().includes(w)) {
+              el.classList.add('spell-jump-flash')
+              setTimeout(() => el.classList.remove('spell-jump-flash'), 1600)
+            }
+          })
+        } catch { /* 忽略 */ }
+        return true
+      } catch { return false }
+    }
     // 包装 DOMObserver.flush：标记"伪同步事务"的调用来源（配合 dispatchTransaction 恢复被压塌的 CellSelection）
     try {
       const dv = view as any
@@ -1586,7 +1625,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     try { setFootnotes(extractFootnotes(doc)) } catch (e) { /* ignore */ }
     try { setComments(extractComments(doc)) } catch (e) { /* ignore */ }
     lastEmittedRef.current = document
-    return () => { view.destroy(); viewRef.current = null }
+    return () => { view.destroy(); viewRef.current = null; (window as any).__docJumpToWord = undefined }
   }, [])
 
   // 当外部（打开文件 / 新建文档）替换了 document prop 时，同步到编辑器视图。
@@ -3273,11 +3312,45 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             <RibbonButton icon="🔍" label={t('doc.findReplace')} onClick={() => setSearchOpen(!searchOpen)} />
             <RibbonButton icon={spellErrors.length > 0 ? '❗' : '✓'} label={spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {
               if (spellErrors.length > 0) {
-                // Jump to first spell error
+                // 跳到下一个拼写错误：优先用文档中带 spell-error 装饰的词，
+                // 依次向后找第一个不在当前选区之前的（旧实现误用 searchPlugin 的
+                // matches —— 拼写词不在查找匹配里，几乎永远弹“无错误”）。
                 const v = viewRef.current; if (!v) return
-                const ss = getSearchState(v)
-                if (ss && ss.matches.length > 0) { nextMatch(v) }
-                else { alert(t('doc.spellNoErrors') || 'No spelling errors') }
+                const words = spellErrors.map(e => e.word).filter(Boolean)
+                let jumped = false
+                const selTo = v.state.selection.to
+                // 从当前光标之后找第一个仍存在于文档中的错误词
+                for (const w of words) {
+                  const lw = w.toLowerCase()
+                  let hit: { from: number; to: number } | null = null
+                  // descendants 回调 return false = 不深入子树；容器节点须 return true（见 __docJumpToWord 注释）
+                  v.state.doc.descendants((node: any, pos: number) => {
+                    if (hit) return false
+                    if (!node.isText || !node.text) return true
+                    const idx = node.text.toLowerCase().indexOf(lw)
+                    if (idx >= 0 && pos + idx >= selTo) hit = { from: pos + idx, to: pos + idx + w.length }
+                    return !hit
+                  })
+                  if (!hit) { // 光标后没有：允许从头找（wrap around）
+                    v.state.doc.descendants((node: any, pos: number) => {
+                      if (hit) return false
+                      if (!node.isText || !node.text) return true
+                      const idx = node.text.toLowerCase().indexOf(lw)
+                      if (idx >= 0) hit = { from: pos + idx, to: pos + idx + w.length }
+                      return !hit
+                    })
+                  }
+                  if (hit) {
+                    const h = hit as { from: number; to: number }
+                    v.dispatch(v.state.tr
+                      .setSelection(TextSelection.create(v.state.doc, h.from, h.to))
+                      .scrollIntoView())
+                    v.focus()
+                    jumped = true
+                    break
+                  }
+                }
+                if (!jumped) alert(t('doc.spellNoErrors') || 'No spelling errors')
               } else {
                 // Trigger spell check
                 const v = viewRef.current; if (!v) return

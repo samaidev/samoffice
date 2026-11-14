@@ -19,7 +19,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.7.0'
+const APP_VERSION = 'v0.7.1'
 
 // 工作表数据（含 SpreadsheetEditor 的列宽/冻结窗格/浮动图片元数据）
 type SheetData = {
@@ -511,6 +511,17 @@ ${t('sample.md.more')}
         ? { ...w, savedFingerprint: fingerprintOf({ ...w, doc: d }) } : w)))
     }
   }
+
+  // E2E 测试钩子（不影响生产逻辑）：scripts/e2e/*.mjs 用它模拟"打开文件"——
+  // 走 activateWindowData 正规路径（建窗口标签 + applyWindow 恢复编辑状态），
+  // 与真实打开完全一致，避免绕过状态导致测不到真实渲染。
+  useEffect(() => {
+    ;(window as any).__setDocForTest = (d: any) => {
+      activateWindowData({ type: 'document', path: 'e2e-test.docx', title: 'E2E', doc: d })
+    }
+    return () => { ;(window as any).__setDocForTest = undefined }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })
   // SlideEditor 快照回流：同理重设幻灯片窗口基线
   const handleSlideSnapshot = (slides: SlideData[]) => {
     setSlideSnapshot(slides)
@@ -1391,6 +1402,16 @@ ${t('sample.md.more')}
     input.click()
   }
 
+  // 拼写面板点击定位：委托 DocumentEditor 暴露的 window.__docJumpToWord(word)。
+  // 找到该词在文档中的首次出现 → 选中 + 滚动到可见 + 闪烁高亮。
+  const handleJumpToSpellError = useCallback((word: string) => {
+    const jump = (window as any).__docJumpToWord
+    if (typeof jump === 'function') {
+      const ok = jump(word)
+      if (!ok) showToast(t('app.spellNotFound') || `未在文档中找到「${word}」`)
+    }
+  }, [t])
+
   const handleLearnWord = async (word: string) => {
     if (!backend) return
     await backend.learnWord(word, lang, 'manual')
@@ -1837,8 +1858,10 @@ ${t('sample.md.more')}
               {spellErrors.map((e, i) => (
                 <div
                   key={i}
-                  className="px-4 py-3 transition-colors hover:bg-slate-50"
+                  className="px-4 py-3 transition-colors hover:bg-slate-50 cursor-pointer"
                   style={{ borderBottom: '1px solid var(--color-border)' }}
+                  onClick={() => handleJumpToSpellError(e.word)}
+                  title={t('app.spellJump') || '点击定位到文档中的位置'}
                 >
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="font-mono text-sm font-medium" style={{ color: 'var(--color-danger)' }}>{e.word}</span>
@@ -1893,7 +1916,12 @@ ${t('sample.md.more')}
             </div>
             <div className="flex-1 overflow-auto">
               {spellErrors.map((e, i) => (
-                <div key={i} className="px-4 py-3" style={{ borderBottom: '1px solid var(--color-border)' }}>
+                <div
+                  key={i}
+                  className="px-4 py-3 cursor-pointer hover:bg-slate-50"
+                  style={{ borderBottom: '1px solid var(--color-border)' }}
+                  onClick={() => { setSpellPanelOpen(false); handleJumpToSpellError(e.word) }}
+                >
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="font-mono text-sm font-medium" style={{ color: 'var(--color-danger)' }}>{e.word}</span>
                     <button

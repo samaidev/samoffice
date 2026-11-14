@@ -1209,6 +1209,11 @@ func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string
                         }
                         if hasMath {
                                 if latex := ommlToLatex(mathXML.String()); latex != "" {
+                                        // 段落同时含正文与公式：先输出正文段落，再输出公式块，
+                                        // 不再丢弃段落文本（对齐 MS Word 的显示顺序）。
+                                        if len(para.Inline) > 0 {
+                                                out = append(out, para)
+                                        }
                                         out = append(out, &core.Math{Formula: latex})
                                         if trailingPageBreak {
                                                 out = append(out, &core.PageBreak{})
@@ -1976,148 +1981,333 @@ func collectElement(dec *xml.Decoder, out *strings.Builder, name string) {
 }
 
 // ommlToLatex 将 OMML 片段转为 LaTeX。失败返回空字符串。
+//
+// 实现说明：先用 xml.Decoder 把片段解析成内存树（节点名 + 文本 + 子节点），
+// 再递归下降生成 LaTeX。旧实现边流式读边转换，深度计数与子树消费不一致，
+// 嵌套结构（分数套下标套上标）会产生错位的乱码，故整体重写。
 func ommlToLatex(omml string) string {
-        dec := xml.NewDecoder(strings.NewReader(omml))
-        dec.Strict = false
-        var sb strings.Builder
-        ok := false
-        for {
-                tok, err := dec.Token()
-                if err != nil {
-                        break
-                }
-                if start, ok2 := tok.(xml.StartElement); ok2 {
-                        if start.Name.Local == "oMath" || start.Name.Local == "oMathPara" {
-                                ok = true
-                                writeOMMLChildren(dec, &sb)
-                        }
-                }
-        }
-        if !ok {
-                return ""
-        }
-        return strings.TrimSpace(sb.String())
+	dec := xml.NewDecoder(strings.NewReader(omml))
+	dec.Strict = false
+	var roots []*ommlNode
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			if start.Name.Local == "oMath" || start.Name.Local == "oMathPara" {
+				n, ok2 := parseOMMLNode(dec, start.Name.Local)
+				if ok2 {
+					roots = append(roots, n)
+				}
+			}
+		}
+	}
+	if len(roots) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, r := range roots {
+		writeNodeLatex(&sb, r)
+	}
+	return strings.TrimSpace(sb.String())
 }
 
-// writeOMMLChildren 解析 OMML 子元素直到匹配当前元素的结束标签。
-func writeOMMLChildren(dec *xml.Decoder, sb *strings.Builder) {
-        depth := 1
-        for depth > 0 {
-                tok, err := dec.Token()
-                if err != nil {
-                        return
-                }
-                switch t := tok.(type) {
-                case xml.StartElement:
-                        depth++
-                        writeOMMLElement(dec, sb, t)
-                case xml.EndElement:
-                        depth--
-                }
-        }
+// ommlNode 是 OMML 片段的轻量内存树节点。
+type ommlNode struct {
+	name     string
+	text     string
+	children []*ommlNode
 }
 
-// writeOMMLElement 转换单个 OMML 元素。子元素文本通过 dec 消费。
-func writeOMMLElement(dec *xml.Decoder, sb *strings.Builder, t xml.StartElement) {
-        switch t.Name.Local {
-        case "oMath", "oMathPara":
-                writeOMMLChildren(dec, sb)
-        case "f": // 分数
-                sb.WriteString("\\frac{")
-                skipTo(dec, sb, "num")
-                skipTo(dec, sb, "den")
-                sb.WriteString("}")
-        case "num":
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}{")
-        case "den":
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}")
-        case "rad": // 根式
-                sb.WriteString("\\sqrt{")
-                skipTo(dec, sb, "deg")
-                skipTo(dec, sb, "e")
-                sb.WriteString("}")
-        case "sqrt": // 简单根号
-                sb.WriteString("\\sqrt{")
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}")
-        case "deg":
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}{")
-        case "e":
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}")
-        case "sup": // 上标
-                sb.WriteString("^{")
-                skipTo(dec, sb, "e")
-                sb.WriteString("}")
-        case "sub": // 下标
-                sb.WriteString("_{")
-                skipTo(dec, sb, "e")
-                sb.WriteString("}")
-        case "sSubSup":
-                sb.WriteString("_{")
-                skipTo(dec, sb, "sub")
-                sb.WriteString("}^{")
-                skipTo(dec, sb, "sup")
-                sb.WriteString("}")
-        case "sSup":
-                sb.WriteString("^{")
-                skipTo(dec, sb, "sup")
-                sb.WriteString("}")
-        case "subArg":
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}{")
-        case "supArg":
-                writeOMMLChildren(dec, sb)
-                sb.WriteString("}")
-        case "d": // 定界符（括号）
-                sb.WriteString("\\left(")
-                skipTo(dec, sb, "e")
-                sb.WriteString("\\right)")
-        case "nary": // 求和/积分等
-                sb.WriteString(naryCmd(t))
-                sb.WriteString("_{")
-                skipTo(dec, sb, "sub")
-                sb.WriteString("}^{")
-                skipTo(dec, sb, "sup")
-                sb.WriteString("}")
-                skipTo(dec, sb, "e")
-        case "acc": // 帽子符号
-                sb.WriteString("\\hat{")
-                skipTo(dec, sb, "e")
-                sb.WriteString("}")
-        case "r": // 公式文本 run
-                writeOMMLChildren(dec, sb)
-        case "t", "i", "lit": // 文本/标识符/字面量
-                sb.WriteString(ommlText(readCharData(dec)))
-        default:
-                writeOMMLChildren(dec, sb)
-        }
+// parseOMMLNode 消费 start 元素及其子树，构建内存节点。失败返回 ok=false（此时子树已被消费或出错）。
+func parseOMMLNode(dec *xml.Decoder, name string) (*ommlNode, bool) {
+	n := &ommlNode{name: name}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			child, ok := parseOMMLNode(dec, t.Name.Local)
+			if !ok {
+				return nil, false
+			}
+			n.children = append(n.children, child)
+		case xml.CharData:
+			n.text += string(t)
+		case xml.EndElement:
+			return n, true
+		}
+	}
 }
 
-// skipTo 跳过直到遇到名为 name 的子元素，然后转换它。
-func skipTo(dec *xml.Decoder, sb *strings.Builder, name string) {
-        depth := 1
-        for depth > 0 {
-                tok, err := dec.Token()
-                if err != nil {
-                        return
-                }
-                switch t := tok.(type) {
-                case xml.StartElement:
-                        depth++
-                        if t.Name.Local == name {
-                                writeOMMLElement(dec, sb, t)
-                        }
-                case xml.EndElement:
-                        depth--
-                }
-        }
+// child 返回第一个名为 name 的子节点；没有则返回 nil。
+func (n *ommlNode) child(name string) *ommlNode {
+	for _, c := range n.children {
+		if c.name == name {
+			return c
+		}
+	}
+	return nil
 }
 
-func naryCmd(_ xml.StartElement) string { return "\\sum" }
+// childrenOf 返回全部名为 name 的子节点。
+func (n *ommlNode) childrenOf(name string) []*ommlNode {
+	var out []*ommlNode
+	for _, c := range n.children {
+		if c.name == name {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// writeNodeLatex 递归输出一个 OMML 节点的 LaTeX 表示。
+func writeNodeLatex(sb *strings.Builder, n *ommlNode) {
+	switch n.name {
+	case "oMath", "oMathPara", "r", "e", "num", "den", "deg", "sub", "sup",
+		"fPr", "sSubPr", "sSupPr", "sSubSupPr", "naryPr", "dPr", "radPr",
+		"ctrlPr", "argPr", "mPr", "lim", "boxPr", "barPr", "accPr",
+		"groupChrPr", "borderBoxPr", "funcPr", "eqArrPr", "mr":
+		// 容器/属性节点：属性（ctrlPr 等）不输出内容；其余递归子节点
+		switch n.name {
+		case "ctrlPr", "fPr", "sSubPr", "sSupPr", "sSubSupPr", "naryPr", "dPr",
+			"radPr", "argPr", "mPr", "boxPr", "barPr", "accPr", "groupChrPr",
+			"borderBoxPr", "funcPr", "eqArrPr":
+			return
+		}
+		for _, c := range n.children {
+			writeNodeLatex(sb, c)
+		}
+	case "t", "i", "lit": // 公式文本 run
+		sb.WriteString(ommlText(n.text))
+	case "f": // 分数 \frac{num}{den}
+		num, den := n.child("num"), n.child("den")
+		sb.WriteString("\\frac{")
+		if num != nil {
+			writeChildrenLatex(sb, num)
+		}
+		sb.WriteString("}{")
+		if den != nil {
+			writeChildrenLatex(sb, den)
+		}
+		sb.WriteString("}")
+	case "rad": // 根式 \sqrt{e} 或 \sqrt[deg]{e}
+		deg, e := n.child("deg"), n.child("e")
+		sb.WriteString("\\sqrt")
+		if deg != nil && strings.TrimSpace(latexOf(deg)) != "" {
+			sb.WriteString("[")
+			writeChildrenLatex(sb, deg)
+			sb.WriteString("]")
+		}
+		sb.WriteString("{")
+		if e != nil {
+			writeChildrenLatex(sb, e)
+		}
+		sb.WriteString("}")
+	case "sSup": // 上标 base^{sup}
+		e, sup := n.child("e"), n.child("sup")
+		writeOptLatex(sb, e)
+		sb.WriteString("^{")
+		writeOptLatex(sb, sup)
+		sb.WriteString("}")
+	case "sSub": // 下标 base_{sub}
+		e, sub := n.child("e"), n.child("sub")
+		writeOptLatex(sb, e)
+		sb.WriteString("_{")
+		writeOptLatex(sb, sub)
+		sb.WriteString("}")
+	case "sSubSup": // 上下标 base_{sub}^{sup}
+		e, sub, sup := n.child("e"), n.child("sub"), n.child("sup")
+		writeOptLatex(sb, e)
+		sb.WriteString("_{")
+		writeOptLatex(sb, sub)
+		sb.WriteString("}^{")
+		writeOptLatex(sb, sup)
+		sb.WriteString("}")
+	case "sPre": // 前置上下标 _{sub}^{sup}base
+		sub, sup, e := n.child("sub"), n.child("sup"), n.child("e")
+		sb.WriteString("_{")
+		writeOptLatex(sb, sub)
+		sb.WriteString("}^{")
+		writeOptLatex(sb, sup)
+		sb.WriteString("}")
+		writeOptLatex(sb, e)
+	case "d": // 定界符 \left( e \right)
+		open, close, sep := "(", ")", ", "
+		if dPr := n.child("dPr"); dPr != nil {
+			if b := dPr.child("begChr"); b != nil {
+				open = strings.Trim(b.text, "\"")
+			}
+			if b := dPr.child("endChr"); b != nil {
+				close = strings.Trim(b.text, "\"")
+			}
+		}
+		// 多个 e 之间用分隔符连接
+		es := n.childrenOf("e")
+		sb.WriteString("\\left" + open)
+		for i, e := range es {
+			if i > 0 {
+				sb.WriteString(sep)
+			}
+			writeChildrenLatex(sb, e)
+		}
+		sb.WriteString("\\right" + close)
+	case "nary": // 求和/积分等大型运算符
+		chr := naryChrOf(n)
+		sb.WriteString(chr)
+		if sub := n.child("sub"); sub != nil {
+			sb.WriteString("_{")
+			writeChildrenLatex(sb, sub)
+			sb.WriteString("}")
+		}
+		if sup := n.child("sup"); sup != nil {
+			sb.WriteString("^{")
+			writeChildrenLatex(sb, sup)
+			sb.WriteString("}")
+		}
+		if e := n.child("e"); e != nil {
+			writeChildrenLatex(sb, e)
+		}
+	case "func": // 函数名 + 参数
+		if fName := n.child("fName"); fName != nil {
+			writeChildrenLatex(sb, fName)
+		}
+		if e := n.child("e"); e != nil {
+			sb.WriteString("(")
+			writeChildrenLatex(sb, e)
+			sb.WriteString(")")
+		}
+	case "limLow": // 下极限 \lim_{below}
+		if e := n.child("e"); e != nil {
+			writeChildrenLatex(sb, e)
+		}
+		if lim := n.child("lim"); lim != nil {
+			sb.WriteString("_{")
+			writeChildrenLatex(sb, lim)
+			sb.WriteString("}")
+		}
+	case "limUpp": // 上极限
+		if e := n.child("e"); e != nil {
+			writeChildrenLatex(sb, e)
+		}
+		if lim := n.child("lim"); lim != nil {
+			sb.WriteString("^{")
+			writeChildrenLatex(sb, lim)
+			sb.WriteString("}")
+		}
+	case "bar": // 上划线 \overline{e}
+		sb.WriteString("\\overline{")
+		writeOptLatex(sb, n.child("e"))
+		sb.WriteString("}")
+	case "acc": // 重音符号 \hat{e} 等
+		acc := "\\hat"
+		if accPr := n.child("accPr"); accPr != nil {
+			if chr := accPr.child("chr"); chr != nil {
+				switch strings.Trim(chr.text, "\"") {
+				case "\u0303", "~":
+					acc = "\\tilde"
+				case "\u0307", ".":
+					acc = "\\dot"
+				case "\u0308", "\u00A8":
+					acc = "\\ddot"
+				case "\u20D7", "â":
+					acc = "\\vec"
+				}
+			}
+		}
+		sb.WriteString(acc + "{")
+		writeOptLatex(sb, n.child("e"))
+		sb.WriteString("}")
+	case "m": // 矩阵
+		sb.WriteString("\\begin{matrix}")
+		for _, row := range n.childrenOf("mr") {
+			cells := row.childrenOf("e")
+			for i, cell := range cells {
+				if i > 0 {
+					sb.WriteString(" & ")
+				}
+				writeChildrenLatex(sb, cell)
+			}
+			sb.WriteString(" \\\\ ")
+		}
+		sb.WriteString("\\end{matrix}")
+	case "eqArr": // 方程组
+		sb.WriteString("\\begin{array}{l}")
+		for _, e := range n.childrenOf("e") {
+			writeChildrenLatex(sb, e)
+			sb.WriteString(" \\\\ ")
+		}
+		sb.WriteString("\\end{array}")
+	case "box": // 包围框
+		sb.WriteString("\\boxed{")
+		writeOptLatex(sb, n.child("e"))
+		sb.WriteString("}")
+	case "borderBox":
+		sb.WriteString("\\boxed{")
+		writeOptLatex(sb, n.child("e"))
+		sb.WriteString("}")
+	case "groupChr": // 组字符（如 underbrace），直接输出内容
+		writeOptLatex(sb, n.child("e"))
+	default:
+		for _, c := range n.children {
+			writeNodeLatex(sb, c)
+		}
+	}
+}
+
+// writeChildrenLatex 输出节点全部子节点的 LaTeX。
+func writeChildrenLatex(sb *strings.Builder, n *ommlNode) {
+	for _, c := range n.children {
+		writeNodeLatex(sb, c)
+	}
+}
+
+// writeOptLatex 输出可空子节点的 LaTeX（节点为 nil 时输出空）。
+func writeOptLatex(sb *strings.Builder, n *ommlNode) {
+	if n == nil {
+		return
+	}
+	writeChildrenLatex(sb, n)
+}
+
+// latexOf 计算节点子树的 LaTeX（用于非空判断）。
+func latexOf(n *ommlNode) string {
+	var sb strings.Builder
+	writeChildrenLatex(&sb, n)
+	return sb.String()
+}
+
+// naryChrOf 读取 nary 的运算符字符，映射为 LaTeX 命令。
+func naryChrOf(n *ommlNode) string {
+	chr := "\u2211" // 默认 ∑
+	if pr := n.child("naryPr"); pr != nil {
+		if c := pr.child("chr"); c != nil {
+			chr = strings.Trim(c.text, "\"")
+		}
+	}
+	switch chr {
+	case "\u2211":
+		return "\\sum"
+	case "\u220F":
+		return "\\prod"
+	case "\u222B":
+		return "\\int"
+	case "\u222E":
+		return "\\oint"
+	case "\u22C2":
+		return "\\bigcap"
+	case "\u22C3":
+		return "\\bigcup"
+	case "\u22C0":
+		return "\\bigwedge"
+	case "\u22C1":
+		return "\\bigvee"
+	}
+	return "\\sum"
+}
 
 // ommlText 将 OMML 文本中的特殊字符映射为 LaTeX。
 func ommlText(s string) string {

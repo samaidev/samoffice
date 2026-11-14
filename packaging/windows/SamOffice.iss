@@ -33,6 +33,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
+; 文件关联变化通知资源管理器刷新图标与“打开方式”缓存
+ChangesAssociations=yes
 ; 首页双语：不弹内建语言对话框（其标题/按钮只有单一语言），语言选择并入双语欢迎页
 ShowLanguageDialog=no
 
@@ -42,10 +44,50 @@ Name: "chinese"; MessagesFile: "{#CnMessages}"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+; 文件关联（默认勾选）：注册为各类文档的“打开方式”候选（不改默认程序）。
+; 仅覆盖应用实际支持的格式（docx/doc/xlsx/xls/csv/pptx/ppt/md/txt/pdf）。
+Name: "fileassoc"; Description: "Associate document types (Open with list)"; GroupDescription: "File association:"
+Name: "fileassoc\word"; Description: "Word — .docx .doc"; Flags: checkablealone
+Name: "fileassoc\excel"; Description: "Excel — .xlsx .xls .csv"; Flags: checkablealone
+Name: "fileassoc\ppt"; Description: "PowerPoint — .pptx .ppt"; Flags: checkablealone
+Name: "fileassoc\other"; Description: "Text/Markdown/PDF/HTML — .md .markdown .txt .pdf .html"; Flags: checkablealone
 
 [Files]
 ; exe 由 CI 在仓库根构建（samoffice.exe），路径相对 .iss 所在目录
 Source: "..\..\samoffice.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+[Registry]
+; === 文件关联（每用户 HKCU；卸载自动清除） ===
+; 1) SamOffice.Document ProgID：应用标识 + 打开命令 + 图标 + 友好名（“打开方式”菜单显示）。
+;    DefaultIcon 索引 0 指向 exe 内嵌图标组（与主窗口一致，7 尺寸 16~256）。
+Root: HKCU; Subkey: "Software\Classes\SamOffice.Document"; ValueType: string; ValueName: ""; ValueData: "SamOffice Document"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SamOffice.Document\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SamOffice.Document\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
+; 2) 各扩展名：写 OpenWithProgids（加入“打开方式”列表，不改默认程序 ——
+;    不强抢用户已装的 Word/Excel 默认关联）。uninsdeletevalue 只删我们写的值，
+;    uninsdeletekeyifempty 顺带清掉空键。
+; Word 类
+Root: HKCU; Subkey: "Software\Classes\.docx\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\word
+Root: HKCU; Subkey: "Software\Classes\.doc\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\word
+; Excel 类
+Root: HKCU; Subkey: "Software\Classes\.xlsx\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\excel
+Root: HKCU; Subkey: "Software\Classes\.xls\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\excel
+Root: HKCU; Subkey: "Software\Classes\.csv\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\excel
+; PPT 类
+Root: HKCU; Subkey: "Software\Classes\.pptx\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\ppt
+Root: HKCU; Subkey: "Software\Classes\.ppt\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\ppt
+; 文本/Markdown/PDF/HTML
+Root: HKCU; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\other
+Root: HKCU; Subkey: "Software\Classes\.markdown\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\other
+Root: HKCU; Subkey: "Software\Classes\.txt\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\other
+Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\other
+Root: HKCU; Subkey: "Software\Classes\.html\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\other
+Root: HKCU; Subkey: "Software\Classes\.htm\OpenWithProgids"; ValueType: string; ValueName: "SamOffice.Document"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Tasks: fileassoc\other
+; 3) “始终显示 SamOffice”（UserChoice 免手动：注册候选后 Windows 会在
+;    “选择默认应用”里列出；不直接写 UserChoice —— Win10/11 有校验哈希，写错反而失效）。
+;    Applications 条目让“打开方式 → 选择其他应用”里始终能找到 SamOffice：
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: "SamOffice"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 
 [Icons]
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon

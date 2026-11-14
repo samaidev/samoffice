@@ -615,7 +615,13 @@ export function createPaginationPlugin(
         if (to > docSize) continue
         // 块节点的原生 inline style（table 的 border-collapse/对齐、page_break 的提示线等）
         // 必须保留：Decoration.node 的 attrs.style 是整体替换语义，先读后拼接。
-        const oldStyle = (children[idx].getAttribute('style') || '').replace(/;\s*$/, '')
+        // 关键（round18 修复“分页处抖动”）：DOM 上读到的 style 已包含上一轮装饰写入的
+        // margin-top —— 直接拼接会让 style 字符串逐轮增长（margin-top:675px; margin-top:675px;…），
+        // 装饰签名永远不等 → 每帧 dispatch 重算 → 分页处内容反复跳动。
+        // 必须先剥掉旧 margin-top 声明再拼新值（表格行/表格装饰已是整体替换，无此问题）。
+        const oldStyle = (children[idx].getAttribute('style') || '')
+          .replace(/(^|;)\s*margin-top\s*:\s*[^;]*/gi, '')
+          .replace(/^\s*;\s*|\s*;\s*$/g, '')
         decos.push(
           Decoration.node(from, to, {
             style: (oldStyle ? oldStyle + ';' : '') + 'margin-top: ' + (breakMargin.get(p) || 0) + 'px',
