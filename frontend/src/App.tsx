@@ -19,7 +19,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.7.3'
+const APP_VERSION = 'v0.7.8'
 
 // 模块级空拼写错误数组：空结果复用同一引用，避免每次 setSpellErrors(新 [])
 // 触发 DocumentEditor [spellErrors] effect（装饰重建 + setTick 重渲染）。
@@ -1553,7 +1553,7 @@ ${t('sample.md.more')}
           改用 overflow-visible, 子元素 flex-shrink-0 + whitespace-nowrap 已能避免横向溢出,
           最外层 div 的 overflow-x-hidden 兜底防止页面横向滚动。 */}
       <header
-        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0"
+        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-hidden"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
@@ -1633,9 +1633,19 @@ ${t('sample.md.more')}
 
         <div className="w-px h-6 bg-white/20 mx-1 flex-shrink-0" />
 
-        {/* Tab 切换 (可滚动容器，避免移动端越界)。
+        {/* Tab 切换（round25：flex-1 + min-w-0 —— 打开文件过多时标签动态压缩到
+            min-width 再横向滚动，绝不把右上角最小化/最大化/关闭按钮挤出屏幕；
+            旧版每标签 flex-shrink-0，整行被撑爆后窗口控制按钮越界消失）。
             默认只显示“关于”；打开文件后才出现对应类型的窗口标签，多窗口时每个标签形如“文档：文件名”。 */}
-        <div className="header-tabs-scroll flex items-center gap-0.5" style={{ '--wails-draggable': 'no-drag' as any } as any}>
+        <div
+          className="header-tabs-scroll flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden"
+          onWheel={(e) => {
+            // 垂直滚轮转标签栏横向滚动：无需碰隐藏的滚动条也能翻标签
+            const el = e.currentTarget
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY
+          }}
+          style={{ '--wails-draggable': 'no-drag' as any } as any}
+        >
           {windows.map((w) => {
             const active = w.id === activeWindowId
             const isDragging = dragTabId === w.id
@@ -1667,8 +1677,12 @@ ${t('sample.md.more')}
                   setDragTabId(null)
                 }}
                 onDragEnd={() => setDragTabId(null)}
-                className="group flex items-center px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition-all rounded-md flex-shrink-0"
+                className="group flex items-center px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium transition-all rounded-md min-w-0 flex-shrink overflow-hidden"
                 style={{
+                  // round25 动态缩放：单标签上限 200px，空间不足按比例压缩
+                  //（活动标签保底 130px、非活动 56px），仍不足则容器横向滚动
+                  minWidth: active ? 130 : 56,
+                  maxWidth: 200,
                   background: active ? 'rgba(255,255,255,0.22)' : 'transparent',
                   color: active ? '#ffffff' : 'rgba(255,255,255,0.75)',
                   boxShadow: active ? 'inset 0 -2px 0 0 rgba(255,255,255,0.9)' : 'none',
@@ -1684,16 +1698,16 @@ ${t('sample.md.more')}
                 }}
                 data-testid={`tab-${w.type}`}
               >
-                <span className="mr-1">{typePrefix(w.type)}：{truncateName(w.title)}</span>
+                <span className="mr-1 truncate min-w-0" title={w.title}>{typePrefix(w.type)}：{truncateName(w.title, 18)}</span>
                 {isWindowDirty(w) && (
                   <span
-                    className="mr-1 text-[15px] leading-none"
+                    className="mr-1 text-[15px] leading-none flex-shrink-0"
                     title={t('confirm.unsavedTitle')}
                     data-testid={`tab-dirty-${w.id}`}
                   >•</span>
                 )}
                 <span
-                  className="opacity-50 hover:opacity-100 hover:text-red-300 transition-colors"
+                  className="opacity-50 hover:opacity-100 hover:text-red-300 transition-colors flex-shrink-0"
                   title={t('app.closeTab') || '关闭'}
                   onClick={(e) => {
                     e.stopPropagation()

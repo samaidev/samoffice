@@ -1596,6 +1596,11 @@ img[data-float="center"] { display: block; margin: 0 auto; }
 .para-fieldset legend { padding: 0 6px; font-size: 12px; font-weight: 600; color: var(--color-text-muted); }
 .pn-unit { color: var(--color-text-muted); font-size: 12px; min-width: 28px; }
 
+/* === round25：文件标签动态缩放 ===
+   标签多时容器内部横向滚动（滚动条隐藏，鼠标滚轮/拖拽可翻），窗口控制按钮固定在右上角不再被挤出屏幕 */
+.header-tabs-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+.header-tabs-scroll::-webkit-scrollbar { display: none; }
+
 
 /* === 文档对比面板 === */
 .compare-panel { width: 640px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column; }
