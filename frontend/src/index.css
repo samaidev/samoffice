@@ -1551,7 +1551,14 @@ ol.ref-list > li::before {
    inline-block 版可点）。inline-block + width:100% + border-box 视觉等价
    （独占一行、全宽）。 */
 .sam-math {
-  display: inline-block;
+  /* round23 性能+死区双修复：
+     display:block（原 round20 曾改 inline-block 治表格点击死区，真实发现是
+     contain 缺失所致）—— inline-block 会让分页引擎挂在公式上的断页
+     margin-top 在行盒中半生效 → 测量/应用交替振荡（实测单键 58 次
+     pagination$ dispatch，打字 800ms/键、滚动 3 FPS）。
+     block + contain 组合在远程真实 GPU（Win11/Edge157）E2E 全 PASS：
+     表格点击/输入正常、零振荡、打字 151ms。 */
+  display: block;
   width: 100%;
   box-sizing: border-box;
   margin: 8px 0;

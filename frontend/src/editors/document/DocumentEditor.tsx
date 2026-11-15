@@ -1418,7 +1418,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             else { dom.style.fontSize = '' }
           }
           applyFontSize()
+          // round23 性能修复：渲染签名缓存（见 update 注释）
+          let lastSig = `${node.attrs.latex}|${node.attrs.inline ? 1 : 0}|${node.attrs.fontSize || ''}`
           const render = () => {
+            lastSig = `${node.attrs.latex}|${node.attrs.inline ? 1 : 0}|${node.attrs.fontSize || ''}`
             const latex = node.attrs.latex || ''
             if ((window as any).katex && latex) {
               try {
@@ -1459,6 +1462,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             update(newNode: any) {
               if (newNode.type.name !== 'math') return false
               node = newNode
+              // ★ round23 性能修复（用户报告：25 公式文档打字 800ms/键）：
+              // PM 在【每次文档事务】后对所有 math NodeView 调 update()（节点类型
+              // 未变即视为可复用）。旧版无条件 katex.render —— 打 5 个字符实测
+              // 触发 168 次 KaTeX 重渲染（每键全量 25 公式 × ~1.3），每次几毫秒到
+              // 几十毫秒，直接把打字延迟推到 800ms、滚动打到 3 FPS。
+              // 修复：latex/inline/fontSize 签名未变则跳过渲染（公式内容没变，
+              // KaTeX DOM 完全无需重建）。
+              const sig = `${newNode.attrs.latex}|${newNode.attrs.inline ? 1 : 0}|${newNode.attrs.fontSize || ''}`
+              if (sig === lastSig) return true
+              lastSig = sig
               render()
               return true
             },
@@ -4272,6 +4285,34 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           clone.querySelectorAll('.pm-table-handle, .selectedCell, .spell-error, .pg-linebreak, .ProseMirror-selectednode').forEach(n => {
             n.classList.remove('pm-shown', 'selectedCell', 'spell-error', 'ProseMirror-selectednode')
             if (n.classList.contains('pm-table-handle') || n.classList.contains('pg-linebreak')) n.remove()
+          })
+          // round23 修复（用户报告：打印预览表格样式错乱）：
+          // 克隆会把分页装饰的位移样式一起带进预览 ——
+          // .pg-brk 的 margin-top: 312px（块级断页下推）、.pg-brk-row 的
+          // transform:translateY（跨页表格行位移）、.pg-brk-table 的
+          // margin-bottom 补高、.pg-brk-cell 的边框透明化 —— 这些只在编辑器
+          // 的“页间留白”模型里有意义；预览容器是连续纸面，带入后表格被推到
+          // 预览页之外/边框错乱。预览应展示自然布局流。
+          clone.querySelectorAll('.pg-brk, .pg-brk-row, .pg-brk-table, .pg-brk-cell').forEach(n => {
+            const st = (n.getAttribute('style') || '')
+              .replace(/(^|;)\s*margin-top\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*margin-bottom\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*transform\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*position\s*:\s*relative\s*(;|$)/gi, '$1')
+              .replace(/(^|;)\s*top\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*border-(top|right|bottom|left)-color\s*:\s*transparent\s*(;|$)/gi, '$1')
+              .replace(/^\s*;\s*|\s*;\s*$/g, '')
+            if (st.trim()) n.setAttribute('style', st)
+            else n.removeAttribute('style')
+            n.classList.remove('pg-brk', 'pg-brk-row', 'pg-brk-table', 'pg-brk-cell')
+          })
+          // 表格 wrapper 的位置样式（分页用 relative top）同步清理
+          clone.querySelectorAll('.tableWrapper').forEach(n => {
+            const st = (n.getAttribute('style') || '')
+              .replace(/(^|;)\s*margin-bottom\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*transform\s*:[^;]*/gi, '')
+            if (st.trim()) n.setAttribute('style', st)
+            else n.removeAttribute('style')
           })
           clone.removeAttribute('contenteditable')
           clone.style.padding = '0'

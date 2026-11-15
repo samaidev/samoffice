@@ -1147,6 +1147,161 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setExtraAreas([])
   }
   // 对当前选区内（含全部附加区域）所有单元格批量应用格式（字体色/填充/边框/加粗等）
+
+  // ===== round23: 填充柄（fill handle，对齐 MS Excel）=====
+  // 活动单元格右下角小方块，拖拽向 8 个方向填充；填充规则：
+  // - 源区无数字 → 复制源内容（循环）
+  // - 源区是纯数字序列（1 个或多个）→ 按等差/等比延续（Excel 线性趋势）
+  //   单个数字默认 +1（与 Excel 按住 Ctrl 拖拽相反：Excel 默认复制、Ctrl 才累加；
+  //   但用户明确要求“下拉复制和数字累加”，中文场景习惯智能填充 —— 单数字累加、
+  //   Ctrl 按下则纯复制，多数字按趋势延续）
+  // - 含文本+数字混合（如 A1、一月）→ 循环复制
+  const [fillDrag, setFillDrag] = useState<{ r: number; c: number } | null>(null)
+
+  // round23: 填充柄拖拽 —— 全局 mousemove（预览高亮区）/mouseup（应用填充）
+  const [fillPreview, setFillPreview] = useState<{ r1: number; c1: number; r2: number; c2: number } | null>(null)
+  useEffect(() => {
+    if (!fillDrag) { setFillPreview(null); return }
+    const onMove = (e: MouseEvent) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
+      const td = el?.closest?.('td[data-cell]') as HTMLElement | null
+      if (!td) return
+      const [r, c] = (td.getAttribute('data-cell') || '').split('-').map(Number)
+      if (isNaN(r) || isNaN(c)) return
+      // 拖拽方向判定：与源格的位移取主导轴
+      const dr = r - fillDrag.r, dc = c - fillDrag.c
+      let r1 = fillDrag.r, c1 = fillDrag.c, r2 = fillDrag.r, c2 = fillDrag.c
+      if (Math.abs(dc) >= Math.abs(dr) && dc !== 0) {
+        // 横向：扩展整行选区宽度（源选区可能多行 —— 单格场景横向展开源区行数）
+        c1 = Math.min(fillDrag.c, c); c2 = Math.max(fillDrag.c, c)
+        r1 = selection.r1; r2 = selection.r2
+      } else if (dr !== 0) {
+        r1 = Math.min(fillDrag.r, r); r2 = Math.max(fillDrag.r, r)
+        c1 = selection.c1; c2 = selection.c2
+      }
+      setFillPreview({ r1, c1, r2, c2 })
+    }
+    const onUp = () => {
+      const fp = fillPreviewRef.current
+      if (fp) {
+        // 目标区相对源选区的扩展方向（fp 含源区 —— 用边界差判断，右/下为 1）
+        const srcR = fp.r2 > Math.max(selection.r1, selection.r2) ? 1 : fp.r1 < Math.min(selection.r1, selection.r2) ? -1 : 0
+        const srcC = fp.c2 > Math.max(selection.c1, selection.c2) ? 1 : fp.c1 < Math.min(selection.c1, selection.c2) ? -1 : 0
+        // 目标 = 预览区减去源选区
+        const tR1 = Math.min(fp.r1, selection.r1), tR2 = Math.max(fp.r2, selection.r2)
+        const tC1 = Math.min(fp.c1, selection.c1), tC2 = Math.max(fp.c2, selection.c2)
+        applyFill(tR1, tC1, tR2, tC2, srcR, srcC)
+        // 填充后选区变为整个填充区（Excel 行为）
+        selectRange(tR1, tC1, tR2, tC2)
+      }
+      setFillDrag(null)
+      fillCopyMode.current = false
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [fillDrag])
+  const fillPreviewRef = useRef<{ r1: number; c1: number; r2: number; c2: number } | null>(null)
+  fillPreviewRef.current = fillPreview
+
+
+  // 数字趋势分析：返回 (next)(i) => value 生成器
+  const makeFillSeries = (vals: string[]): ((i: number) => string) | null => {
+    const nums = vals.map(v => parseFloat(v))
+    const allNum = vals.every((v, i) => v.trim() !== '' && !isNaN(nums[i]) && /^-?\d+(\.\d+)?$/.test(v.trim()))
+    if (!allNum || vals.length === 0) return null
+    if (vals.length === 1) {
+      const step = 1
+      return i => fmtNum(nums[0] + step * (i + 1))
+    }
+    // 等差检测
+    const d = nums[1] - nums[0]
+    let arith = true
+    for (let i = 1; i < nums.length; i++) if (Math.abs(nums[i] - nums[i - 1] - d) > 1e-9) { arith = false; break }
+    if (arith) return i => fmtNum(nums[nums.length - 1] + d * (i + 1))
+    // 等比检测
+    if (nums[0] !== 0) {
+      const q = nums[1] / nums[0]
+      let geo = true
+      for (let i = 1; i < nums.length; i++) if (Math.abs(nums[i] / nums[i - 1] - q) > 1e-9) { geo = false; break }
+      if (geo && q !== 1) return i => fmtNum(nums[nums.length - 1] * Math.pow(q, i + 1))
+    }
+    return null
+  }
+  const fmtNum = (n: number): string => {
+    const r = Math.round(n * 1e9) / 1e9
+    return String(r)
+  }
+
+  // 应用填充：src = 选区，target = 拖拽覆盖区（含源），dir = 主方向
+  const applyFill = (r1: number, c1: number, r2: number, c2: number, srcR: number, srcC: number) => {
+    pushHistory()
+    setData(d => {
+      const nd = { ...d }
+      const rowsN = r2 - r1 + 1, colsN = c2 - c1 + 1
+      const srcRowsN = Math.abs(srcR) || 1, srcColsN = Math.abs(srcC) || 1
+      for (let r = r1; r <= r2; r++) {
+        for (let c = c1; c <= c2; c++) {
+          if (r >= selection.r1 && r <= selection.r2 && c >= selection.c1 && c <= selection.c2) continue // 源区不动
+          // 源格（循环取样）
+          const sr = srcR !== 0
+            ? selection.r1 + mod(r - (srcR > 0 ? r1 : r2), srcRowsN)
+            : selection.r1 + mod(r - selection.r1, Math.abs(selection.r2 - selection.r1) + 1)
+          const sc = srcC !== 0
+            ? selection.c1 + mod(c - (srcC > 0 ? c1 : c2), srcColsN)
+            : selection.c1 + mod(c - selection.c1, Math.abs(selection.c2 - selection.c1) + 1)
+          const srcCell = nd[`${sr}-${sc}`] || { value: '' }
+          let val: string
+          if (srcR !== 0 && selection.r1 === selection.r2 && selection.c1 === selection.c2 && !fillCopyMode.current) {
+            // 纵向单格填充 → 数字累加
+            const base = parseFloat((nd[`${selection.r1}-${selection.c1}`]?.value || '').trim())
+            const isNum = !isNaN(base) && /^-?\d+(\.\d+)?$/.test((nd[`${selection.r1}-${selection.c1}`]?.value || '').trim())
+            if (isNum) {
+              const idx = srcR > 0 ? r - selection.r1 - 1 : selection.r1 - r - 1
+              val = fmtNum(base + (idx + 1))
+            } else val = srcCell.value
+          } else if (srcC !== 0 && selection.r1 === selection.r2 && selection.c1 === selection.c2 && !fillCopyMode.current) {
+            // 横向单格填充 → 数字累加
+            const raw = (nd[`${selection.r1}-${selection.c1}`]?.value || '').trim()
+            const base = parseFloat(raw)
+            const isNum = !isNaN(base) && /^-?\d+(\.\d+)?$/.test(raw)
+            if (isNum) {
+              const idx = srcC > 0 ? c - selection.c1 - 1 : selection.c1 - c - 1
+              val = fmtNum(base + (idx + 1))
+            } else val = srcCell.value
+          } else if (!fillCopyMode.current) {
+            // 多格序列填充（按拖拽方向的行/列序列）
+            const horiz = srcC !== 0
+            if (horiz) {
+              const seq: string[] = []
+              for (let cc = selection.c1; cc <= selection.c2; cc++) seq.push(nd[`${selection.r1}-${cc}`]?.value || '')
+              const gen = makeFillSeries(seq)
+              if (gen) {
+                const idx = c < selection.c1 ? selection.c1 - c - 1 : c - selection.c2 - 1
+                val = gen(idx)
+              } else val = srcCell.value
+            } else {
+              const seq: string[] = []
+              for (let rr = selection.r1; rr <= selection.r2; rr++) seq.push(nd[`${rr}-${selection.c1}`]?.value || '')
+              const gen = makeFillSeries(seq)
+              if (gen) {
+                const idx = r < selection.r1 ? selection.r1 - r - 1 : r - selection.r2 - 1
+                val = gen(idx)
+              } else val = srcCell.value
+            }
+          } else val = srcCell.value
+          const existing = nd[`${r}-${c}`] || { value: '' }
+          nd[`${r}-${c}`] = { ...existing, value: val, formula: '' }
+          void rowsN; void colsN
+        }
+      }
+      return nd
+    })
+  }
+  const mod = (a: number, n: number) => ((a % n) + n) % n
+  // Ctrl 拖拽 = 纯复制（不累加）
+  const fillCopyMode = useRef(false)
+
   const setCellFmtRange = (fmt: Partial<Cell>) => {
     pushHistory()
     setData(d => {
@@ -2884,6 +3039,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     if (eR) shadowParts.push('inset -2px 0 0 0 var(--color-primary)')
                   }
                   if (isActive && sel && !singleSel) shadowParts.push('inset 0 0 0 1px var(--color-primary)')
+                  // round23: 填充预览虚线框
+                  if (fillPreview && r >= fillPreview.r1 && r <= fillPreview.r2 && c >= fillPreview.c1 && c <= fillPreview.c2) {
+                    if (r === fillPreview.r1) shadowParts.push('inset 0 2px 0 0 #3b82f6')
+                    if (r === fillPreview.r2) shadowParts.push('inset 0 -2px 0 0 #3b82f6')
+                    if (c === fillPreview.c1) shadowParts.push('inset 2px 0 0 0 #3b82f6')
+                    if (c === fillPreview.c2) shadowParts.push('inset -2px 0 0 0 #3b82f6')
+                  }
                   // 选区叠加层：半透明蓝叠在原填充色上（MS Excel 行为——填充色仍隐约可见）
                   const selOverlay = `linear-gradient(rgba(59,130,246,0.22), rgba(59,130,246,0.22)), ${cell.bg || '#ffffff'}`
                   return (
@@ -2988,6 +3150,22 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                               <span title={tf('sheet.editCell', '双击或输入编辑')} onMouseDown={e => { e.preventDefault(); e.stopPropagation(); startEdit(r, c) }}
                                 className="absolute right-0 top-0 h-full w-4 flex items-center justify-center text-[9px] cursor-pointer"
                                 style={{ color: 'var(--color-text-muted)' }}>▾</span>
+                            )}
+                            {/* round23: 填充柄（MS Excel 右下角方块）—— 活动格=选区右下角且不在编辑态。
+                                多格选区同样支持（Excel 行为）：源区序列按拖拽方向延续/循环 */}
+                            {isActive && r === Math.max(selection.r1, selection.r2) && c === Math.max(selection.c1, selection.c2) && !editCell && (
+                              <span
+                                data-fill-handle
+                                title="拖拽填充（数字自动累加，Ctrl 纯复制）"
+                                onMouseDown={e => {
+                                  if (e.button !== 0) return
+                                  e.preventDefault(); e.stopPropagation()
+                                  fillCopyMode.current = e.ctrlKey || e.metaKey
+                                  setFillDrag({ r, c })
+                                }}
+                                className="absolute -right-[3px] -bottom-[3px] w-[7px] h-[7px] cursor-crosshair z-20"
+                                style={{ background: 'var(--color-primary)', border: '1px solid #fff', borderRadius: 1 }}
+                              />
                             )}
                           </>
                         )
