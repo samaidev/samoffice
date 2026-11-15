@@ -1443,11 +1443,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
             applyFontSize()
           }
           render()
-          dom.addEventListener('mousedown', (e) => {
+          dom.addEventListener('mousedown', (ev: Event) => {
             // round24：单击即选中公式（NodeSelection）。实测 PM 对无内容 atom 的
             // 点击会把 pos 解析到相邻段落（公式块有 padding/居中，无文本落点），
             // 不会自动建 NodeSelection —— 显式 dispatch，保证功能区字号/字体
             // 能作用于选中公式（对齐 Word 行为：点击公式即选中）。
+            const e = ev as MouseEvent
             if (e.button !== 0) return
             const pos = typeof getPos === 'function' ? getPos() : null
             if (pos == null || !_view) return
