@@ -1185,10 +1185,12 @@ table td, table th {
 .pg-measuring .pg-linebreak {
   margin-top: 0 !important;
 }
-/* 表格行级断点：relative top 位移 + 表格 margin-bottom 补高，测量时同样归零，
-   保证子块几何读到的是纯自然坐标（Supervisor FIX 2026-10-08） */
+/* 表格行级断点：transform 位移 + 表格 margin-bottom 补高，测量时同样归零，
+   保证子块几何读到的是纯自然坐标（Supervisor FIX 2026-10-08）。
+   round22：位移从 relative top 改为 transform translateY（合成器 hit-test
+   跟随视觉位置，修复跨页表格区点击死区），归零规则同步改为 transform:none */
 .pg-measuring .pg-brk-row {
-  top: 0 !important;
+  transform: none !important;
 }
 .pg-measuring .pg-brk-table {
   margin-bottom: 0 !important;
@@ -1559,6 +1561,15 @@ ol.ref-list > li::before {
   border-radius: 6px;
   text-align: center;
   font-family: 'Cambria Math', 'Times New Roman', serif;
+  /* round22 根因修复（用户报告：合同能源文档点击正文无光标）：
+     含 23+ 个 KaTeX 公式的文档在滚动到表格区后，Chromium 合成器光栅
+     tile 因公式层传播而错乱 —— 元素可见且 elementFromPoint 命中正常，
+     但原生 mousedown 完全不派发（"点击死区"），headless 模式正常。
+     E2E 二分实锤：隐藏全部 .sam-math 救活、逐个加回在 23 个时复现；
+     contain 隔离层传播后 25 个公式全部正常。
+     注意：round20 的 display:inline-block 只缓解了触发阈值（717 条规则
+     二分定位），未根治 —— 本条 contain 才是层爆炸的真正阻断。 */
+  contain: layout style paint;
 }
 .sam-math-inline { display: inline-block; margin: 0 2px; vertical-align: middle; text-align: left; }
 .sam-math-error { color: #dc2626; font-family: monospace; }

@@ -630,13 +630,20 @@ export function createPaginationPlugin(
         )
       }
       for (const rb of rowBreaks) {
-        // 子块级断点：表格行用 relative top（table-row 不接受 margin），
-        // 列表条目用 margin-top（li 是普通块级盒）。
+        // 子块级断点：表格行位移（table-row 不接受 margin）。
+        // ★ round22 根因修复（用户报告：滚动到跨页表格区后点击正文无光标）：
+        //   旧实现 position:relative; top:Npx —— Chromium 合成器的 hit-test
+        //   热区【不跟随 relative top 位移】（E2E 实锤：elementFromPoint 命中
+        //   正常、DOM 布局自洽，但原生 mousedown 在视觉位置完全不派发，
+        //   而手动 view.focus() 后键盘输入正常）。表格跨页断行的行被 top
+        //   位移后，其视觉位置与事件热区错位，形成"点击死区"。
+        //   改用 transform:translateY —— transform 位移参与合成器 hit-test，
+        //   热区与视觉一致；且不改变布局盒（与 relative top 等价的视觉位移）。
         if (rb.pos < 1 || rb.pos + rb.size > docSize) continue
         if (rb.isTable) {
           decos.push(
             Decoration.node(rb.pos, rb.pos + rb.size, {
-              style: 'position: relative; top: ' + rb.mt + 'px',
+              style: 'transform: translateY(' + rb.mt + 'px)',
               class: 'pg-brk-row',
             }),
           )

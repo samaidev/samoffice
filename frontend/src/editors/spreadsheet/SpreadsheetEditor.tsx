@@ -731,6 +731,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [dragging, setDragging] = useState(false)
   // Ctrl+拖拽追加区域 / 行列头拖拽多选的拖拽状态
   const ctrlDragRef = useRef<{ r: number; c: number } | null>(null)
+  // 单击直接编辑（round22，用户要求：单击即可编辑，无需双击）：
+  // mousedown 记录起点格；若后续 mouseenter 未发生跨格拖拽且 mouseup 仍落在
+  // 同一格，视为"纯单击" → 立即 startEdit。拖拽框选不受影响。
+  const clickEditRef = useRef<{ r: number; c: number } | null>(null)
   const rowDragRef = useRef<{ anchor: number; additive: boolean } | null>(null)
   const colDragRef = useRef<{ anchor: number; additive: boolean } | null>(null)
   const rowAnchorRef = useRef(0)
@@ -1172,7 +1176,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
 
   // === 单元格编辑态（Excel 模型）===
-  const startEdit = (r: number, c: number, initial?: string) => {
+  const startEdit = (r: number, c: number, initial?: string, selectAll = false) => {
     const cell = getCell(r, c)
     const raw = cell.formula || cell.value || ''
     setActive({ r, c })
@@ -1183,7 +1187,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if (el) {
         el.focus()
         const n = (initial ?? raw).length
-        try { el.setSelectionRange(n, n) } catch { /* select/textarea */ }
+        // selectAll（单击进入编辑）：全选现有内容，直接打字即替换 —— 
+        // 单击编辑模式下最顺手（Excel 双击是光标置尾，但单击=选中语义，
+        // 用户单击后打字的预期是覆盖）
+        try { el.setSelectionRange(selectAll ? 0 : n, selectAll ? n : n) } catch { /* select/textarea */ }
       }
     }, 0)
   }
@@ -2898,6 +2905,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         if (e.button !== 0) return
                         // 公式引用点选：编辑以 = 开头的内容时，点击单元格插入其引用（Excel 行为）
                         if (refModeActive) { e.preventDefault(); insertCellRef(r, c, e.shiftKey || !!refDragRef.current); return }
+                        // ★ round22 修复（用户报告：编辑一格后点下一格，上一格内容丢失）：
+                        // 编辑态中单击另一格 —— Excel 行为是【先提交当前编辑】再切换选区。
+                        // 旧版直接换选区，editCell 悬空未提交，输入的缓冲随下一次
+                        // startEdit 被覆盖 —— 内容静默丢失。
+                        if (editCell && (editCell.r !== r || editCell.c !== c)) {
+                          // 先提交旧格（buf 无变化时 setCellFmt 写回同值，无副作用），
+                          // 不 return —— 让本次点击的选区切换照常发生（Excel：点 B → A 提交 + 选中 B）
+                          commitEdit()
+                        }
                         // 对齐 MS Excel：Ctrl+点击 追加/取消选区，Ctrl+拖拽 框选新区域
                         if (e.ctrlKey || e.metaKey) {
                           e.preventDefault()
@@ -2914,6 +2930,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         // 阻止浏览器原生文本选择（MS Excel 框选时不会选中文字）；焦点显式回到网格
                         e.preventDefault()
                         selectCell(r, c); setSelImage(null); setDragging(true); gridRef.current?.focus()
+                        clickEditRef.current = { r, c } // 纯单击（无拖拽）时 mouseup 进入编辑
                       }}
                       onMouseEnter={() => {
                         if (refModeActive && refDragRef.current) { insertCellRef(r, c, true); return }
@@ -2923,9 +2940,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                           updateLastExtraArea({ r1: Math.min(a.r, r), c1: Math.min(a.c, c), r2: Math.max(a.r, r), c2: Math.max(a.c, c), mode: 'cell' })
                           return
                         }
-                        if (dragging) selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c))
+                        if (dragging) {
+                          if (clickEditRef.current && (clickEditRef.current.r !== r || clickEditRef.current.c !== c)) clickEditRef.current = null // 拖拽跨格 → 不是单击
+                          selectRange(Math.min(active.r, r), Math.min(active.c, c), Math.max(active.r, r), Math.max(active.c, c))
+                        }
                       }}
-                      onMouseUp={() => { setDragging(false); refDragRef.current = null }}
+                      onMouseUp={() => {
+                        setDragging(false); refDragRef.current = null
+                        // 纯单击（未跨格拖拽）→ 直接进入编辑（用户要求单击可编辑；
+                        // 双击路径保留，效果相同）
+                        const ce = clickEditRef.current
+                        clickEditRef.current = null
+                        if (ce && !refModeActive) startEdit(ce.r, ce.c, undefined, true)
+                      }}
                       onDoubleClick={e => { if (refModeActive) return; e.preventDefault(); startEdit(r, c) }}
                       onContextMenu={e => {
                         e.preventDefault()
