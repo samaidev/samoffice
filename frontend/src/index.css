@@ -1580,6 +1580,8 @@ ol.ref-list > li::before {
 }
 .sam-math-inline { display: inline-block; margin: 0 2px; vertical-align: middle; text-align: left; }
 .sam-math-error { color: #dc2626; font-family: monospace; }
+/* round24：公式节点选中态（NodeSelection selectNode 高亮）—— 选中后功能区字号/字体才可作用于公式 */
+.sam-math-selected { outline: 2px solid var(--color-primary); outline-offset: 1px; border-radius: 4px; }
 
 /* OLE .doc 内嵌图片（inlineImage 节点）：学术文档图片默认居中，最大宽 100% */
 .sam-inline-image { display: block; margin: 0 auto; max-width: 100%; height: auto; }

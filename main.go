@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,19 @@ type App struct {
 	startupArgs []string
 	// confirmedClose 为 true 表示前端已完成未保存更改的询问，OnBeforeClose 应放行。
 	confirmedClose bool
+	// dictsOnce 守护词典按需加载：首次拼写相关调用（审阅页手动"拼写检查"）时
+	// 才加载内置词典 —— 默认启动不加载、不检查（round24 用户需求：
+	// 公式文档被误报大量拼写错误；10MB+ 词典常驻也无谓占用内存）。
+	dictsOnce sync.Once
+}
+
+// ensureDicts 首次拼写调用时同步加载内置词典并 MarkReady（幂等）。
+// 加载耗时数秒，仅在用户主动触发拼写检查时发生；期间前端按钮显示"检查中"。
+func (a *App) ensureDicts() {
+	a.dictsOnce.Do(func() {
+		loadBuiltinDicts(a.dictMgr)
+		a.dictMgr.MarkReady()
+	})
 }
 
 // pendingOpenPath 返回"待打开文件"落盘路径（第二个实例把路径写到这里，首个实例轮询读取）
@@ -215,9 +229,9 @@ func NewApp() *App {
 
 	dictMgr := dict.NewManager(userStore)
 	dictMgr.SetCacheDir(dataDir) // 启用索引缓存
-	// 注意：loadBuiltinDicts 已移到 OnStartup 的后台 goroutine ——
-	// 词典（5MB 中文分词 + 5 万英文词 + SymSpell 索引）加载完再关 ready 通道，
-	// 窗口首屏不再被词典加载阻塞（SpellCheck 等调用经 EnsureReady 等待）。
+	// round24：词典不再于启动时加载（也不在 OnStartup 后台加载）——
+	// 默认"不加载字典、不检查拼写"，用户在审阅页点"拼写检查"时经
+	// App.ensureDicts 按需加载（幂等），加载完成后关 ready 通道。
 
 	return &App{
 		registry:  parser.NewRegistry(),
@@ -296,13 +310,16 @@ func (a *App) OpenFile(path string) (map[string]any, error) {
 	return res, nil
 }
 
-// SpellCheck 拼写检查
+// SpellCheck 拼写检查。词典按需加载：仅当用户在审阅页手动触发（前端调用本方法）
+// 时才加载内置词典 —— 默认启动不加载、不检查。
 func (a *App) SpellCheck(text, lang string) []dict.SpellError {
+	a.ensureDicts()
 	return a.dictMgr.SpellCheck(text, lang)
 }
 
 // Suggest 纠错建议
 func (a *App) Suggest(word, lang string, n int) []dict.Candidate {
+	a.ensureDicts()
 	return a.dictMgr.Suggest(word, lang, n)
 }
 
@@ -502,11 +519,8 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup: func(ctx context.Context) {
 			app.ctx = ctx
-			// 后台加载词典（不阻塞首屏）；完成后 MarkReady 供 SpellCheck 等待
-			go func() {
-				loadBuiltinDicts(app.dictMgr)
-				app.dictMgr.MarkReady()
-			}()
+			// round24：词典改为按需加载（SpellCheck/Suggest 首次调用时 ensureDicts）。
+			// 默认启动不加载词典、不检查拼写 —— 用户在审阅页点"拼写检查"才加载。
 			// 捕获右键"打开方式"/命令行传入的文件路径（os.Args[1:]）
 			if len(os.Args) > 1 {
 				app.startupArgs = append(app.startupArgs, os.Args[1:]...)

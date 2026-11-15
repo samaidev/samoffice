@@ -190,6 +190,12 @@ ${t('sample.md.more')}
   const [backend, setBackend] = useState<Backend | null>(null)
   const [doc, setDoc] = useState<Document>(emptyDoc)
   const [spellErrors, setSpellErrors] = useState<SpellError[]>([])
+  // round24 拼写检查改造：默认【不加载词典、不检查拼写】。仅在用户于审阅页点击
+  // "拼写检查"按钮时经 runManualSpellCheck 手动触发（期间 spellChecking 驱动按钮
+  // 显示"检查中…"）。编辑文档会使检查结果失效（handleDocChange 清空）。
+  const [spellChecking, setSpellChecking] = useState(false)
+  // 最近一次手动检查的文本：learnWord 后若结果仍在展示，用它原样重查
+  const lastSpellTextRef = useRef('')
   // 打开 xlsx/xls 时传入表格编辑器的初始 sheet 数据；epoch 用于强制重挂载以加载新文件
   const [sheetInitial, setSheetInitial] = useState<SheetData[] | null>(null)
   // SpreadsheetEditor 回传的完整工作簿快照（含边框/合并/填充/列宽/图片），用于保存 xlsx
@@ -445,7 +451,7 @@ ${t('sample.md.more')}
     } else {
       setSheetInitial(null)
       setDoc(result.document)
-      try { triggerSpellCheck(JSON.stringify(result.document?.blocks || [])) } catch {}
+      // round24：打开文件不再自动拼写检查（默认不检查，审阅页手动触发）
       win.doc = result.document
     }
     // 写入默认窗口字段
@@ -508,6 +514,9 @@ ${t('sample.md.more')}
   // DocumentEditor 内容回流：命中新建基线窗口时以回传 UDM 重设指纹基线
   const handleDocChange = (d: Document) => {
     setDoc(d)
+    // round24：编辑使拼写检查结果失效 —— 装饰在文档变化时已清（spellPlugin），
+    // 这里同步清空错误列表，审阅按钮回到"拼写检查"待触发态。
+    setSpellErrors(prev => (prev.length ? EMPTY_SPELL_ERRORS : prev))
     const p = pendingBaselineRef.current
     if (p && p.kind === 'document' && Date.now() <= p.until && activeWindow && activeWindow.path === p.path) {
       pendingBaselineRef.current = null
@@ -613,7 +622,6 @@ ${t('sample.md.more')}
   const [docZoom, setDocZoom] = useState(100)
   const [mdContent, setMdContent] = useState(sampleMd)
   const [htmlContent, setHtmlContent] = useState(sampleHtml)
-  const spellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const showToast = useCallback((msg: string) => {
@@ -852,24 +860,23 @@ ${t('sample.md.more')}
     setWordCount(text.trim() ? text.trim().split(/\s+/).length : 0)
   }, [doc])
 
-  const triggerSpellCheck = useCallback((text: string) => {
-    if (spellTimer.current) clearTimeout(spellTimer.current)
-    spellTimer.current = setTimeout(async () => {
-      if (!backend || !text.trim()) {
-        setSpellErrors(EMPTY_SPELL_ERRORS)
-        return
-      }
-      try {
-        const errs = await backend.spellCheck(text, lang)
-        // 引用稳定：结果为空时复用模块级空数组。旧版每次 fetch 都 setSpellErrors(新[])
-        // → DocumentEditor [spellErrors] effect 重跑 → dispatch spell 事务 → （修复前）
-        // 又触发 onSpellCheck —— 518ms 死循环。空结果复用引用可斩断最后一环。
-        setSpellErrors(errs.length ? errs : EMPTY_SPELL_ERRORS)
-      } catch (e) {
-        console.error('spell check failed', e)
-      }
-    }, 500)
-  }, [backend, lang])
+  // round24 拼写检查改造：手动触发（审阅页按钮）。仅在此处调用后端 SpellCheck ——
+  // 首次调用会让 Go 侧同步加载内置词典（数秒），spellChecking 驱动按钮显示"检查中"。
+  // 不再有 500ms 防抖自动检查：打开文件/编辑文档都不触发（用户明确要求默认不检查）。
+  const runManualSpellCheck = useCallback(async (text: string) => {
+    if (!backend || !text.trim() || spellChecking) return
+    setSpellChecking(true)
+    lastSpellTextRef.current = text
+    try {
+      const errs = await backend.spellCheck(text, lang)
+      // 引用稳定：结果为空时复用模块级空数组，避免无谓的装饰重建
+      setSpellErrors(errs.length ? errs : EMPTY_SPELL_ERRORS)
+    } catch (e) {
+      console.error('spell check failed', e)
+    } finally {
+      setSpellChecking(false)
+    }
+  }, [backend, lang, spellChecking])
 
   const handleOpenFile = async () => {
     if (!backend) return
@@ -1450,7 +1457,8 @@ ${t('sample.md.more')}
     if (!backend) return
     await backend.learnWord(word, lang, 'manual')
     showToast(t('app.wordLearned', { word }))
-    triggerSpellCheck(JSON.stringify(doc.blocks))
+    // 结果仍在展示时用原文本重查（校对会话中学习新词后立即反映）；否则不打扰
+    if (lastSpellTextRef.current) runManualSpellCheck(lastSpellTextRef.current)
   }
 
   const toggleTheme = () => {
@@ -1839,7 +1847,8 @@ ${t('sample.md.more')}
               document={doc}
               spellErrors={spellErrors}
               onChange={handleDocChange}
-              onSpellCheck={triggerSpellCheck}
+              onManualSpellCheck={runManualSpellCheck}
+              spellChecking={spellChecking}
               zoom={docZoom}
               onZoomChange={setDocZoom}
               backend={backend ?? undefined}

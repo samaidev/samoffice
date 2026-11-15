@@ -141,14 +141,31 @@ const SYMBOL_CATEGORIES: { name: string; items: SymbolItem[] }[] = [
 interface Props {
   initialLatex?: string
   initialInline?: boolean
+  /** 公式字号（px 数值字符串；'' = 跟随正文默认） */
+  initialFontSize?: string
   initialTab?: 'formula' | 'symbol'
   onClose: () => void
-  onInsert: (latex: string, inline: boolean) => void
+  onInsert: (latex: string, inline: boolean, fontSize: string) => void
 }
 
-export function MathEditorModal({ initialLatex = '', initialInline = false, initialTab = 'formula', onClose, onInsert }: Props) {
+// 公式字号选项：'' 跟随正文；其余为 px（KaTeX 按 em 级联，根节点缩放即整体缩放）
+const MATH_FONT_SIZES: { label: string; value: string }[] = [
+  { label: '默认', value: '' },
+  { label: '14', value: '14' },
+  { label: '16', value: '16' },
+  { label: '18', value: '18' },
+  { label: '20', value: '20' },
+  { label: '24', value: '24' },
+  { label: '28', value: '28' },
+  { label: '32', value: '32' },
+  { label: '36', value: '36' },
+  { label: '48', value: '48' },
+]
+
+export function MathEditorModal({ initialLatex = '', initialInline = false, initialFontSize = '', initialTab = 'formula', onClose, onInsert }: Props) {
   const [latex, setLatex] = useState(initialLatex)
   const [inline, setInline] = useState(initialInline)
+  const [fontSize, setFontSize] = useState(initialFontSize)
   const [cat, setCat] = useState(0)
   const [symCat, setSymCat] = useState(0)
   const [leftTab, setLeftTab] = useState<'formula' | 'symbol'>(initialTab)
@@ -202,7 +219,7 @@ export function MathEditorModal({ initialLatex = '', initialInline = false, init
       onClose()
       return
     }
-    onInsert(latex, inline)
+    onInsert(latex, inline, fontSize)
   }
 
   const totalSym = SYMBOL_CATEGORIES.reduce((a, c) => a + c.items.length, 0)
@@ -238,6 +255,21 @@ export function MathEditorModal({ initialLatex = '', initialInline = false, init
             <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
               <input type="checkbox" checked={inline} onChange={(e) => setInline(e.target.checked)} />
               行内公式
+            </label>
+            {/* 公式字号：写入 math 节点 fontSize attr（round24 用户需求"公式调整字体大小"） */}
+            <label className="flex items-center gap-1 text-xs select-none" style={{ color: 'var(--color-text-muted)' }}>
+              字号
+              <select
+                value={fontSize}
+                onChange={(e) => setFontSize(e.target.value)}
+                data-testid="math-font-size"
+                className="rounded px-1.5 py-0.5 text-xs"
+                style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+              >
+                {MATH_FONT_SIZES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}{s.value ? 'px' : ''}</option>
+                ))}
+              </select>
             </label>
             <button className="text-xl leading-none px-1 hover:text-red-500" onClick={onClose} title="关闭 (Esc)">
               ×
@@ -374,7 +406,8 @@ export function MathEditorModal({ initialLatex = '', initialInline = false, init
               style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', minHeight: 120 }}
             >
               {!previewHtml && <span style={{ color: 'var(--color-text-muted)' }}>在左侧选择公式或输入 LaTeX 查看预览</span>}
-              <div ref={previewRef} style={{ display: previewHtml ? 'block' : 'none' }} />
+              {/* 预览同步字号：KaTeX 按 em 级联，根节点 font-size 即整体缩放 */}
+              <div ref={previewRef} style={{ display: previewHtml ? 'block' : 'none', fontSize: fontSize ? `${fontSize}px` : undefined }} />
             </div>
           </div>
         </div>

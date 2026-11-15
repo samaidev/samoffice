@@ -36,7 +36,9 @@ interface Props {
   document: Document
   spellErrors?: SpellError[]
   onChange?: (doc: Document) => void
-  onSpellCheck?: (text: string) => void
+  // round24 拼写检查改造：拼写检查只由审阅页按钮手动触发（不再自动检查）
+  onManualSpellCheck?: (text: string) => void
+  spellChecking?: boolean
   zoom?: number
   onZoomChange?: (z: number) => void
   backend?: Backend
@@ -503,7 +505,7 @@ function extractFootnotes(doc: any): FootnoteData[] {
   return out
 }
 
-export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCheck, zoom: zoomProp, onZoomChange, backend, onToast }: Props) {
+export function DocumentEditor({ document, spellErrors = [], onChange, onManualSpellCheck, spellChecking, zoom: zoomProp, onZoomChange, backend, onToast }: Props) {
   const { t, lang } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 补充系统已安装字体。
@@ -784,7 +786,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     v.focus()
   }
   const onChangeRef = useRef(onChange)
-  const onSpellCheckRef = useRef(onSpellCheck)
+  const onManualSpellCheckRef = useRef(onManualSpellCheck)
   // 用 ref 持有最新 document，供 ProseMirror 闭包（dispatchTransaction）读取，避免捕获到过期的 props。
   const documentRef = useRef<any>(document)
   documentRef.current = document
@@ -799,7 +801,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const pageNumberRef = useRef<PageNumberConfig | null>(pageNumber)
   pageNumberRef.current = pageNumber
   onChangeRef.current = onChange
-  onSpellCheckRef.current = onSpellCheck
+  onManualSpellCheckRef.current = onManualSpellCheck
 
   const [styles, setStyles] = useState<Record<string, StyleFormat>>(() => {
     const init: Record<string, StyleFormat> = {}
@@ -862,7 +864,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const [showArtPanel, setShowArtPanel] = useState(false)
   // 独立公式编辑器弹窗（全屏模态）
   const [showMathModal, setShowMathModal] = useState(false)
-  const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null }>({ latex: '', inline: false, pos: null })
+  const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null; fontSize: string }>({ latex: '', inline: false, pos: null, fontSize: '' })
   // 独立的“插入符号”小面板（与公式弹窗分开，不复用）
   const [showSymbolPanel, setShowSymbolPanel] = useState(false)
   const [symbolCategory, setSymbolCategory] = useState<'greek' | 'latin' | 'circled' | 'roman' | 'math' | 'arrows'>('greek')
@@ -1441,6 +1443,20 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
             applyFontSize()
           }
           render()
+          dom.addEventListener('mousedown', (e) => {
+            // round24：单击即选中公式（NodeSelection）。实测 PM 对无内容 atom 的
+            // 点击会把 pos 解析到相邻段落（公式块有 padding/居中，无文本落点），
+            // 不会自动建 NodeSelection —— 显式 dispatch，保证功能区字号/字体
+            // 能作用于选中公式（对齐 Word 行为：点击公式即选中）。
+            if (e.button !== 0) return
+            const pos = typeof getPos === 'function' ? getPos() : null
+            if (pos == null || !_view) return
+            e.preventDefault()
+            try {
+              _view.dispatch(_view.state.tr.setSelection(NodeSelection.create(_view.state.doc, pos)))
+              _view.focus()
+            } catch { /* 节点已被并发事务删除等情形下忽略 */ }
+          })
           dom.addEventListener('dblclick', (e) => {
             e.preventDefault()
             // 打开富公式编辑模态框，预填当前公式并定位到该节点，确认后替换原节点。
@@ -1451,13 +1467,21 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
               latex: node.attrs.latex || '',
               inline: !!node.attrs.inline,
               pos: typeof pos === 'number' ? pos : null,
+              fontSize: node.attrs.fontSize || '',
             })
             setShowMathModal(true)
           })
           return {
             dom,
-            stopEvent: () => true,
+            // round24 字号修复：不再 stopEvent 全部事件 —— 旧版吞掉全部鼠标事件，
+            // 点击公式无法产生 NodeSelection，功能区"字号"永远写不进公式 attr。
+            // 仅拦 mousedown：选区由上面 dom 的 mousedown 监听显式建（PM 对无内容
+            // atom 的点击会把 pos 解析到相邻段落，且其默认处理会覆盖我们的
+            // NodeSelection —— 必须 stopEvent 阻断）；dblclick/键盘等仍交给 PM。
+            stopEvent: (e: Event) => e?.type === 'mousedown',
             ignoreMutation: () => true,
+            selectNode() { dom.classList.add('sam-math-selected') },
+            deselectNode() { dom.classList.remove('sam-math-selected') },
             // setFontSize 改 attrs.fontSize 时重渲染并应用新字号
             update(newNode: any) {
               if (newNode.type.name !== 'math') return false
@@ -1524,12 +1548,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
           lastEmittedRef.current = udm
           onChangeRef.current(udm)
         }
-        // 仅文档内容真实变化时才触发拼写检查 —— 旧版对所有事务（含 spell 装饰事务自身）
-        // 无条件调用，形成 "spell 事务 → onSpellCheck → setSpellErrors(新数组引用) →
-        // spell 事务" 的 518ms 死循环（500ms 防抖 + 请求耗时）。循环中装饰反复重建、
-        // 表格 NodeView 被连续重绘（实测静置 4s 重建 5 次+），点击/选区在 DOM 重建间隙
-        // 全部落空 —— "表格内文字无法编辑/无法全选/样式无法应用"的统一根因。
-        if (tr.docChanged && onSpellCheckRef.current) onSpellCheckRef.current(ns.doc.textContent)
+        // round24 拼写检查改造：不再随文档变化自动检查（旧自动检查在公式文档上
+        // 产生大量误报，且 spell 装饰事务曾与 onSpellCheck 形成 518ms 死循环拖垮
+        // 表格交互）。拼写检查只由审阅页按钮手动触发。
         updateActiveState(ns)
         if (ns.doc.childCount !== pmBlockCount) setPmBlockCount(ns.doc.childCount)
         try { setFootnotes(extractFootnotes(ns.doc)) } catch (e) { /* ignore */ }
@@ -1697,7 +1718,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
     view.updateState(newState)
     // 新文档加载后同步右侧批注栏（udm.comments 中的批注经 convert 已变回 comment_mark）
     try { setComments(extractComments(newDoc)) } catch (e) { /* ignore */ }
-    if (onSpellCheckRef.current) onSpellCheckRef.current(newDoc.textContent)
   }, [document])
 
   // 并排对比：当对比目标变化时，挂载/重建右侧只读视图，并计算差异高亮集合
@@ -2589,12 +2609,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
   const insertFormula = () => {
     // 打开独立公式编辑器弹窗（若有选中 math 节点则预填用于编辑）
     const v = viewRef.current
-    let init = { latex: '', inline: false, pos: null as number | null }
+    let init = { latex: '', inline: false, pos: null as number | null, fontSize: '' }
     if (v) {
       const sel = v.state.selection
       const node = sel instanceof NodeSelection ? sel.node : null
       if (node && node.type.name === 'math') {
-        init = { latex: node.attrs.latex || '', inline: !!node.attrs.inline, pos: sel.from }
+        init = { latex: node.attrs.latex || '', inline: !!node.attrs.inline, pos: sel.from, fontSize: node.attrs.fontSize || '' }
       }
     }
     setMathEdit(init)
@@ -2638,10 +2658,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
       }
     }
   }
-  // 公式弹窗插入/更新
-  const handleMathInsert = (latex: string, inline: boolean) => {
+  // 公式弹窗插入/更新。fontSize 为弹窗字号选择（'' = 跟随正文默认）；
+  // 编辑已有公式时若弹窗未改字号，保留原节点的 fontSize attr。
+  const handleMathInsert = (latex: string, inline: boolean, fontSize?: string) => {
     const v = viewRef.current; if (!v) { setShowMathModal(false); return }
-    const mathNode = schema.nodes.math.create({ latex, inline })
+    let fs = fontSize || ''
+    if (mathEdit.pos != null && !fontSize) {
+      const old = v.state.doc.nodeAt(mathEdit.pos)
+      if (old && old.type.name === 'math') fs = old.attrs.fontSize || ''
+    }
+    const mathNode = schema.nodes.math.create({ latex, inline, fontSize: fs })
     const tr = v.state.tr
     if (mathEdit.pos != null) {
       // 编辑已有公式：替换原节点
@@ -3409,7 +3435,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         {ribbonTab === 'review' && (<>
           <RibbonGroup label={t('doc.proofing')}>
             <RibbonButton icon="🔍" label={t('doc.findReplace')} onClick={() => setSearchOpen(!searchOpen)} />
-            <RibbonButton icon={spellErrors.length > 0 ? '❗' : '✓'} label={spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {
+            <RibbonButton icon={spellChecking ? '⏳' : spellErrors.length > 0 ? '❗' : '✓'} label={spellChecking ? (t('doc.spellChecking') || 'Checking…') : spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {
+              if (spellChecking) return
               if (spellErrors.length > 0) {
                 // 跳到下一个拼写错误：优先用文档中带 spell-error 装饰的词，
                 // 依次向后找第一个不在当前选区之前的（旧实现误用 searchPlugin 的
@@ -3451,11 +3478,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
                 }
                 if (!jumped) alert(t('doc.spellNoErrors') || 'No spelling errors')
               } else {
-                // Trigger spell check
+                // round24：手动拼写检查 —— 点击后由 App 同步加载词典（首次数秒）并检查
                 const v = viewRef.current; if (!v) return
-                if (onSpellCheckRef.current) onSpellCheckRef.current(v.state.doc.textContent)
+                if (onManualSpellCheckRef.current) onManualSpellCheckRef.current(v.state.doc.textContent)
               }
-            }} title={spellErrors.length > 0 ? (t('doc.spellJumpTitle') || 'Jump to next spelling error') : (t('doc.spellRunTitle') || 'Run spell check')} />
+            }} title={spellChecking ? (t('doc.spellChecking') || 'Checking…') : spellErrors.length > 0 ? (t('doc.spellJumpTitle') || 'Jump to next spelling error') : (t('doc.spellRunTitle') || 'Run spell check')} />
             <RibbonButton icon="🌐" label={t('doc.translate')} onClick={() => {
               const text = viewRef.current?.state.doc.textContent || ''
               if (text) window.open(`https://translate.google.com/?text=${encodeURIComponent(text.slice(0, 500))}`, '_blank')
@@ -4335,6 +4362,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onSpellCh
         <MathEditorModal
           initialLatex={mathEdit.latex}
           initialInline={mathEdit.inline}
+          initialFontSize={mathEdit.fontSize}
           initialTab={mathEdit.pos != null ? 'formula' : 'formula'}
           onClose={() => setShowMathModal(false)}
           onInsert={handleMathInsert}

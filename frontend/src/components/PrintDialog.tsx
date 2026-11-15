@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { useI18n } from '../i18n'
 import { Dropdown } from './Dropdown'
 
@@ -90,6 +90,12 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
   const [settings, setSettings] = useState<PrintSettings>(defaultPrintSettings)
   const [activeTab, setActiveTab] = useState<'general' | 'layout' | 'advanced'>('general')
   const previewRef = useRef<HTMLDivElement>(null)
+  // round24 打印预览真实分页（用户报告"打印预览无法翻页"——旧版 ◀/▶ 无 onClick、
+  // 页码硬编码 1/3、预览只有一张固定高度的纸）。文档预览按纸张内容高度切片，
+  // 翻页 = 平移显示第 N 页。仅 word 启用（ppt 幻灯片/excel 表格自成一页，不切片）。
+  const [pageCount, setPageCount] = useState(1)
+  const [currentPage, setCurrentPage] = useState(1)
+  const previewContentRef = useRef<HTMLDivElement>(null)
 
   // Escape 关闭对话框
   useEffect(() => {
@@ -104,6 +110,25 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
   const update = <K extends keyof PrintSettings>(key: K, value: PrintSettings[K]) => {
     setSettings(s => ({ ...s, [key]: value }))
   }
+
+  // 文档内容实际高度 → 页数。open/settings/renderPreview 变化后重测；
+  // 另测一次延迟值兜底图片等异步加载导致的首次测量偏矮。
+  useLayoutEffect(() => {
+    if (!open || editorType !== 'word') return
+    const measure = () => {
+      const paper = PAPER_SIZES[settings.paperSize]
+      const ph = settings.orientation === 'landscape' ? paper.w : paper.h
+      const ch = Math.max(60, ph * 1.5 - (settings.margins.top + settings.margins.bottom) * 1.5)
+      const el = previewContentRef.current
+      if (!el) return
+      const pages = Math.max(1, Math.ceil((el.scrollHeight - 2) / ch))
+      setPageCount(prev => (prev === pages ? prev : pages))
+      setCurrentPage(p => (p > pages ? pages : p))
+    }
+    measure()
+    const id = setTimeout(measure, 400)
+    return () => clearTimeout(id)
+  }, [open, settings, editorType, renderPreview])
 
   // 实际执行打印
   const doPrint = () => {
@@ -151,6 +176,8 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
   const paper = PAPER_SIZES[settings.paperSize]
   const previewW = settings.orientation === 'landscape' ? paper.h : paper.w
   const previewH = settings.orientation === 'landscape' ? paper.w : paper.h
+  // 纸张内容区高度（px，1.5 为预览缩放系数）—— 分页切片的页高
+  const contentH = Math.max(60, previewH * 1.5 - (settings.margins.top + settings.margins.bottom) * 1.5)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in" style={{ background: 'rgba(15,23,42,0.7)' }} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
@@ -530,7 +557,7 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
             <div className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
               {t('print.preview')} · {settings.paperSize} · {settings.orientation === 'portrait' ? t('print.portrait') : t('print.landscape')} · {settings.scale}%
             </div>
-            {/* 纸张预览 */}
+            {/* 纸张预览（word：按页高切片显示当前页；ppt/excel：整幅内容） */}
             <div
               data-testid="print-preview"
               className="bg-white shadow-2xl relative"
@@ -543,10 +570,18 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 filter: settings.color === 'color' ? 'none' : 'grayscale(1)',
               }}
             >
-              {renderPreview ? renderPreview(settings) : (
-                <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-                  {t('print.previewEmpty')}
+              {editorType === 'word' ? (
+                <div style={{ height: contentH, overflow: 'hidden' }}>
+                  <div ref={previewContentRef} style={{ transform: `translateY(${-(currentPage - 1) * contentH}px)` }}>
+                    {renderPreview ? renderPreview(settings) : (
+                      <div className="h-full flex items-center justify-center text-gray-400 text-sm">{t('print.previewEmpty')}</div>
+                    )}
+                  </div>
                 </div>
+              ) : (
+                renderPreview ? renderPreview(settings) : (
+                  <div className="h-full flex items-center justify-center text-gray-400 text-sm">{t('print.previewEmpty')}</div>
+                )
               )}
               {/* 装订线指示 */}
               {settings.binding !== 'none' && (
@@ -558,19 +593,33 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                 />
               )}
             </div>
-            {/* 页码导航 */}
-            <div className="flex items-center gap-3 mt-4">
-              <button className="p-1.5 rounded hover:bg-gray-200" style={{ color: 'var(--color-text)' }}>◀</button>
-              <span className="text-sm" style={{ color: 'var(--color-text)' }}>1 / 3</span>
-              <button className="p-1.5 rounded hover:bg-gray-200" style={{ color: 'var(--color-text)' }}>▶</button>
-            </div>
+            {/* 页码导航（word：真实分页翻页） */}
+            {editorType === 'word' && (
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  data-testid="print-page-prev"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{ color: 'var(--color-text)' }}
+                >◀</button>
+                <span data-testid="print-page-indicator" className="text-sm" style={{ color: 'var(--color-text)' }}>{currentPage} / {pageCount}</span>
+                <button
+                  data-testid="print-page-next"
+                  disabled={currentPage >= pageCount}
+                  onClick={() => setCurrentPage(p => Math.min(pageCount, p + 1))}
+                  className="p-1.5 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{ color: 'var(--color-text)' }}
+                >▶</button>
+              </div>
+            )}
           </div>
         </div>
 
         {/* 底部操作栏 */}
         <div className="flex items-center justify-between px-6 py-3 border-t" style={{ borderColor: 'var(--color-border)' }}>
           <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            {t('print.summary', { pages: 3, copies: settings.copies, paper: settings.paperSize })}
+            {t('print.summary', { pages: editorType === 'word' ? pageCount : 1, copies: settings.copies, paper: settings.paperSize })}
           </div>
           <div className="flex gap-2">
             <button
