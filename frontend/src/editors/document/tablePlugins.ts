@@ -9,7 +9,7 @@
 //    悬停边框时光标变为 col-resize / row-resize，按下实时跟随、松开一次性提交事务。
 // 4. autoFitTable —— 自动调整：根据内容调整表格 / 根据窗口调整表格 / 固定列宽。
 import { Plugin } from 'prosemirror-state'
-import { Node as PMNode } from 'prosemirror-model'
+import { Node as PMNode, Fragment } from 'prosemirror-model'
 import { CellSelection } from 'prosemirror-tables'
 import type { EditorView } from 'prosemirror-view'
 
@@ -296,6 +296,144 @@ function widthsAfterDrag(grid: TableGrid, b: number, dx: number): number[] {
     widths[b] = clampW((grid.colWidths[b] || CELL_MIN_W) - dx)
   }
   return widths
+}
+
+// ============ 行拖拽换位置（对齐 MS Word：选中行后拖到目标行） ============
+// 由点击代理层（DocumentEditor 管理器）在 CellSelection 上 mousedown 时驱动：
+// PM 的 tableEditing 插件会把 CellSelection 压成光标，事件也到不了
+// view.dom，因此行拖拽会话必须在 window 级、从 proxy 直接启动。
+
+/** 在 CellSelection（行选中）上开始行拖拽会话：拖动显示插入指示线，
+ * 松开把选中行区间移动到目标行。返回 true 表示会话已启动（调用方应
+ * preventDefault 并保留 CellSelection）。 */
+export function startRowDragSession(view: EditorView, clientX: number, clientY: number): boolean {
+  const sel = view.state.selection as any
+  if (!sel || !sel.$anchorCell || !sel.$headCell) return false
+  // 点击的 td
+  // 找 table 位置（anchor cell 向上回溯）
+  let tablePos = -1
+  view.state.doc.forEach((n, off) => {
+    if (tablePos < 0 && n.type.name === 'table') {
+      const d = view.nodeDOM(off) as HTMLElement | null
+      if (d) {
+        const ad = view.nodeDOM(selAnchorPos(view, sel)) as HTMLElement | null
+        if (ad && (d === ad.closest('.tableWrapper') || d.contains(ad.closest('.tableWrapper')))) tablePos = off
+      }
+    }
+  })
+  if (tablePos < 0) return false
+  const table = view.state.doc.nodeAt(tablePos)
+  if (!table || table.childCount < 2) return false
+  // 行索引：$anchorCell/$headCell 相对 table 开头的深度回溯
+  // 行索引 = 兄弟序号（字节偏移会误判行号，r27_m11/m12 实锤）
+  const rowOf = ($cell: any) => {
+    for (let d = $cell.depth; d >= 2; d--) {
+      if ($cell.node(d).type.name === 'table_row') {
+        const theRow = $cell.node(d)
+        let idx = -1
+        $cell.node(d - 1).forEach((rw: PMNode, _o: number, i: number) => { if (rw === theRow) idx = i })
+        return idx
+      }
+    }
+    return -1
+  }
+  const fromRow = Math.min(rowOf(sel.$anchorCell), rowOf(sel.$headCell))
+  const toRow = Math.max(rowOf(sel.$anchorCell), rowOf(sel.$headCell))
+  if (fromRow < 0 || toRow < 0) return false
+  if (toRow - fromRow + 1 >= table.childCount) return false
+  // nodeDOM(table) 返回 NodeView 的 dom（即 .tableWrapper 本身）—— 
+  // 不能在它内部 querySelector（找不到自己）；取它或其内部首个 wrapper。
+  const nd = view.nodeDOM(tablePos) as HTMLElement | null
+  const wrap = nd && (nd.classList.contains('tableWrapper') ? nd : nd.querySelector?.('.tableWrapper')) as HTMLElement | null
+  const host = view.dom.parentElement
+  if (!wrap || !host) return false
+
+  const indicator = document.createElement('div')
+  indicator.className = 'pm-row-move-indicator'
+  indicator.style.cssText = 'position:absolute;height:2px;background:#2563eb;display:none;z-index:8;pointer-events:none;border-radius:1px'
+  host.appendChild(indicator)
+
+  let armed = false
+  let targetRow = -1
+  // ★ wrap 不能闭包缓存：PM 更新会重建 NodeView（新 wrapper 节点），
+  // 旧节点 rect 全 0 导致 target 误判为末尾（r27_targetdbg5 实锤）。
+  const liveWrap = (): HTMLElement | null => {
+    const nd = view.nodeDOM(tablePos) as HTMLElement | null
+    if (!nd) return null
+    return nd.classList.contains('tableWrapper') ? nd : (nd.querySelector?.('.tableWrapper') as HTMLElement | null)
+  }
+  const onMove = (ev: MouseEvent) => {
+    if (!armed) {
+      if (Math.abs(ev.clientY - clientY) < 5 && Math.abs(ev.clientX - clientX) < 5) return
+      armed = true
+    }
+    const wNow = liveWrap()
+    if (!wNow) return
+    const trs = wNow.querySelectorAll('tr')
+    // 目标行判定（防错设计 r27）：elementFromPoint 反查（所见即所得，
+    // 不受 rect 缓存/拖拽中 scrollIntoView 引起的整体位移影响）—— 
+    // 点击点落在行 X 的上半 → 插到 X 前；下半 → 插到 X+1 前；表外下方 → 末尾。
+    let target = trs.length
+    const hitEl = window.document.elementFromPoint(ev.clientX, ev.clientY)
+    const hitTr = hitEl?.closest?.('tr') as HTMLElement | null
+    if (hitTr && wNow.contains(hitTr)) {
+      const idx = Array.prototype.indexOf.call(trs, hitTr)
+      const r = hitTr.getBoundingClientRect()
+      target = ev.clientY < r.top + r.height / 2 ? idx : idx + 1
+    } else {
+      // 表格下方空白 → 末尾（clientY 超过末行中点才算）
+      const lastR = (trs[trs.length - 1] as HTMLElement).getBoundingClientRect()
+      if (ev.clientY < lastR.top + lastR.height / 2) {
+        // 落点不在任何行上但在表格范围内（间隙）—— 按线性扫描兜底
+        for (let i = 0; i < trs.length; i++) {
+          const r = (trs[i] as HTMLElement).getBoundingClientRect()
+          if (ev.clientY < r.top + r.height / 2) { target = i; break }
+        }
+      } else target = trs.length
+    }
+    targetRow = target
+    // 调试注入（r27_matrix2）：确认 mousemove 的 clientY 与几何
+    const hostR = host.getBoundingClientRect()
+    let indY: number
+    if (target === 0) indY = (trs[0] as HTMLElement).getBoundingClientRect().top - hostR.top
+    else indY = (trs[Math.min(target, trs.length) - 1] as HTMLElement).getBoundingClientRect().bottom - hostR.top
+    indicator.style.display = 'block'
+    indicator.style.top = indY + 'px'
+    indicator.style.left = (wNow.getBoundingClientRect().left - hostR.left) + 'px'
+    indicator.style.width = wNow.getBoundingClientRect().width + 'px'
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    indicator.remove()
+    if (!armed || targetRow < 0) return
+    // 原地判定（r27_matrix6 修正）：target 语义 =「插到原行序第 target 行前」，
+    // target ∈ [fromRow, toRow+1]（选区前缘..后缘+1）均为原地。
+    if (targetRow >= fromRow && targetRow <= toRow + 1) return
+    // 映射到移除选区后的 rest 坐标：目标在选区后方时前移选区长度
+    let insertAt = targetRow > toRow + 1 ? targetRow - (toRow - fromRow + 1) : targetRow
+    try {
+      const t2 = view.state.doc.nodeAt(tablePos)
+      if (!t2) return
+      void wrap // 闭包 wrap 仅作初始存在性校验，拖拽期间用 liveWrap()
+      const rowsArr: PMNode[] = []
+      t2.forEach((rw: PMNode) => rowsArr.push(rw))
+      const moved = rowsArr.slice(fromRow, toRow + 1)
+      const rest = rowsArr.slice(0, fromRow).concat(rowsArr.slice(toRow + 1))
+      const newRows = rest.slice(0, insertAt).concat(moved, rest.slice(insertAt))
+      const tr = view.state.tr.replaceWith(tablePos, tablePos + t2.nodeSize, t2.copy(Fragment.fromArray(newRows)))
+      view.dispatch(tr.scrollIntoView())
+      view.focus()
+    } catch { /* 移动失败静默 */ }
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  return true
+}
+
+/** CellSelection anchor cell 的文档位置（-1 找不到）。 */
+function selAnchorPos(view: EditorView, sel: any): number {
+  try { return sel.$anchorCell.pos - 1 } catch { return -1 }
 }
 
 export function createTableDragResizePlugin(getZoom: () => number) {

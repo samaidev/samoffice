@@ -14,7 +14,7 @@ import { spellCheckPlugin, setSpellErrors } from './spellPlugin'
 import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, getSearchState } from './searchPlugin'
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign, setCellBorders } from './tableCommands'
 import { tableEditing, CellSelection, cellAround } from 'prosemirror-tables'
-import { DocTableView, createTableDragResizePlugin, autoFitTable } from './tablePlugins'
+import { DocTableView, createTableDragResizePlugin, autoFitTable, startRowDragSession } from './tablePlugins'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
 import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
@@ -2898,6 +2898,62 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         if (e.button !== 0) return
         const v = viewRef.current
         if (!v) return
+        // 行拖拽协同（round27）：已有 CellSelection（整行/多行选中）时点击
+        // 选中区域内 → 放行：不 preventDefault、不改选区，让 PM 表格插件与
+        // 行拖拽插件处理（否则会把行选中压成光标，行拖拽无法触发）。
+        const curSel = v.state.selection as any
+        if (curSel && curSel.$anchorCell && curSel.$headCell) {
+          // 点击是否落在 CellSelection 范围内（选中的行上）→ 启动行拖拽会话
+          //（preventDefault 保留 CellSelection，避免被 tableEditing 压成光标）
+          const cellSelFrom = Math.min(curSel.$anchorCell.pos, curSel.$headCell.pos)
+          const cellSelTo = Math.max(curSel.$anchorCell.pos, curSel.$headCell.pos)
+          // 判定用【DOM 几何】而非 posAtCoords（死区坐标下 posAtCoords 恒返回
+          // 表格起始位置 r27_matrix7 实锤 at=22 固定值）：命中 td 的行索引
+          // ∈ CellSelection 覆盖的行区间 → 视为拖选中行。
+          let inCellSel = false
+          {
+            // CellSelection 覆盖的行区间（doc 位置 → 行索引）
+            // 行索引：数兄弟 —— 行在 table 子节点中的序号
+            //（字节偏移 / 行高会误判，r27_m11 实锤 48 ≠ 3）
+            const rowIndexOf = ($cell: any) => {
+              try {
+                for (let d = $cell.depth; d >= 2; d--) {
+                  if ($cell.node(d).type.name === 'table_row') {
+                    const theRow = $cell.node(d)
+                    let idx = -1
+                    $cell.node(d - 1).forEach((rw: any, _o: number, i: number) => { if (rw === theRow) idx = i })
+                    return idx
+                  }
+                }
+              } catch { /* */ }
+              return -1
+            }
+            const selFromRow = Math.min(rowIndexOf(curSel.$anchorCell), rowIndexOf(curSel.$headCell))
+            const selToRow = Math.max(rowIndexOf(curSel.$anchorCell), rowIndexOf(curSel.$headCell))
+            // 点击命中的 td/th → 所在 wrapper 的行索引
+            // elementFromPoint 在死区坐标返回 proxy 自身（r27_matrix8）—— 
+            // 改为几何扫描 v.dom 里所有 wrapper 的 td（与下方 hit 匹配同法）
+            v.dom.querySelectorAll('.tableWrapper').forEach(w3 => {
+              if (inCellSel) return
+              ;(w3 as HTMLElement).querySelectorAll('tr').forEach((tr, ri) => {
+                if (inCellSel) return
+                ;(tr as HTMLElement).querySelectorAll('td,th').forEach((td2) => {
+                  if (inCellSel) return
+                  const rect = (td2 as HTMLElement).getBoundingClientRect()
+                  if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+                    if (ri >= selFromRow && ri <= selToRow) inCellSel = true
+                  }
+                })
+              })
+            })
+          }
+          if (inCellSel) {
+            e.preventDefault()
+            startRowDragSession(v, e.clientX, e.clientY)
+            return
+          }
+          // 点击在选区外：放行默认（改选/收起）—— 不 preventDefault
+        }
         // 坐标 → td（DOM 几何匹配）。不使用建层时的闭包 wrapper —— 
         // NodeView 会因 PM 更新重建（wrapper 换新节点、旧节点脱离文档，
         // r27_f16 实锤 connected:false），每次点击从事件坐标实时定位。
@@ -3028,6 +3084,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     const onFirst = () => {
       window.document.removeEventListener('pointerdown', onFirst, true)
       if (disposed) return
+      // StrictMode 双挂载守卫（r27_matrix2 实锤双会话）：同一 document
+      // 只允许一个管理器实例响应首次交互（两个实例会建两个重叠 proxy，
+      // 行拖拽会话被双启动、坐标互相干扰）。
+      if ((window as any).__samTableProxyMgr) return
+      ;(window as any).__samTableProxyMgr = true
       // ★ 建层调度必须用 MessageChannel（r27_t16 实测）：React effect 闭包
       // 里的 setTimeout 创建的层会进 Chromium hit-test 死名单（层永远收
       // 不到事件）；MessageChannel / requestIdleCallback / evaluate 环境里
@@ -3055,6 +3116,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     window.document.addEventListener('pointerdown', onFirst, true)
     return () => {
       disposed = true
+      if ((window as any).__samTableProxyMgr) (window as any).__samTableProxyMgr = false
       window.document.removeEventListener('pointerdown', onFirst, true)
       cleanupExtra?.()
       if (kick.timer) window.clearTimeout(kick.timer)
