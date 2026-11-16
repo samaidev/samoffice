@@ -57,6 +57,9 @@ interface OpenWindow {
   slideEpoch: number
   zoom: number
   spellErrors: SpellError[]
+  // 会话内已解锁的文档保护哈希（按 path 记忆）：切换标签再切回时不重复要密码。
+  // 仅存内存，不落盘；应用重启后仍需重新输入。空串 = 本会话已解锁（protect.hash 为空）。
+  unlockedHash?: string
   // 上次保存（或刚打开）时的内容指纹。与当前内容指纹比对得出"脏"状态，
   // 改回原样即不再算脏，避免误报。pdf 为只读视图，恒不脏。
   savedFingerprint: string
@@ -308,6 +311,7 @@ ${t('sample.md.more')}
   }
 
   // 把当前顶层编辑状态捕获为窗口快照（用于切换/打开时保存当前窗口的改动）
+  // 注意：unlockedHash 不在此捕获（它是窗口自身属性，不随编辑状态变，避免被 undefined 覆盖）
   const captureActive = (): Partial<OpenWindow> => ({
     doc,
     md: mdContent,
@@ -512,6 +516,12 @@ ${t('sample.md.more')}
   const pendingBaselineRef = useRef<{ path: string; kind: 'document' | 'slide'; until: number } | null>(null)
 
   // DocumentEditor 内容回流：命中新建基线窗口时以回传 UDM 重设指纹基线
+  // round26：文档保护解锁状态回传 —— 把会话内已解锁的哈希记入当前窗口快照，
+  // 切换标签再切回时作为 initialUnlockHash 传给编辑器，避免重复要求输入密码。
+  const handleUnlockChange = (hash: string) => {
+    setWindows(prev => prev.map(w => (w.id === activeWindowId ? { ...w, unlockedHash: hash } : w)))
+  }
+
   const handleDocChange = (d: Document) => {
     setDoc(d)
     // round24：编辑使拼写检查结果失效 —— 装饰在文档变化时已清（spellPlugin），
@@ -1553,7 +1563,7 @@ ${t('sample.md.more')}
           改用 overflow-visible, 子元素 flex-shrink-0 + whitespace-nowrap 已能避免横向溢出,
           最外层 div 的 overflow-x-hidden 兜底防止页面横向滚动。 */}
       <header
-        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0 overflow-hidden"
+        className="text-white px-2 sm:px-4 py-0 flex items-center gap-1 flex-shrink-0"
         style={{
           background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%)',
           boxShadow: '0 2px 12px rgba(79, 70, 229, 0.25)',
@@ -1867,6 +1877,8 @@ ${t('sample.md.more')}
               onZoomChange={setDocZoom}
               backend={backend ?? undefined}
               onToast={showToast}
+              initialUnlockHash={activeWindow?.unlockedHash}
+              onUnlockChange={handleUnlockChange}
             />
           )}
           {tab === 'spreadsheet' && <SpreadsheetEditor key={`${activeWindowId}-${sheetEpoch}`} title={t('app.sheet1')} initialSheets={sheetInitial || undefined} onSheetsChange={setSheetSnapshot} />}

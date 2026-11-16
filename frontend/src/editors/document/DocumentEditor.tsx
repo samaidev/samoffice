@@ -43,6 +43,10 @@ interface Props {
   onZoomChange?: (z: number) => void
   backend?: Backend
   onToast?: (msg: string) => void
+  // 会话内已解锁的保护哈希（App 层按文件路径记忆，切标签回来直接可用）
+  initialUnlockHash?: string
+  // 解锁/加锁成功时回传哈希，App 记入窗口快照（空串 = 已取消保护）
+  onUnlockChange?: (hash: string) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'layout' | 'review' | 'view'
@@ -505,7 +509,7 @@ function extractFootnotes(doc: any): FootnoteData[] {
   return out
 }
 
-export function DocumentEditor({ document, spellErrors = [], onChange, onManualSpellCheck, spellChecking, zoom: zoomProp, onZoomChange, backend, onToast }: Props) {
+export function DocumentEditor({ document, spellErrors = [], onChange, onManualSpellCheck, spellChecking, zoom: zoomProp, onZoomChange, backend, onToast, initialUnlockHash, onUnlockChange }: Props) {
   const { t, lang } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 补充系统已安装字体。
@@ -934,7 +938,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [protectedMode, setProtectedMode] = useState(false)
   // 已解锁的文档保护哈希（空表示当前未处于受保护态，或已解锁）。
   // 打开带保护的文档时该值为空，需输入正确密码后填入对应哈希才能编辑。
-  const unlockHashRef = useRef<string>('')
+  // round26：初始值来自 App 会话级缓存（initialUnlockHash）——同一文件切走再切回不再要密码。
+  const unlockHashRef = useRef<string>(initialUnlockHash ?? '')
+  const onUnlockChangeRef = useRef(onUnlockChange)
+  onUnlockChangeRef.current = onUnlockChange
   // 解锁密码输入弹窗
   const [showUnlock, setShowUnlock] = useState(false)
   const [unlockInput, setUnlockInput] = useState('')
@@ -2804,6 +2811,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       lastEmittedRef.current = updated
       onChange?.(updated)
       unlockHashRef.current = hash
+      onUnlockChangeRef.current?.(hash)
       setProtectedMode(true)
       v.setProps({ editable: () => false })
     } else {
@@ -2817,6 +2825,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         lastEmittedRef.current = updated
         onChange?.(updated)
         unlockHashRef.current = ''
+        onUnlockChangeRef.current?.('')
         setProtectedMode(false)
         setShowUnlock(false)
         v.setProps({ editable: () => true })
@@ -2827,6 +2836,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   }
 
   // 打开受保护文档时，若尚未解锁则进入只读并弹出密码框
+  // （round26：切标签回来时 unlockHashRef 已由 initialUnlockHash 预填 —— 不再弹密码框）
   useEffect(() => {
     if (document.protect?.enabled) {
       if (unlockHashRef.current !== document.protect.hash) {
@@ -2834,6 +2844,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         setShowUnlock(true)
         const v = viewRef.current
         if (v) v.setProps({ editable: () => false })
+      } else {
+        // 会话内已解锁过：直接恢复可编辑，不弹密码框
+        setProtectedMode(false)
+        setShowUnlock(false)
+        const v = viewRef.current
+        if (v) v.setProps({ editable: () => true })
       }
     }
   }, [document])
@@ -2843,6 +2859,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     const v = viewRef.current; if (!v) return
     if (hashPwd(unlockInput) === (document.protect?.hash ?? '')) {
       unlockHashRef.current = document.protect!.hash
+      onUnlockChangeRef.current?.(document.protect!.hash)
       setProtectedMode(false)
       setShowUnlock(false)
       setUnlockInput('')
@@ -3852,12 +3869,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         }}
       >
         {/* 缩放包裹层：仅对纸页与编辑器内容做视觉缩放，不改变布局尺寸，
-            避免 CSS zoom 属性导致 ProseMirror 内容区域异常或 measure 循环。 */}
+            避免 CSS zoom 属性导致 ProseMirror 内容区域异常或 measure 循环。
+            round26 关键修复：zoom=100% 时【不输出 transform】。恒等 scale(1)
+            仍会创建合成层 + containing block，Chromium 在「滚动容器 + transform
+            祖先 + 高内容」组合下合成器鼠标 hit-test 与主线程错位 —— 表格区域
+            鼠标点击全部落空（点击无光标/无法编辑；触摸管线正常，故此前难定位）。
+            仅在真正需要缩放（zoom≠100）时才挂 transform。 */}
         <div
           style={{
             width: pageWidthPx,
-            transform: `scale(${zoom / 100})`,
-            transformOrigin: 'top center',
+            ...(zoom !== 100 ? { transform: `scale(${zoom / 100})`, transformOrigin: 'top center' } : {}),
           }}
         >
         {/* 纸页背景层：每张纸依据分页引擎算出的实际内容位置绘制，与内容严格对齐 */}
