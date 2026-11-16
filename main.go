@@ -78,6 +78,57 @@ func pendingOpenPath() string {
 	return filepath.Join(dir, "pending_open.txt")
 }
 
+// round27 启动看门狗：诊断发现 shan 上偶发"Wails 启动死锁"（进程活着、
+// 窗口不出现、单实例互斥体不释放，后续启动全部被挡）。看门狗机制：
+//   - main 启动 30s 内 OnDomReady 未写入 boot_ok 标记 → 判定窗口未出现，
+//     写 boot.log 后 os.Exit(1) 强制退出（释放单实例锁，下次启动可恢复）。
+//   - 正常启动路径不受影响；boot.log 记录判定结果便于远程诊断。
+func bootOkPath() string {
+	dir, _ := os.UserCacheDir()
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "samoffice", "boot_ok.txt")
+}
+
+func bootLogPath() string {
+	dir, _ := os.UserCacheDir()
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "samoffice", "boot.log")
+}
+
+// markBootOk 由 OnDomReady 调用：窗口 DOM 就绪（可见）即写入标记。
+func markBootOk() {
+	_ = os.MkdirAll(filepath.Dir(bootOkPath()), 0o755)
+	_ = os.WriteFile(bootOkPath(), []byte(fmt.Sprintf("%d", time.Now().UnixMilli())), 0o644)
+}
+
+// startBootWatchdog 30s 内无 boot_ok 标记则自杀（返回前阻塞在 wails.Run
+// 的主流程不受影响，由独立 goroutine 执行）。
+func startBootWatchdog() {
+	go func() {
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(bootOkPath()); err == nil {
+				_ = os.WriteFile(bootLogPath(), []byte(fmt.Sprintf("[%s] boot ok\n", time.Now().Format(time.RFC3339))), 0o644)
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		msg := fmt.Sprintf("[%s] BOOT WATCHDOG: no window in 30s, force exit (pid=%d)\n", time.Now().Format(time.RFC3339), os.Getpid())
+		_ = os.MkdirAll(filepath.Dir(bootLogPath()), 0o755)
+		f, _ := os.OpenFile(bootLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if f != nil {
+			_, _ = f.WriteString(msg)
+			_ = f.Close()
+		}
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(1)
+	}()
+}
+
 // tryEarlySingleInstance 在 wails.Run 之前做极早期单实例检测，避免第二个实例重复加载词典（慢）。
 // - 若已存在实例：把第二个实例的文档参数写入 pending 文件后立刻退出（毫秒级），由首个实例负责打开并最大化窗口。
 // - 否则：创建全局命名互斥体并持有，返回 true（本进程是首个实例）。
@@ -495,6 +546,10 @@ func main() {
 	// 不再加载词典/初始化 Wails（否则"再打开"会和首次一样慢）。
 	tryEarlySingleInstance()
 
+	// round27 启动看门狗：清除上次运行的 boot_ok 标记并武装 30s 计时
+	_ = os.Remove(bootOkPath())
+	startBootWatchdog()
+
 	app := NewApp()
 	app.startHTTPServer()
 
@@ -531,6 +586,10 @@ func main() {
 		},
 		// 拦截标题栏 ✕ / Alt+F4 / 任务栏关闭：先交给前端询问未保存更改。
 		// 返回 true = 阻止关闭；前端确认后会调 WindowClose() 置位 confirmedClose 再退出。
+		OnDomReady: func(ctx context.Context) {
+			// 窗口 DOM 就绪 = 窗口已创建并加载 —— 看门狗解除武装
+			markBootOk()
+		},
 		OnBeforeClose: func(ctx context.Context) bool {
 			if app.confirmedClose {
 				return false
