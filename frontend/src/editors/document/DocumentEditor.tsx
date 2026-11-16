@@ -2890,26 +2890,39 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       const proxy = window.document.createElement('div')
       proxy.className = 'pm-table-clickproxy'
       // alpha 必须大于 0：完全透明的层会被 hit-test 穿透（r26_fv7/8）
-      proxy.style.cssText = 'position:absolute;z-index:6;background:rgba(0,0,0,0.003)'
+      // z-index 必须 ≥7（r27_t27 实测）：z=6 的层会落在 Chromium hit-test
+      // 缓存中某个不可见旧层之下（点击被路由给已删除的层 → 事件丢失），
+      // z=7 起正常接收事件。alpha 必须 >0（完全透明的层被 hit-test 穿透）。
+      proxy.style.cssText = 'position:absolute;z-index:7;background:rgba(0,0,0,0.003)'
       proxy.addEventListener('mousedown', (e: MouseEvent) => {
         if (e.button !== 0) return
         const v = viewRef.current
         if (!v) return
-        // 坐标 → td（DOM 几何匹配）
-        const rows = wrapper.querySelectorAll('tr')
-        let hit: { r: number; c: number } | null = null
-        rows.forEach((tr, r) => {
+        // 坐标 → td（DOM 几何匹配）。不使用建层时的闭包 wrapper —— 
+        // NodeView 会因 PM 更新重建（wrapper 换新节点、旧节点脱离文档，
+        // r27_f16 实锤 connected:false），每次点击从事件坐标实时定位。
+        let hit: { r: number; c: number; wrap: HTMLElement } | null = null
+        v.dom.querySelectorAll('.tableWrapper').forEach(w2 => {
           if (hit) return
-          ;(tr as HTMLElement).querySelectorAll('td,th').forEach((td, c) => {
+          ;(w2 as HTMLElement).querySelectorAll('tr').forEach((tr, r) => {
             if (hit) return
-            const rect = (td as HTMLElement).getBoundingClientRect()
-            if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) hit = { r, c }
+            ;(tr as HTMLElement).querySelectorAll('td,th').forEach((td, c) => {
+              if (hit) return
+              const rect = (td as HTMLElement).getBoundingClientRect()
+              if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) hit = { r, c, wrap: w2 as HTMLElement }
+            })
           })
         })
-        if (!hit) return
+        const h0 = hit as { r: number; c: number; wrap: HTMLElement } | null
+        if (!h0) return
         e.preventDefault()
-        const { r, c } = hit
-        // 延迟到 mouseup 后应用（原生 caret 放置会覆盖同步设置，r26_dbg14/15）
+        const { r, c } = h0
+        const hitWrap = h0.wrap
+        // 延迟到 mouseup 后应用（原生 caret 放置会覆盖同步设置，r26_dbg14/15）。
+        // 双段应用：0ms 首次 + 60ms 补刀 —— Chromium 在 mouseup/click 后仍会
+        // 把 caret 放到表格后段落（from 被覆盖为 52），补刀重放后实测进格
+        // 输入成功（r27_final2）。
+        const applySel = () => {
         setTimeout(() => {
           try {
             // DOM 行列 → PM 位置：找到 wrapper 对应 table 节点
@@ -2918,7 +2931,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
               v.state.doc.forEach((n, off) => {
                 if (found < 0 && n.type.name === 'table' && v.nodeDOM(off)) {
                   const d = v.nodeDOM(off) as HTMLElement
-                  if (d === wrapper || d.contains(wrapper)) found = off
+                  if (d === hitWrap || d.contains(hitWrap)) found = off
                 }
               })
               return found
@@ -2940,7 +2953,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
             // 同步 DOM Selection 到该 td 文本：PM 的 beforeinput 依赖浏览器
             // caret 位于编辑器文本节点（r26_last/Q5A1 实测必需）
             try {
-              const tdEl = (wrapper.querySelectorAll('tr')[r] as HTMLElement)?.querySelectorAll('td,th')[c] as HTMLElement | undefined
+              const tdEl = (hitWrap.querySelectorAll('tr')[r] as HTMLElement)?.querySelectorAll('td,th')[c] as HTMLElement | undefined
               const findText = (el: Node): Text | null => {
                 for (const n of Array.from(el.childNodes)) {
                   if (n.nodeType === 3) return n as Text
@@ -2960,6 +2973,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
             } catch { /* 同步失败不影响 selection */ }
           } catch { v.focus() }
         }, 0)
+        }
+        applySel()
+        setTimeout(applySel, 60)
       })
       proxy.addEventListener('mouseup', (e: MouseEvent) => e.preventDefault())
       host.appendChild(proxy)
@@ -2983,27 +2999,50 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     const scheduleSync = () => {
       if (kick.timer || disposed) return
       // 几何写入放在空闲任务里（渲染批次内写 style 的层会被合成器
-      // 排除出 hit-test，r26_ui8~11）
+      // 排除出 hit-test，r26_ui8~11）。ensureProxy（建层）也必须在
+      // MessageChannel 任务里执行（r27_t16：effect 闭包 setTimeout 内
+      // 创建的层进死名单，Channel 任务内创建的正常）。
       kick.timer = window.setTimeout(() => {
         kick.timer = 0
-        const pm = viewRef.current?.dom
-        if (!pm) return
-        pm.querySelectorAll('.tableWrapper').forEach(w => {
-          let proxy = proxies.get(w)
-          if (!proxy) { if (proxy === undefined && (w as HTMLElement).offsetParent !== null) ensureProxy(w as HTMLElement); proxy = proxies.get(w) }
-          if (proxy) syncOne(w, proxy)
-        })
-        // 清理已断开的
-        for (const [w, proxy] of [...proxies]) {
-          if (!w.isConnected) { proxy.remove(); proxies.delete(w) }
+        const run = () => {
+          const pm = viewRef.current?.dom
+          if (!pm) return
+          pm.querySelectorAll('.tableWrapper').forEach(w => {
+            let proxy = proxies.get(w)
+            if (!proxy) { if (proxy === undefined && (w as HTMLElement).offsetParent !== null) ensureProxy(w as HTMLElement); proxy = proxies.get(w) }
+            if (proxy) syncOne(w, proxy)
+          })
+          // 清理已断开的
+          for (const [w, proxy] of [...proxies]) {
+            if (!w.isConnected) { proxy.remove(); proxies.delete(w) }
+          }
         }
+        try {
+          const ch = new MessageChannel()
+          ch.port1.onmessage = () => { try { ch.port1.close() } catch { /* */ } run() }
+          ch.port2.postMessage('go')
+        } catch { run() }
       }, 120)
     }
 
     const onFirst = () => {
       window.document.removeEventListener('pointerdown', onFirst, true)
       if (disposed) return
-      scheduleSync()
+      // ★ 建层调度必须用 MessageChannel（r27_t16 实测）：React effect 闭包
+      // 里的 setTimeout 创建的层会进 Chromium hit-test 死名单（层永远收
+      // 不到事件）；MessageChannel / requestIdleCallback / evaluate 环境里
+      // 创建的同款层全部正常。两次触发兜底首波渲染未完成的场景。
+      const viaChannel = (fn: () => void, delay: number) => {
+        window.setTimeout(() => {
+          try {
+            const ch = new MessageChannel()
+            ch.port1.onmessage = () => { try { ch.port1.close() } catch { /* */ } fn() }
+            ch.port2.postMessage('go')
+          } catch { fn() }
+        }, delay)
+      }
+      viaChannel(() => { if (!disposed) scheduleSync() }, 2000)
+      viaChannel(() => { if (!disposed) scheduleSync() }, 4000)
       // 持续维护：wrapper 增删与几何变化（分页 margin、行高列宽）
       const mo = new MutationObserver(scheduleSync)
       mo.observe(viewRef.current?.dom as Node, { childList: true, subtree: true })
