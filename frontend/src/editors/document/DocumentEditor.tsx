@@ -2937,6 +2937,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
             const target = cellStart + 1 // cell 内容开头（实测可输入）
             v.dispatch(v.state.tr.setSelection((v.state.selection as any).constructor.near(v.state.doc.resolve(target), 1)))
             v.focus()
+            // 同步 DOM Selection 到该 td 文本：PM 的 beforeinput 依赖浏览器
+            // caret 位于编辑器文本节点（r26_last/Q5A1 实测必需）
+            try {
+              const tdEl = (wrapper.querySelectorAll('tr')[r] as HTMLElement)?.querySelectorAll('td,th')[c] as HTMLElement | undefined
+              const findText = (el: Node): Text | null => {
+                for (const n of Array.from(el.childNodes)) {
+                  if (n.nodeType === 3) return n as Text
+                  const rr = findText(n); if (rr) return rr
+                }
+                return null
+              }
+              const tn = tdEl ? findText(tdEl) : null
+              if (tn) {
+                const range = window.document.createRange()
+                range.setStart(tn, 0)
+                range.collapse(true)
+                const sel = window.getSelection()
+                sel?.removeAllRanges()
+                sel?.addRange(range)
+              }
+            } catch { /* 同步失败不影响 selection */ }
           } catch { v.focus() }
         }, 0)
       })
