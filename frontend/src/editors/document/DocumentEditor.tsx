@@ -2869,6 +2869,140 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       setUnlockError(true)
     }
   }
+  // ===== round26 表格点击代理管理器（Chromium hit-test 死区修复）=====
+  // 机理（r26 全链实验）：.ProseMirror 内 tableWrapper 子树的鼠标 hit-test
+  // 失效；任何「挂载期/PM 调度内」创建的层同样失效；只有【用户首次交互
+  // 之后、由空闲任务创建】的层可正常接收事件。因此管理器：
+  // 1) 编辑器挂载后等用户首次 pointerdown；
+  // 2) 此后用独立于 PM 的空闲任务（setTimeout 链 + MutationObserver）
+  //    为每个 .tableWrapper 维护一个 alpha≈0.003 的点击代理层（pm-host 内）；
+  // 3) 代理层 mousedown → 定位 td → setSelection+focus（延时到 mouseup 后）。
+  useEffect(() => {
+    let disposed = false
+    const proxies = new Map<Element, HTMLElement>()
+    const kick = { timer: 0 }
+    const getHost = () => viewRef.current?.dom?.parentElement as HTMLElement | null
+
+    const ensureProxy = (wrapper: HTMLElement) => {
+      if (disposed || proxies.has(wrapper)) return
+      const host = getHost()
+      if (!host || !wrapper.isConnected) return
+      const proxy = window.document.createElement('div')
+      proxy.className = 'pm-table-clickproxy'
+      // alpha 必须大于 0：完全透明的层会被 hit-test 穿透（r26_fv7/8）
+      proxy.style.cssText = 'position:absolute;z-index:6;background:rgba(0,0,0,0.003)'
+      proxy.addEventListener('mousedown', (e: MouseEvent) => {
+        if (e.button !== 0) return
+        const v = viewRef.current
+        if (!v) return
+        // 坐标 → td（DOM 几何匹配）
+        const rows = wrapper.querySelectorAll('tr')
+        let hit: { r: number; c: number } | null = null
+        rows.forEach((tr, r) => {
+          if (hit) return
+          ;(tr as HTMLElement).querySelectorAll('td,th').forEach((td, c) => {
+            if (hit) return
+            const rect = (td as HTMLElement).getBoundingClientRect()
+            if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) hit = { r, c }
+          })
+        })
+        if (!hit) return
+        e.preventDefault()
+        const { r, c } = hit
+        // 延迟到 mouseup 后应用（原生 caret 放置会覆盖同步设置，r26_dbg14/15）
+        setTimeout(() => {
+          try {
+            // DOM 行列 → PM 位置：找到 wrapper 对应 table 节点
+            const pos = (() => {
+              let found = -1
+              v.state.doc.forEach((n, off) => {
+                if (found < 0 && n.type.name === 'table' && v.nodeDOM(off)) {
+                  const d = v.nodeDOM(off) as HTMLElement
+                  if (d === wrapper || d.contains(wrapper)) found = off
+                }
+              })
+              return found
+            })()
+            if (pos < 0) { v.focus(); return }
+            const table = v.state.doc.nodeAt(pos)!
+            const rowArr: { off: number; node: any }[] = []
+            table.forEach((row, off) => rowArr.push({ off, node: row }))
+            const row = rowArr[r]
+            if (!row) { v.focus(); return }
+            const cells: { off: number; node: any }[] = []
+            row.node.forEach((cell: any, off: number) => cells.push({ off, node: cell }))
+            const cell = cells[c]
+            if (!cell) { v.focus(); return }
+            const cellStart = pos + 1 + row.off + 1 + cell.off
+            const target = cellStart + 1 // cell 内容开头（实测可输入）
+            v.dispatch(v.state.tr.setSelection((v.state.selection as any).constructor.near(v.state.doc.resolve(target), 1)))
+            v.focus()
+          } catch { v.focus() }
+        }, 0)
+      })
+      proxy.addEventListener('mouseup', (e: MouseEvent) => e.preventDefault())
+      host.appendChild(proxy)
+      proxies.set(wrapper, proxy)
+      syncOne(wrapper, proxy)
+    }
+
+    const syncOne = (wrapper: Element, proxy: HTMLElement) => {
+      const host = proxy.parentElement
+      if (!host || !wrapper.isConnected) return
+      const wr = (wrapper as HTMLElement).getBoundingClientRect()
+      const hr = host.getBoundingClientRect()
+      if (wr.width < 2 || wr.height < 2) { proxy.style.display = 'none'; return }
+      proxy.style.display = 'block'
+      proxy.style.left = (wr.left - hr.left + 6) + 'px'
+      proxy.style.top = (wr.top - hr.top) + 'px'
+      proxy.style.width = Math.max(0, wr.width - 12) + 'px'
+      proxy.style.height = wr.height + 'px'
+    }
+
+    const scheduleSync = () => {
+      if (kick.timer || disposed) return
+      // 几何写入放在空闲任务里（渲染批次内写 style 的层会被合成器
+      // 排除出 hit-test，r26_ui8~11）
+      kick.timer = window.setTimeout(() => {
+        kick.timer = 0
+        const pm = viewRef.current?.dom
+        if (!pm) return
+        pm.querySelectorAll('.tableWrapper').forEach(w => {
+          let proxy = proxies.get(w)
+          if (!proxy) { if (proxy === undefined && (w as HTMLElement).offsetParent !== null) ensureProxy(w as HTMLElement); proxy = proxies.get(w) }
+          if (proxy) syncOne(w, proxy)
+        })
+        // 清理已断开的
+        for (const [w, proxy] of [...proxies]) {
+          if (!w.isConnected) { proxy.remove(); proxies.delete(w) }
+        }
+      }, 120)
+    }
+
+    const onFirst = () => {
+      window.document.removeEventListener('pointerdown', onFirst, true)
+      if (disposed) return
+      scheduleSync()
+      // 持续维护：wrapper 增删与几何变化（分页 margin、行高列宽）
+      const mo = new MutationObserver(scheduleSync)
+      mo.observe(viewRef.current?.dom as Node, { childList: true, subtree: true })
+      const scroller = (viewRef.current?.dom as HTMLElement)?.closest('.overflow-auto')
+      scroller?.addEventListener('scroll', scheduleSync, { passive: true })
+      window.addEventListener('resize', scheduleSync, { passive: true })
+      cleanupExtra = () => { mo.disconnect(); scroller?.removeEventListener('scroll', scheduleSync); window.removeEventListener('resize', scheduleSync) }
+    }
+    let cleanupExtra: (() => void) | null = null
+    window.document.addEventListener('pointerdown', onFirst, true)
+    return () => {
+      disposed = true
+      window.document.removeEventListener('pointerdown', onFirst, true)
+      cleanupExtra?.()
+      if (kick.timer) window.clearTimeout(kick.timer)
+      for (const [, proxy] of proxies) proxy.remove()
+      proxies.clear()
+    }
+  }, [])
+
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
   const insertImage = () => {

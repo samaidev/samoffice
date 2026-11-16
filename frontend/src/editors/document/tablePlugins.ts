@@ -664,3 +664,4 @@ export function autoFitTable(view: EditorView, mode: 'content' | 'window' | 'fix
   view.dispatch(tr)
   return true
 }
+
