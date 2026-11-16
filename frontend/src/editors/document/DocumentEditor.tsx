@@ -2879,6 +2879,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   // 3) 代理层 mousedown → 定位 td → setSelection+focus（延时到 mouseup 后）。
   useEffect(() => {
     let disposed = false
+    let cleanupExtra: (() => void) | null = null
     const proxies = new Map<Element, HTMLElement>()
     const kick = { timer: 0 }
     const getHost = () => viewRef.current?.dom?.parentElement as HTMLElement | null
@@ -2978,6 +2979,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         // 双段应用：0ms 首次 + 60ms 补刀 —— Chromium 在 mouseup/click 后仍会
         // 把 caret 放到表格后段落（from 被覆盖为 52），补刀重放后实测进格
         // 输入成功（r27_final2）。
+        // round28：PM 的 domObserver 在 mouseup 后会把「浏览器放到文档
+        // 末尾的 caret」flush 成带 scrollIntoView 的事务（sel≈doc 末尾，
+        // r28_t17 事务[0] 实锤）导致页面跳走。applySel 后恢复点击时的
+        // 滚动位置，光标进格且视口稳定。
+        const sc0 = (e.view ?? window).document.querySelector('.overflow-auto') as HTMLElement | null
+        const top0 = sc0?.scrollTop ?? -1
         const applySel = () => {
         setTimeout(() => {
           try {
@@ -3031,7 +3038,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         }, 0)
         }
         applySel()
-        setTimeout(applySel, 60)
+        setTimeout(() => { applySel(); if (top0 >= 0 && sc0) sc0.scrollTop = top0 }, 60)
       })
       proxy.addEventListener('mouseup', (e: MouseEvent) => e.preventDefault())
       host.appendChild(proxy)
@@ -3081,43 +3088,41 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       }, 120)
     }
 
-    const onFirst = () => {
-      window.document.removeEventListener('pointerdown', onFirst, true)
-      if (disposed) return
-      // StrictMode 双挂载守卫（r27_matrix2 实锤双会话）：同一 document
-      // 只允许一个管理器实例响应首次交互（两个实例会建两个重叠 proxy，
-      // 行拖拽会话被双启动、坐标互相干扰）。
-      if ((window as any).__samTableProxyMgr) return
-      ;(window as any).__samTableProxyMgr = true
-      // ★ 建层调度必须用 MessageChannel（r27_t16 实测）：React effect 闭包
-      // 里的 setTimeout 创建的层会进 Chromium hit-test 死名单（层永远收
-      // 不到事件）；MessageChannel / requestIdleCallback / evaluate 环境里
-      // 创建的同款层全部正常。两次触发兜底首波渲染未完成的场景。
-      const viaChannel = (fn: () => void, delay: number) => {
-        window.setTimeout(() => {
-          try {
-            const ch = new MessageChannel()
-            ch.port1.onmessage = () => { try { ch.port1.close() } catch { /* */ } fn() }
-            ch.port2.postMessage('go')
-          } catch { fn() }
-        }, delay)
-      }
-      viaChannel(() => { if (!disposed) scheduleSync() }, 2000)
-      viaChannel(() => { if (!disposed) scheduleSync() }, 4000)
-      // 持续维护：wrapper 增删与几何变化（分页 margin、行高列宽）
-      const mo = new MutationObserver(scheduleSync)
-      mo.observe(viewRef.current?.dom as Node, { childList: true, subtree: true })
-      const scroller = (viewRef.current?.dom as HTMLElement)?.closest('.overflow-auto')
-      scroller?.addEventListener('scroll', scheduleSync, { passive: true })
-      window.addEventListener('resize', scheduleSync, { passive: true })
-      cleanupExtra = () => { mo.disconnect(); scroller?.removeEventListener('scroll', scheduleSync); window.removeEventListener('resize', scheduleSync) }
+    // ★ round28：挂载期即建层（不再等首次交互）—— 真实用户流程是
+    // 打开文档直接点表格，等待首交互+2s 的方案让首次点击必然落入
+    // 合成器死区（r28_repro3/4 实锤）。r26 时代"挂载期建层会死"的根因
+    // 是 effect 闭包 setTimeout 建层，MessageChannel 建层实测全活
+    //（r27_t16/final 铁证）。多波次覆盖文档打开后的异步渲染：
+    // 0.6s/2s/4s/8s，之后 MutationObserver 持续维护。
+    // StrictMode 双挂载守卫（r27_matrix2）：同一 document 只允许一个
+    // 管理器实例（否则双 proxy 重叠 + 行拖拽双会话）。
+    if ((window as any).__samTableProxyMgr) return
+    ;(window as any).__samTableProxyMgr = true
+    let mgrArmed = true
+    const viaChannel = (fn: () => void, delay: number) => {
+      window.setTimeout(() => {
+        if (!mgrArmed || disposed) return
+        try {
+          const ch = new MessageChannel()
+          ch.port1.onmessage = () => { try { ch.port1.close() } catch { /* */ } fn() }
+          ch.port2.postMessage('go')
+        } catch { fn() }
+      }, delay)
     }
-    let cleanupExtra: (() => void) | null = null
-    window.document.addEventListener('pointerdown', onFirst, true)
+    for (const d of [600, 2000, 4000, 8000]) viaChannel(scheduleSync, d)
+    // 持续维护：wrapper 增删与几何变化（分页 margin、行高列宽、文档切换）
+    const mo = new MutationObserver(scheduleSync)
+    mo.observe(viewRef.current?.dom as Node, { childList: true, subtree: true })
+    const scroller = (viewRef.current?.dom as HTMLElement)?.closest('.overflow-auto')
+    scroller?.addEventListener('scroll', scheduleSync, { passive: true })
+    window.addEventListener('resize', scheduleSync, { passive: true })
+    cleanupExtra = () => {
+      mgrArmed = false
+      mo.disconnect(); scroller?.removeEventListener('scroll', scheduleSync); window.removeEventListener('resize', scheduleSync)
+    }
     return () => {
       disposed = true
       if ((window as any).__samTableProxyMgr) (window as any).__samTableProxyMgr = false
-      window.document.removeEventListener('pointerdown', onFirst, true)
       cleanupExtra?.()
       if (kick.timer) window.clearTimeout(kick.timer)
       for (const [, proxy] of proxies) proxy.remove()
