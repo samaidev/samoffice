@@ -920,6 +920,10 @@ table td, table th {
   margin: 12px 0;
   position: relative; /* 作为列宽手柄等绝对定位子元素的定位上下文 */
 }
+/* 打印预览克隆（round28）：带 ProseMirror 类以复用编辑器样式，
+ * 但屏蔽编辑态光标/焦点轮廓与最小高度。 */
+.ProseMirror.pm-nocaret { outline: none !important; min-height: 0 !important; cursor: default; }
+.ProseMirror.pm-nocaret[contenteditable] { caret-color: transparent; }
 .ProseMirror table td,
 .ProseMirror table th {
   border: 1px solid #cbd5e1;

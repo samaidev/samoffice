@@ -4627,14 +4627,26 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
           clone.removeAttribute('contenteditable')
           clone.style.padding = '0'
           clone.style.background = 'transparent'
+          // round28：预览容器没有 .ProseMirror 祖先，表格/列表/脚注等
+          // 编辑器作用域样式（.ProseMirror table { width:100% } 等）全部
+          // 失效 —— 表格退化为 auto 布局（410px≠554px、边框丢失、
+          // 居中 margin:auto 失效，用户报告"打印预览表格没按实际样式
+          // 居中"）。给克隆根补 ProseMirror 类让作用域样式生效；
+          // 编辑态副作用（caret/outline/hover 手柄）由下方 pm-nocaret
+          // 与既有清理（selectedCell/handle 移除）抑制。
+          clone.classList.add('ProseMirror', 'pm-nocaret')
           // 内容区宽 = 纸宽 - 左右边距（预览容器已按 1.5 倍缩放纸尺寸，内容同坐标系）；
           // 文档实际以 pageWidthPx 渲染，横向等比压缩到预览内容宽。
           const contentW = Math.max(50, (PAPER_SIZES[settings.paperSize]?.w || 210) - settings.margins.left - settings.margins.right)
           const scaleW = (contentW * 1.5) / pageWidthPx
           return (
             <div style={{ width: '100%', height: '100%', overflow: 'hidden', color: '#000' }}>
+              {/* 类必须放在【消费 innerHTML 的容器】上（clone 根类不会随
+               * innerHTML 输出）—— ProseMirror 作用域样式（表格宽度/边框/
+               * 居中）靠它生效（round28）。 */}
               <div
-                style={{ transform: `scale(${Math.min(1, scaleW)})`, transformOrigin: 'top left', width: pageWidthPx + 'px' }}
+                className={'ProseMirror pm-nocaret ' + (clone.className || '')}
+                style={{ transform: `scale(${Math.min(1, scaleW)})`, transformOrigin: 'top left', width: pageWidthPx + 'px', margin: 0, padding: 0 }}
                 dangerouslySetInnerHTML={{ __html: clone.innerHTML }}
               />
             </div>
