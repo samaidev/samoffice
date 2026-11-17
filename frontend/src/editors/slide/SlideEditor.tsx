@@ -286,6 +286,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       flowChartMerge: 'flowMerge', flowChartOffpageConnector: 'flowOffpage',
       leftArrow: 'leftArrow', upArrow: 'upArrow', downArrow: 'downArrow',
       leftRightArrow: 'leftRightArrow', upDownArrow: 'upDownArrow', bentArrow: 'bentArrow',
+      notchedRightArrow: 'rightArrow', // SmartArt 流程箭头（round32）：先退化右箭头保证可见
+
     }
     return shapes.map((s) => {
       const isPic = s.kind === 'pic'

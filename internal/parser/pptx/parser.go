@@ -1722,6 +1722,10 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 	var grpStack []grpXfrm
 	grpN := 0
 
+	// round32 SmartArt：graphicFrame 上下文（几何 + dgm:relIds 的 dm rId）。
+	// nil = 不在 graphicFrame 内（off/ext 等事件归普通形状/组逻辑处理）
+	var dgmFrame *dgmFrameState
+
 	// 文本形状累积状态
 	var paras []paraDef  // 当前形状的所有段落
 	var curPara *paraDef // 当前段落
@@ -1912,6 +1916,22 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 		case xml.StartElement:
 			local := t.Name.Local
 			switch local {
+			case "graphicFrame":
+				// round32 SmartArt：graphicFrame（图表/diagram 容器）。SmartArt 的
+				// dgm:relIds 在其内 —— 开帧记录几何与 relIds，结束时（EndElement）
+				// 解析 diagrams 部件转为形状组。帧内其他事件（xfrm/off/ext）由
+				// dgmFrame 上下文接管，不污染普通形状状态。
+				finalizeShape()
+				dgmFrame = &dgmFrameState{}
+			case "dgm:relIds", "relIds":
+				// namespace: dgm（dgm:relIds）。Local 相同（relIds）
+				if dgmFrame != nil {
+					for _, a := range t.Attr {
+						if a.Name.Local == "dm" {
+							dgmFrame.dmRID = a.Value
+						}
+					}
+				}
 			case "grpSp":
 				// 组合形状：压栈组上下文（off/ext/chOff/chExt 在随后的 grpSpPr/xfrm 中读到）
 				finalizeShape()
@@ -1956,7 +1976,16 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 					}
 				}
 			case "off":
-				if cur != nil {
+				if dgmFrame != nil {
+					for _, a := range t.Attr {
+						switch a.Name.Local {
+						case "x":
+							dgmFrame.x = atoi64(a.Value)
+						case "y":
+							dgmFrame.y = atoi64(a.Value)
+						}
+					}
+				} else if cur != nil {
 					for _, a := range t.Attr {
 						switch a.Name.Local {
 						case "x":
@@ -1979,7 +2008,16 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 					}
 				}
 			case "ext":
-				if cur != nil && !inBlipFill {
+				if dgmFrame != nil {
+					for _, a := range t.Attr {
+						switch a.Name.Local {
+						case "cx":
+							dgmFrame.cx = atoi64(a.Value)
+						case "cy":
+							dgmFrame.cy = atoi64(a.Value)
+						}
+					}
+				} else if cur != nil && !inBlipFill {
 					for _, a := range t.Attr {
 						switch a.Name.Local {
 						case "cx":
@@ -2321,6 +2359,17 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 					inTxBody = false
 					bodyVanchor = ""
 				}
+			case "graphicFrame":
+				// round32 SmartArt：帧关闭 → 解析 diagrams（优先微软预渲染
+				// drawing*.xml 的最终几何），转为 slide 系形状追加。
+				// slide5/6/7/15 的时间轴/流程图此前整块丢失（round29 已知差距）。
+				if dgmFrame != nil && dgmFrame.dmRID != "" && dgmFrame.cx > 0 {
+					relIDs := map[string]string{"dm": dgmFrame.dmRID}
+					if sa := parseSmartArt(relIDs, rels, files, theme, name, dgmFrame.x, dgmFrame.y, dgmFrame.cx, dgmFrame.cy); len(sa) > 0 {
+						shapes = append(shapes, sa...)
+					}
+				}
+				dgmFrame = nil
 			case "grpSp":
 				// 组结束：出栈（子形状已在追加时换算/打 ID）
 				finalizeShape()
