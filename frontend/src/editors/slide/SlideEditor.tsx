@@ -1142,7 +1142,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [dragInfo, selectedEl, active])
 
-  // Escape 关闭所有弹出面板 或 退出放映模式；Ctrl+Z/Ctrl+Y 撤销重做
+  // round30：键盘导航。
+  // 放映模式：←/↑/PageUp 上一动画或上一页，→/↓/回车/空格/PageDn 下一动画或
+  // 下一页，Home/End 跳首/尾页（对标 MS PPT 放映快捷键）。
+  // 编辑模式：←/→ 切换幻灯片（输入框聚焦/内联编辑时除外，避免与文字编辑冲突）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -1150,9 +1153,30 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
         return
       }
-      // Ctrl+Z/Y 全局接管撤销/重做：焦点在输入框（标题/正文等）时也要能撤销整个编辑动作；
-      // 仅内联编辑文本域（editing 打开）时交给浏览器原生行为，避免非受控 textarea 不同步
+      // ---- 放映模式导航（round30）----
+      if (presenting) {
+        switch (e.key) {
+          case 'ArrowRight': case 'ArrowDown': case 'PageDown': case 'Enter': case ' ':
+            e.preventDefault(); nextPresent(); return
+          case 'ArrowLeft': case 'ArrowUp': case 'PageUp':
+            e.preventDefault(); prevPresent(); return
+          case 'Home':
+            e.preventDefault(); setPresentSlide(0); setPresentAnimStep(0); return
+          case 'End':
+            e.preventDefault(); setPresentSlide(Math.max(0, slides.length - 1)); setPresentAnimStep(0); return
+        }
+        return
+      }
+      // ---- 编辑模式切页（round30）：←/→ 切换当前幻灯片 ----
       const tag = (e.target as HTMLElement)?.tagName
+      const focusInField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
+      if (!focusInField && !editing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
+        switchSlide(e.key === 'ArrowLeft' ? Math.max(0, active - 1) : Math.min(slides.length - 1, active + 1))
+        return
+      }
+      // Ctrl+Z/Y 全局接管撤销/重做：焦点在输入框（标题/正文等）时也要能撤销整个编辑动作；
+      // 仅内联编辑文本域（editing 打开）时交给浏览器原生行为，避免非受控 textarea 不同同步
       const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
       // 删除键删除全部选中（文本编辑中/输入框内除外）
       if ((e.key === 'Delete' || e.key === 'Backspace') && !editing && !inField && (selectedEls.length > 0 || selectedEl)) {
@@ -1171,7 +1195,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl, selectedEls, editing])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyPanelOpen, presenting, past.length, future.length, selectedEl, selectedEls, editing, active, slides.length, presentSlide, presentAnimStep])
 
   // 点击/滚动/ESC 关闭右键菜单
   useEffect(() => {
@@ -2086,12 +2111,49 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
       {/* 全屏放映模式 — 动画序列（入场→强调→退出）逐击触发，完整渲染形状样式 */}
       {presenting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: '#000' }} onClick={nextPresent}>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center" style={{ background: '#000' }} onClick={nextPresent}>
           <div style={{ transform: `scale(${Math.min(window.innerWidth / 808, window.innerHeight / canvasH)})`, transformOrigin: 'center' }}>
           <div key={presentSlide} className={`relative overflow-hidden sl-trans-${presentingSlide.transition || 'none'}`} style={{ width: 808, height: canvasH, background: presentingSlide.bg }}>
-            <div className="absolute inset-0 flex flex-col justify-center items-center p-12 text-center">
-              <h1 className="text-5xl font-bold mb-6" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{presentingSlide.title}</h1>
-              {presentingSlide.content && <p className="text-xl" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#cbd5e1' : '#64748b' }}>{presentingSlide.content}</p>}
+            <div className="absolute inset-0">
+              {/* round30：标题/正文层与编辑画布同构 —— 仅 title/content/section
+                  布局渲染；文件打开的幻灯片 layout='blank'，内容全在 shapes 里，
+                  旧代码无条件渲染 h1/p 导致双份内容 + 样式错乱 */}
+              {(presentingSlide.layout === 'title' || presentingSlide.layout === 'section') && (
+                <div className="absolute inset-0 flex flex-col justify-center items-center p-12 text-center">
+                  <h1 className="text-5xl font-bold mb-6" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{presentingSlide.title}</h1>
+                  {presentingSlide.content && <p className="text-xl" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#cbd5e1' : '#64748b' }}>{presentingSlide.content}</p>}
+                </div>
+              )}
+              {presentingSlide.layout === 'content' && (
+                <div className="absolute inset-0 flex flex-col p-12">
+                  <h1 className="text-3xl font-bold mb-4" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#f1f5f9' : '#0f172a' }}>{presentingSlide.title}</h1>
+                  {presentingSlide.content && <p className="text-xl mt-2" style={{ color: (presentingSlide.bg === '#1e293b' || presentingSlide.bg === '#312e81') ? '#cbd5e1' : '#64748b', whiteSpace: 'pre-wrap' }}>{presentingSlide.content}</p>}
+                </div>
+              )}
+              {/* 母版装饰层（与编辑画布一致：底层渲染，播放同样可见） */}
+              {masterShapes.map((msh, mi) => (
+                <div key={'m' + mi} className="absolute" style={{
+                  left: `${msh.x / 8}px`, top: `${msh.y / 8}px`, width: `${msh.w / 8}px`, height: `${msh.h / 8}px`,
+                  transform: msh.rotation ? `rotate(${msh.rotation}deg)` : '',
+                }}>
+                  <div style={{
+                    width: '100%', height: '100%',
+                    justifyContent: msh.vAlign === 'top' ? 'flex-start' : msh.vAlign === 'bottom' ? 'flex-end' : 'center',
+                    display: 'flex', flexDirection: 'column',
+                    background: msh.gradient ? `linear-gradient(135deg, #${msh.gradient.split(',')[0]}, #${msh.gradient.split(',')[1]})` : msh.fill,
+                    borderRadius: msh.type === 'roundRect' ? '8px' : msh.type === 'ellipse' ? '50%' : msh.type === 'can' ? '50% / 12%' : '0',
+                    clipPath: SHAPE_CLIP[msh.type],
+                    border: msh.stroke ? `${Math.max(1, msh.strokeWidth || 1)}px solid ${msh.stroke}` : 'none',
+                    color: msh.fontColor || (msh.fill && !msh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
+                    fontSize: msh.fontSize ? `${msh.fontSize}px` : '12px',
+                    fontWeight: msh.fontBold ? 700 : 400,
+                    fontStyle: (msh as any).italic ? 'italic' : undefined,
+                    textAlign: msh.textAlign || 'center',
+                    overflow: 'hidden',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  }}>{msh.text}</div>
+                </div>
+              ))}
               {presentingSlide.shapes.map((sh, i) => {
                 // 动画序列：按 animations 数组顺序逐步触发；入场未到隐藏，强调播放一次，退出后消失
                 const seq = presentingSlide.animations
@@ -2118,13 +2180,19 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   backgroundSize: bg2.startsWith('url') ? 'cover' : undefined,
                   backgroundRepeat: bg2.startsWith('url') ? 'no-repeat' : undefined,
                   backgroundPosition: bg2.startsWith('url') ? 'center' : undefined,
-                  borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : '0',
-                  clipPath: sh.type === 'roundRect' ? 'inset(0 round 8px)' : (SHAPE_CLIP[sh.type] || (sh.type === 'ellipse' ? 'ellipse(50% 50% at 50% 50%)' : undefined)),
-                  border: sh.stroke ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}` : 'none',
+                  borderRadius: sh.type === 'roundRect' ? '8px' : sh.type === 'ellipse' ? '50%' : sh.type === 'can' ? '50% / 12%' : '0',
+                  // round30：clipPath 与编辑画布统一走 SHAPE_CLIP 表（旧 roundRect
+                  // 的 inset 写法与画布 8px 圆角不一致；ellipse 兜底重复）
+                  clipPath: SHAPE_CLIP[sh.type],
                   boxShadow: sh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
                   filter: sh.glow ? `drop-shadow(0 0 ${Math.min(28, Math.max(4, (sh.glowRadius || 60000) / 5000))}px ${sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8')})` : 'none',
-                  color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#fff' : '#1f2937'),
-                  fontSize: sh.fontSize ? `${sh.fontSize}px` : '18px',
+                  // round30：边框对齐编辑画布 —— 无描边时 rect/roundRect 有 1px
+                  // 浅描边（noDecor 关闭），此前播放态 'none' 与编辑态不同
+                  border: sh.stroke
+                    ? `${Math.max(1, sh.strokeWidth || 1)}px solid ${sh.stroke}`
+                    : (sh.noDecor ? 'none' : (sh.type === 'rect' || sh.type === 'roundRect' ? '1px solid rgba(0,0,0,0.1)' : 'none')),
+                  color: sh.fontColor || (sh.fill && !sh.fill.startsWith('url') ? '#ffffff' : '#1f2937'),
+                  fontSize: sh.fontSize ? `${sh.fontSize}px` : '12px',
                   fontFamily: sh.font || undefined,
                   fontWeight: sh.fontBold ? 700 : 400,
                   textAlign: sh.textAlign || 'center', lineHeight: sh.lineHeight || 1.2, paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
@@ -2144,12 +2212,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                   : sh.numbered
                   ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>{li + 1}.</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
-                  : sh.text)}</div>
+                  : <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block', width: '100%', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none' }}>{sh.text}</span>)}</div>
                 )
               })}
               {presentingSlide.artTexts.map((at, i) => (
                 <div key={i} className="absolute" style={{ left: `${at.x / 8}px`, top: `${at.y / 8}px`, transform: at.rotation ? `rotate(${at.rotation}deg)` : '' }}>
-                  <span style={{ fontSize: `${at.fontSize / 2}px`, fontWeight: 700, color: at.color,
+                  {/* round30：字号对齐编辑画布（/2.5），旧 /2 放映态偏大 25% */}
+                  <span style={{ fontSize: `${at.fontSize / 2.5}px`, fontWeight: 700, color: at.color,
                     background: at.gradient ? `linear-gradient(135deg, #${at.gradient.split(',')[0]}, #${at.gradient.split(',')[1]})` : undefined,
                     WebkitBackgroundClip: at.gradient ? 'text' : undefined,
                     WebkitTextFillColor: at.gradient ? 'transparent' : undefined,
