@@ -23,8 +23,10 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"math"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -460,7 +462,18 @@ func parseBgColor(files map[string]*zip.File, path string, theme themeScheme, cl
 				}
 			case "bgRef":
 				if inBg {
-					// <p:bgRef idx="1000"><a:schemeClr val="accent1"/></p:bgRef>
+					// <p:bgRef idx="1001|1002|1003"><a:schemeClr val="bg2"/></p:bgRef>
+					// round28：母版/版式背景走主题 bgFillStyleLst 引用 —— 之前
+					// 未实现导致 bg 空 → 白底 + 白字全不可见（装备工业 PPT 白屏）。
+					idx := 0
+					if v, e := strconv.Atoi(attrVal(t, "idx")); e == nil {
+						idx = v
+					}
+					// 读 bgRef 的第一个子颜色元素（schemeClr/srgbClr）作为 phClr
+				phClr := readFirstChildColor(dec, theme, clrMap)
+					if c := resolveBgRef(files, theme, idx, phClr); c != "" {
+						return c
+					}
 				}
 			case "srgbClr":
 				if inBgPr {
@@ -484,6 +497,526 @@ func parseBgColor(files map[string]*zip.File, path string, theme themeScheme, cl
 			}
 		}
 	}
+}
+
+// readFirstChildColor 读取当前元素的第一个颜色子元素（srgbClr/schemeClr/sysClr），
+// 直到当前元素结束。找不到返回 ""。
+func readFirstChildColor(dec *xml.Decoder, theme themeScheme, clrMap map[string]string) string {
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "srgbClr", "schemeClr", "sysClr", "prstClr":
+				c := readColorElement(dec, t, theme, clrMap)
+				// 消费剩余兄弟节点直到当前容器结束
+				for depth > 0 {
+					tk, e := dec.Token()
+					if e != nil {
+						return c
+					}
+					switch tk.(type) {
+					case xml.StartElement:
+						depth++
+					case xml.EndElement:
+						depth--
+					}
+				}
+				return c
+			default:
+				depth++
+			}
+		case xml.EndElement:
+			depth--
+		}
+	}
+	return ""
+}
+
+// resolveBgRef 解析主题背景填充引用（round28）。
+// idx 1001/1002/1003 → theme fmtScheme/bgFillStyleLst 第 1/2/3 项。
+//  - solidFill(phClr) → 直接返回基色
+//  - blipFill + duotone(shade/tint 的 phClr 变体) → 双色调染色：
+//    图片灰度亮度 t∈[0,1] 映射到 [暗色, 亮色]。取主题图平均亮度做纯色
+//    近似（LibreOffice 对 1024x768 灰纹理实测 #8A8B83，公式吻合 ±1）；
+//    图片缺失时取中亮度 0.5。
+//  - gradFill → 首停色（与既有渐变策略一致）
+//  - 其它/失败 → 返回 phClr 基色（总比空好）
+func resolveBgRef(files map[string]*zip.File, theme themeScheme, idx int, phClr string) string {
+	if phClr == "" {
+		return ""
+	}
+	base := strings.TrimPrefix(phClr, "#")
+	kind, darkHex, lightHex := themeBgFillAt(files, idx)
+	switch kind {
+	case "solid":
+		return "#" + base
+	case "duotone":
+		// c2 尾部带 "@@embed"（blip 的关系 id，按图取精确亮度）
+		embed := ""
+		if i := strings.Index(lightHex, "@@"); i >= 0 {
+			embed = lightHex[i+2:]
+			lightHex = lightHex[:i]
+		}
+		dark := resolvePhVariant(darkHex, base)
+		light := resolvePhVariant(lightHex, base)
+		if dark == "" || light == "" {
+			return "#" + base
+		}
+		t := themeImageLumaByID(files, embed)
+		mixed := mixHex(dark, light, t)
+		return "#" + strings.ToUpper(mixed)
+	case "grad":
+		if darkHex != "" {
+			return "#" + strings.TrimPrefix(darkHex, "#")
+		}
+		return "#" + base
+	}
+	return "#" + base
+}
+
+// resolvePhVariant 解析 duotone 色项："PH"/"PH:shade:12000"/"PH:tint:65000"
+// 是 phClr 占位（基色 + 变换），其余为实色 hex。
+func resolvePhVariant(ph, base string) string {
+	switch {
+	case ph == "" :
+		return ""
+	case ph == "PH":
+		return base
+	case strings.HasPrefix(ph, "PH:shade:"):
+		if v, e := strconv.Atoi(strings.TrimPrefix(ph, "PH:shade:")); e == nil {
+			return shadeHex(base, float64(v)/100000)
+		}
+	case strings.HasPrefix(ph, "PH:tint:"):
+		if v, e := strconv.Atoi(strings.TrimPrefix(ph, "PH:tint:")); e == nil {
+			return tintHex(base, float64(v)/100000)
+		}
+	}
+	ph = strings.TrimPrefix(ph, "#")
+	if len(ph) == 6 {
+		return ph
+	}
+	return base
+}
+
+// shadeHex c * f（乘暗）
+func shadeHex(hex string, f float64) string {
+	r, g, b := hexRGB(hex)
+	return fmt.Sprintf("%02X%02X%02X", byte(r*f+0.5), byte(g*f+0.5), byte(b*f+0.5))
+}
+
+// tintHex c + (255-c) * f（加白）
+func tintHex(hex string, f float64) string {
+	r, g, b := hexRGB(hex)
+	return fmt.Sprintf("%02X%02X%02X", byte(r+(255-r)*f+0.5), byte(g+(255-g)*f+0.5), byte(b+(255-b)*f+0.5))
+}
+
+// themeBgFillAt 返回第 (idx-1001) 项填充的类型与颜色信息。
+// kind: solid | duotone(暗色,亮色) | grad(首停色) | ""
+func themeBgFillAt(files map[string]*zip.File, idx int) (kind, c1, c2 string) {
+	tp := findThemePath(files)
+	if tp == "" || idx < 1001 || idx > 1003 {
+		return "", "", ""
+	}
+	f, ok := files[tp]
+	if !ok {
+		return "", "", ""
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return "", "", ""
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	inLst := false
+	item := -1 // 当前 bgFill 项下标（0 起）
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", "", ""
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "bgFillStyleLst" {
+				inLst = true
+				continue
+			}
+			if !inLst {
+				continue
+			}
+			switch t.Name.Local {
+			case "solidFill", "gradFill", "blipFill", "pattFill":
+				item++
+				// 收集该项的完整片段后由 bgFillItemInfo 判定类型与颜色；
+				// 非目标项返回 "skip" —— 继续找下一项
+				k, c1, c2 := bgFillItemInfo(dec, t, item, idx-1001)
+				if k != "skip" {
+					return k, c1, c2
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "bgFillStyleLst" {
+				return "", "", ""
+			}
+		}
+	}
+}
+
+// bgFillItemInfo 读取单个填充项，若正好是目标项则解析其颜色。
+func bgFillItemInfo(dec *xml.Decoder, start xml.StartElement, item, target int) (kind, c1, c2 string) {
+	if item != target {
+		// 跳过整个元素（消费到该项的闭合标签）
+		depth := 1
+		for depth > 0 {
+			tok, err := dec.Token()
+			if err != nil {
+				return "skip", "", ""
+			}
+			switch tok.(type) {
+			case xml.StartElement:
+				depth++
+			case xml.EndElement:
+				depth--
+			}
+		}
+		return "skip", "", ""
+	}
+	switch start.Name.Local {
+	case "solidFill":
+		return "solid", "", ""
+	case "gradFill":
+		// 首个 gs 的颜色
+		depth := 1
+		for depth > 0 {
+			tok, err := dec.Token()
+			if err != nil {
+				return "grad", "", ""
+			}
+			switch t := tok.(type) {
+			case xml.StartElement:
+				if t.Name.Local == "srgbClr" || t.Name.Local == "schemeClr" || t.Name.Local == "sysClr" {
+					// phClr 占位（schemeClr val="phClr"）→ 交由调用方用基色；
+					// 实色（如 srgbClr）则用实色
+					if t.Name.Local == "schemeClr" && attrVal(t, "val") == "phClr" {
+						return "grad", "PH", ""
+					}
+					c := readColorElement(dec, t, themeScheme{}, nil)
+					if c != "" {
+						return "grad", c, ""
+					}
+				}
+				depth++
+			case xml.EndElement:
+				depth--
+			}
+		}
+		return "grad", "", ""
+	case "blipFill":
+		// duotone 双色（每色是 phClr 的 shade/tint 变体）+ blip 的 r:embed
+		depth := 1
+		colors := []string{}
+		embed := ""
+		for depth > 0 {
+			tok, err := dec.Token()
+			if err != nil {
+				break
+			}
+			switch t := tok.(type) {
+			case xml.StartElement:
+				if t.Name.Local == "blip" {
+					// r:embed → theme rels 的关系 id
+					for _, a := range t.Attr {
+						if a.Name.Local == "embed" {
+							embed = a.Value
+						}
+					}
+				}
+				if t.Name.Local == "duotone" {
+					// duotone 内是 1-2 个颜色元素
+					d := 1
+					for d > 0 {
+						tk, e := dec.Token()
+						if e != nil {
+							break
+						}
+						switch tt := tk.(type) {
+						case xml.StartElement:
+							d++
+							if tt.Name.Local == "srgbClr" || tt.Name.Local == "schemeClr" || tt.Name.Local == "sysClr" || tt.Name.Local == "prstClr" {
+								// phClr 变体由调用方替换为基色后再应用变换
+								if tt.Name.Local == "schemeClr" && attrVal(tt, "val") == "phClr" {
+									// phClr 变体：读子变换（shade/tint），闭合留给外层 d--
+									colors = append(colors, "PH")
+									for {
+										tk2, e2 := dec.Token()
+										if e2 != nil {
+											break
+										}
+										switch t2 := tk2.(type) {
+										case xml.StartElement:
+											if t2.Name.Local == "shade" {
+												colors[len(colors)-1] = "PH:shade:" + attrVal(t2, "val")
+											} else if t2.Name.Local == "tint" {
+												colors[len(colors)-1] = "PH:tint:" + attrVal(t2, "val")
+											}
+										case xml.EndElement:
+											// schemeClr 自身闭合 —— 交还外层
+											if t2.Name.Local == "schemeClr" {
+												d--
+												goto nextTok
+											}
+										}
+									}
+								} else {
+									colors = append(colors, readColorElement(dec, tt, themeScheme{}, nil))
+								}
+							}
+						case xml.EndElement:
+							d--
+						}
+					nextTok:
+					}
+				}
+				depth++
+			case xml.EndElement:
+				depth--
+			}
+		}
+		if len(colors) >= 2 {
+			return "duotone", colors[0], colors[1] + "@@" + embed
+		}
+		if len(colors) == 1 {
+			return "duotone", colors[0], "@@" + embed
+		}
+	}
+	return "", "", ""
+}
+
+// themeImageLuma 估算主题背景图的平均亮度（0..1）。
+// duotone 把图片灰度映射到 [暗色, 亮色] —— 取图平均亮度做纯色近似
+//（LibreOffice 对本 deck 实测 #8A8B83，公式吻合 ±1）。
+// theme rels 可引用多张图（bgFillStyleLst 的 1002/1003 各一），
+// bgRef 不带 embed 信息 —— 取全部 theme 图的平均亮度（灰度纹理间
+// 差异小，误差可忽略）。解码一次 1024x768 成本可接受（仅 bgRef
+// 引用 blipFill 时调用）。
+func themeImageLuma(files map[string]*zip.File) float64 {
+	tp := findThemePath(files)
+	if tp == "" {
+		return 0.5
+	}
+	relsPath := strings.Replace(tp, "theme/", "theme/_rels/", 1) + ".rels"
+	imgs := relsAllTargets(files, relsPath, "image")
+	if len(imgs) == 0 {
+		return 0.5
+	}
+	var sum float64
+	var n float64
+	for _, imgPath := range imgs {
+		f, ok := files[imgPath]
+		if !ok {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		luma := imageAvgLuma(rc)
+		rc.Close()
+		if luma >= 0 {
+			sum += luma
+			n++
+		}
+	}
+	if n == 0 {
+		return 0.5
+	}
+	return sum / n
+}
+
+// themeImageLumaByID 按关系 id 精确取主题图亮度；id 无效时回退全图平均。
+func themeImageLumaByID(files map[string]*zip.File, relID string) float64 {
+	tp := findThemePath(files)
+	if tp == "" {
+		return 0.5
+	}
+	if relID != "" {
+		relsPath := strings.Replace(tp, "theme/", "theme/_rels/", 1) + ".rels"
+		if target := relsTargetByID(files, relsPath, relID); target != "" {
+			if f, ok := files[target]; ok {
+				if rc, err := f.Open(); err == nil {
+					l := imageAvgLuma(rc)
+					rc.Close()
+					if l >= 0 {
+						return l
+					}
+				}
+			}
+		}
+	}
+	return themeImageLuma(files)
+}
+
+// imageAvgLuma 解码一张图并返回平均亮度（0..1）；失败返回 -1。
+func imageAvgLuma(r io.Reader) float64 {
+	img, err := jpeg.Decode(r)
+	if err != nil {
+		return -1
+	}
+	b := img.Bounds()
+	// 网格采样 ≤ 32x32
+	stepX := (b.Dx() + 31) / 32
+	stepY := (b.Dy() + 31) / 32
+	if stepX < 1 {
+		stepX = 1
+	}
+	if stepY < 1 {
+		stepY = 1
+	}
+	var sum float64
+	var n float64
+	for y := b.Min.Y; y < b.Max.Y; y += stepY {
+		for x := b.Min.X; x < b.Max.X; x += stepX {
+			r32, g32, b32, _ := img.At(x, y).RGBA()
+			// Rec.601 亮度
+			l := (0.299*float64(r32) + 0.587*float64(g32) + 0.114*float64(b32)) / 65535
+			sum += l
+			n++
+		}
+	}
+	if n == 0 {
+		return -1
+	}
+	return sum / n
+}
+
+// mixHex 线性混合两色（t=0 → c1, t=1 → c2）
+func mixHex(c1, c2 string, t float64) string {
+	r1, g1, b1 := hexRGB(c1)
+	r2, g2, b2 := hexRGB(c2)
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	r := r1 + (r2-r1)*t
+	g := g1 + (g2-g1)*t
+	b := b1 + (b2-b1)*t
+	return fmt.Sprintf("%02X%02X%02X", int(r+0.5), int(g+0.5), int(b+0.5))
+}
+
+// hexRGB 十六进制 → RGB
+func hexRGB(hex string) (float64, float64, float64) {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return 0, 0, 0
+	}
+	v := func(s string) float64 {
+		n, err := strconv.ParseUint(s, 16, 32)
+		if err != nil {
+			return 0
+		}
+		return float64(n)
+	}
+	return v(hex[0:2]), v(hex[2:4]), v(hex[4:6])
+}
+
+// relsTargetSuffix 返回 rels 里第一个 Type 以 suffix 结尾且 Target 为图片的完整路径
+func relsTargetSuffix(files map[string]*zip.File, relsPath, typeSuffix string) string {
+	target := relsOfType(files, relsPath, typeSuffix)
+	if target == "" {
+		return ""
+	}
+	// rels 相对路径 → zip 全路径（theme/_rels/x.rels 的 ../media/y.jpg → ppt/media/y.jpg）
+	dir := strings.TrimSuffix(relsPath, "/_rels/"+path.Base(relsPath))
+	return normalizeZipPath(dir, target)
+}
+
+// relsTargetByID 返回 rels 里指定 Id 的 Target 完整 zip 路径
+func relsTargetByID(files map[string]*zip.File, relsPath, id string) string {
+	f, ok := files[relsPath]
+	if !ok {
+		return ""
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return ""
+	}
+	defer rc.Close()
+	dir := strings.TrimSuffix(relsPath, "/_rels/"+path.Base(relsPath))
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		if t, ok := tok.(xml.StartElement); ok && t.Name.Local == "Relationship" {
+			if attrVal(t, "Id") == id {
+				target := attrVal(t, "Target")
+				if target == "" {
+					return ""
+				}
+				return normalizeZipPath(dir, target)
+			}
+		}
+	}
+}
+
+// relsAllTargets 返回 rels 里全部指定类型关系的完整 zip 路径
+func relsAllTargets(files map[string]*zip.File, relsPath, typeSuffix string) []string {
+	var out []string
+	f, ok := files[relsPath]
+	if !ok {
+		return nil
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return nil
+	}
+	defer rc.Close()
+	dir := strings.TrimSuffix(relsPath, "/_rels/"+path.Base(relsPath))
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return out
+		}
+		if t, ok := tok.(xml.StartElement); ok && t.Name.Local == "Relationship" {
+			typ := attrVal(t, "Type")
+			target := attrVal(t, "Target")
+			if strings.HasSuffix(typ, typeSuffix) && target != "" {
+				if full := normalizeZipPath(dir, target); full != "" {
+					out = append(out, full)
+				}
+			}
+		}
+	}
+}
+
+// normalizeZipPath 合并 zip 内相对路径
+func normalizeZipPath(baseDir, rel string) string {
+	rel = strings.ReplaceAll(rel, "\\", "/")
+	parts := strings.Split(baseDir+"/"+rel, "/")
+	var stack []string
+	for _, p := range parts {
+		switch p {
+		case ".", "":
+		case "..":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		default:
+			stack = append(stack, p)
+		}
+	}
+	return strings.Join(stack, "/")
 }
 
 // relsOfType 在 rels 文件里找第一个 Type 以 suffix 结尾的关系的 Target
