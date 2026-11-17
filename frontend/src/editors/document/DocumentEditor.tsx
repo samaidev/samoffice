@@ -2999,36 +2999,53 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         // 末尾的 caret」flush 成带 scrollIntoView 的事务（sel≈doc 末尾，
         // r28_t17 事务[0] 实锤）导致页面跳走。applySel 后恢复点击时的
         // 滚动位置，光标进格且视口稳定。
+        // round33（用户报告：点击表格文字光标错位到别的单元格/表格外）：
+        // 旧实现把 caretRangeFromPoint 放在 setTimeout(0) 里 —— mouseup 后
+        // PM domObserver 先 flush「浏览器放到文档末尾的 caret」事务（sel≈doc
+        // 尾）触发分页重算 dispatch，表格装饰在新布局上重排；此时才用
+        // 【mousedown 的旧坐标】取 caret，命中的已是错位后的字符
+        // （r33_diag7 实锤：点击行5 落行4，sel 5304→5264 漂移）。
+        // 修复：caret 在 mousedown 同步阶段（布局未变）测好，
+        // setTimeout 里只做 setSelection。
+        let target = -1
+        let caretDom: { node: Node; offset: number } | null = null
+        try {
+          // 点击代理层（z=7 全表格覆盖）会劫持 caretRangeFromPoint ——
+          // 返回 proxy 自身的空文本节点。临时禁用所有 proxy 的
+          // pointer-events 再取 caret（同步流程，恢复也在同帧）。
+          const proxies = Array.from(window.document.querySelectorAll('.pm-table-clickproxy')) as HTMLElement[]
+          const saved = proxies.map(pr => pr.style.pointerEvents)
+          proxies.forEach(pr => { pr.style.pointerEvents = 'none' })
+          try {
+            const cr = (window.document as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | null
+            if (cr) {
+              const pmPos = v.posAtDOM(cr.startContainer, cr.startOffset)
+              if (pmPos >= 0) { target = pmPos; caretDom = { node: cr.startContainer, offset: cr.startOffset } }
+            }
+          } finally {
+            proxies.forEach((pr, pi) => { pr.style.pointerEvents = saved[pi] })
+          }
+        } catch { /* caret 定位失败走兜底（applySel 内 (r,c) 路径） */ }
+        // 校验：同步测得的 caret 必须落在表格 cell 内（caretRangeFromPoint
+        // 命中表格外节点时丢弃，走 (r,c) 兜底 —— 光标必在所点格）。
+        if (target >= 0) {
+          try {
+            const $tp = v.state.doc.resolve(Math.min(target, v.state.doc.content.size))
+            let inCell = false
+            for (let d = $tp.depth; d > 0; d--) {
+              const n = $tp.node(d)
+              if (n.type.name === 'table_cell' || n.type.name === 'table_header') { inCell = true; break }
+            }
+            if (!inCell) { target = -1; caretDom = null }
+          } catch { target = -1; caretDom = null }
+        }
         const sc0 = (e.view ?? window).document.querySelector('.overflow-auto') as HTMLElement | null
         const top0 = sc0?.scrollTop ?? -1
         const applySel = () => {
         setTimeout(() => {
           try {
-            // round31（用户报告：点击格子里文字，光标固定落在第一个字前面）：
-            // 旧实现硬编码 target = cellStart + 1 且 DOM Selection setStart(tn, 0)
-            // —— 无论点哪都定位到 cell 开头。改为 caretRangeFromPoint 取
-            // 点击坐标处的精确 caret 位置（浏览器排版引擎给出的最近字符
-            // 边界），posAtDOM 映射为 PM 位置；点在文字上即落在所点字符
-            // 旁，点在空白区回退 cell 开头。
-            let target = -1
-            let caretDom: { node: Node; offset: number } | null = null
-            try {
-              // 点击代理层（z=7 全表格覆盖）会劫持 caretRangeFromPoint ——
-              // 返回 proxy 自身的空文本节点。临时禁用所有 proxy 的
-              // pointer-events 再取 caret（同步流程，恢复也在同帧）。
-              const proxies = Array.from(window.document.querySelectorAll('.pm-table-clickproxy')) as HTMLElement[]
-              const saved = proxies.map(pr => pr.style.pointerEvents)
-              proxies.forEach(pr => { pr.style.pointerEvents = 'none' })
-              try {
-                const cr = (window.document as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | null
-                if (cr) {
-                  const pmPos = v.posAtDOM(cr.startContainer, cr.startOffset)
-                  if (pmPos >= 0) { target = pmPos; caretDom = { node: cr.startContainer, offset: cr.startOffset } }
-                }
-              } finally {
-                proxies.forEach((pr, pi) => { pr.style.pointerEvents = saved[pi] })
-              }
-            } catch { /* caret 定位失败走兜底 */ }
+            // round31：caret 精确定位（round33 起在 mousedown 同步阶段测好，
+            // 此处只消费 target/caretDom）。
             if (target < 0) {
               // 兜底：DOM 行列 → PM 位置（cell 内容开头）
               const pos = (() => {
