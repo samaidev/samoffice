@@ -220,6 +220,9 @@ ${t('sample.md.more')}
   const [dragTabId, setDragTabId] = useState<number | null>(null)
   const winIdRef = useRef(1)
   const activeWindow = windows.find(w => w.id === activeWindowId) || null
+  // round29：handleSlideSnapshot（useCallback []）读取最新活动窗口用
+  const activeWindowRef = useRef<OpenWindow | null>(null)
+  activeWindowRef.current = activeWindow
 
   // 当前激活窗口对应的"逻辑 tab"（用于渲染对应编辑器）；无激活窗口时为 about
   const tab = activeWindow ? activeWindow.type : 'about'
@@ -572,16 +575,22 @@ ${t('sample.md.more')}
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   })
-  // SlideEditor 快照回流：同理重设幻灯片窗口基线
-  const handleSlideSnapshot = (slides: SlideData[]) => {
+  // SlideEditor 快照回流：同理重设幻灯片窗口基线。
+  // round29：必须 useCallback 稳定引用 —— SlideEditor 的 effect
+  // [slides, onSlidesChange, slidesToData] 依赖本函数，普通 const 每次
+  // App 渲染都换新引用 → effect 重跑 → onSlidesChange(新对象) →
+  // setSlideSnapshot → App 重渲染 → 无限循环（Maximum update depth
+  // exceeded，打开 PPT 后 6s 44 次警告）。activeWindow 改走 ref 读最新值。
+  const handleSlideSnapshot = useCallback((slides: SlideData[]) => {
     setSlideSnapshot(slides)
     const p = pendingBaselineRef.current
-    if (p && p.kind === 'slide' && Date.now() <= p.until && activeWindow && activeWindow.path === p.path) {
+    if (p && p.kind === 'slide' && Date.now() <= p.until && activeWindowRef.current && activeWindowRef.current.path === p.path) {
       pendingBaselineRef.current = null
-      setWindows(prev => prev.map(w => (w.id === activeWindow.id
+      const winId = activeWindowRef.current.id
+      setWindows(prev => prev.map(w => (w.id === winId
         ? { ...w, slideSnapshot: slides, savedFingerprint: fingerprintOf({ ...w, slideSnapshot: slides }) } : w)))
     }
-  }
+  }, [])
 
   // 新建空白文件：不经过磁盘，直接用内存初始数据激活一个新窗口标签。
   // path 使用不带盘符的伪路径（含扩展名），保证保存时永远走“另存为”对话框。

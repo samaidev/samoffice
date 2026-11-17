@@ -1062,8 +1062,15 @@ func resolveRelPath(relsPath, target string) string {
 	} else {
 		base = ""
 	}
+	// round29 修复：先把 base 也入栈再按 target 的 ../ 弹出 ——
+	// 旧实现只对 target 建栈，"../slideLayouts/x" 的 .. 无栈可弹，
+	// base 被丢弃后又拼回 slides 目录（layoutPh 全空 → 占位符几何
+	// 继承失效，标题堆到页面顶部）。
+	stack := []string{}
+	if base != "" {
+		stack = append(stack, strings.Split(base, "/")...)
+	}
 	parts := strings.Split(strings.TrimPrefix(target, "/"), "/")
-	var stack []string
 	for _, p := range parts {
 		switch p {
 		case "", ".":
@@ -1078,12 +1085,7 @@ func resolveRelPath(relsPath, target string) string {
 	if len(stack) == 0 {
 		return ""
 	}
-	if strings.HasPrefix(target, "/") {
-		return strings.Join(stack, "/")
-	}
-	// 相对于 base 目录解析
-	baseParts := strings.Split(base, "/")
-	return strings.Join(append(baseParts, stack...), "/")
+	return strings.Join(stack, "/")
 }
 
 // ---------- 颜色解析 ----------
