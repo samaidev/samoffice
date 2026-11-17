@@ -695,9 +695,17 @@ func renderTable(sb *strings.Builder, t *core.Table, images map[string]*embedIma
         }
         battr := fmt.Sprintf(` w:val="single" w:sz="%d" w:space="0" w:color="CBD5E1"`, borderSz)
 
+        // round31：表格水平对齐（w:tblPr/w:jc）往返 —— 前端 table.align
+        //（docx 解析自 w:jc），保存时还原，居中表格不丢语义。
+        jc := ""
+        if t.Align == "center" {
+                jc = "<w:jc w:val=\"center\"/>"
+        } else if t.Align == "right" {
+                jc = "<w:jc w:val=\"right\"/>"
+        }
         sb.WriteString(`<w:tbl>
 <w:tblPr>
-<w:tblW w:w="5000" w:type="pct"/>
+<w:tblW w:w="5000" w:type="pct"/>` + jc + `
 <w:tblBorders>
 <w:top` + battr + `/>
 <w:left` + battr + `/>

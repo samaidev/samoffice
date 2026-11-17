@@ -1671,6 +1671,24 @@ func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int
                                 curInfo = cellBorderExplicit{side: [4]int8{-1, -1, -1, -1}}
                         case "tcPr":
                                 inTcPr = true
+                        case "jc":
+                                // round31：表格级水平对齐（w:tblPr/w:jc）——
+                                // 此前未解析，Word 居中表格前端一律左对齐，
+                                // 打印预览与文档实际不符（用户报告）。
+                                if !inTcPr {
+                                        for _, a := range t.Attr {
+                                                if a.Name.Local == "val" {
+                                                        switch a.Value {
+                                                        case "center":
+                                                                tbl.Align = "center"
+                                                        case "right":
+                                                                tbl.Align = "right"
+                                                        default:
+                                                                tbl.Align = "left"
+                                                        }
+                                                }
+                                        }
+                                }
                         case "tblBorders":
                                 // 表格级边框缺省（w:tblPr 内）
                                 inTblBorders = true

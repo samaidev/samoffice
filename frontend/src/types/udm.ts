@@ -79,6 +79,9 @@ export interface Table {
   /** 行高（px，最小高度语义）：拖拽行边框后固化，保存与 docx 往返 */
   rowHeights?: number[]
   style?: string
+  /** 表格水平对齐（docx w:tblPr/w:jc）：left|center|right —— 打印预览与
+   *  编辑画布据此 margin:auto 居中（round31 用户报告预览表格全左对齐） */
+  align?: string
 }
 
 export interface TableCell {

@@ -682,7 +682,11 @@ export const schema = new Schema({
       group: 'inline',
       atom: true,
       attrs: { id: { default: '' }, author: { default: '' }, text: { default: '' } },
-      toDOM: (node) => ['span', { class: 'comment-mark', 'data-comment-id': node.attrs.id, 'data-author': node.attrs.author, 'data-text': node.attrs.text, style: 'background: #fef3c7; border-bottom: 1px dashed #f59e0b; cursor: pointer' }, 0],
+      // round31（用户报告"文档有批注但没显示"）：批注正文/面板都在，但
+      // atom 节点无内容 → span 宽度为 0，正文中完全不可见。渲染一个
+      // 可见的黄色圆点标记（对齐 MS Word 批注锚点视觉），hover 提示
+      // 批注内容，点击定位到右侧批注卡片。
+      toDOM: (node) => ['span', { class: 'comment-mark', 'data-comment-id': node.attrs.id, 'data-author': node.attrs.author, 'data-text': node.attrs.text, title: (node.attrs.author ? node.attrs.author + ': ' : '') + (node.attrs.text || '').slice(0, 60), style: 'background: #fef3c7; border-bottom: 1px dashed #f59e0b; cursor: pointer; display: inline-block; width: 0.72em; height: 0.72em; border-radius: 50%; margin: 0 2px; vertical-align: super; font-size: 0.7em' }, 0],
       parseDOM: [{ tag: 'span.comment-mark' }],
     },
 

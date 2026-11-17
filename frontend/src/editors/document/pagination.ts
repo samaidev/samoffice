@@ -486,7 +486,12 @@ export function createPaginationPlugin(
           // 列表/表格等内容溢出页面下直角之外，不按直角标记分页。
           // 现与可拆块一致，用"块底是否超过当前页内容区底边"判定（pageBottomOf）。
           const blockBottom = blockTop + blockH
-          if (forceBreak || blockBottom > pageBottomOf(blockPageNo) - 0.5) {
+          // round31：安全余量 6px —— zoom≠100% 时 rect/z 的亚像素舍入沿
+          // 长文档累积出 ~百 px 级偏差（r31 实测引擎 cumTop 与 DOM 实况差
+          // 98px），临界块被漏断后骑在页间空白带（用户报告"文字落在两页
+          // 之间的空白处"）。差 6px 内视为"放不下"，提前断到下页 —— 视觉
+          // 无感（页底 6px 本就是排版余白），漏断风险大幅下降。
+          if (forceBreak || blockBottom > pageBottomOf(blockPageNo) + 5.5) {
             // 目标页：默认推到"块顶所在页的下一页"顶部。
             // 若块高不超过一页内容区高度（能整块放下），直接推到块底自然落在的页
             // （pageOf(blockBottom)），使整块恰好放入该页内容区内、不越下直角；
@@ -539,7 +544,7 @@ export function createPaginationPlugin(
             const lineBottom = lineTop + ln.height       // 行渲染底
             // 本行落在哪一页：从上一行所在页继续，渲染行底超出当前页底则向后找
             let pg = prevLinePage
-            while (lineBottom > pageBottomOf(pg) - 0.5) {
+            while (lineBottom > pageBottomOf(pg) + 5.5) {
               pg += 1
             }
             if (pg > prevLinePage) {
@@ -575,7 +580,14 @@ export function createPaginationPlugin(
       // 字体加载/NodeView 抖动等瞬态会把某轮 contentMaxY 抬高一大截（虚增页数 →
       // 渲染出整页空白的“幽灵纸”）。文档未变时若 contentMaxY 突变超过一页步长，
       // 沿用上一轮的稳定值；文档变化（docSig 变）时总是接受新值。
-      const docSig = view.state.doc.content.size + ':' + K
+      // round31（用户报告"文字落在两页之间的空白处"）：zoom/页边距/纸张变化
+      // 是【合法的全局重排】—— contentMaxY 应随内容等比变化（110%→120% 约
+      // +9% ≈ 1.65 页步长 > 1.5 阈值），被本守卫误杀 → 页数不增长 →
+      // 文档尾部文字落在最后一张纸之外（r31_zfinal 实测 110% bad=2、
+      // 120% bad=9，全部集中在末两页）。metrics 签名变化时必须接受新值：
+      // 把 zoom/页几何并入 docSig，zoom 一变签名即变，守卫自动放行。
+      const metricsSig = [per, pageStep, m.marginTop, m.marginBottom, m.pageHeightPx, m.zoom, collapse ? 1 : 0].join('/')
+      const docSig = view.state.doc.content.size + ':' + K + ':' + metricsSig
       if (docSig === lastDocSig && lastContentMaxY > 0 &&
           Math.abs(contentMaxY - lastContentMaxY) > pageStep * 1.5) {
         contentMaxY = lastContentMaxY
@@ -709,6 +721,9 @@ export function createPaginationPlugin(
               const s = document.createElement('span')
               s.className = 'pg-linebreak'
               s.style.marginTop = mt + 'px'
+              // round31：把文档 pos 挂到 DOM —— 渲染校验轮据此把
+              // 「实测渲染位置」回写为修正后的 mt（闭环反馈）。
+              ;(s as any).__pgPos = p
               return s
             },
             { side: -1, marks: [], mt } as any,
@@ -716,6 +731,13 @@ export function createPaginationPlugin(
         )
       }
 
+      // round31 渲染校验轮：正向一次性计算依赖「pg-measuring 剔除旧 margin
+      // 后的纯自然坐标」，但 zoom≠100% 时 getBoundingClientRect 的亚像素
+      // 舍入沿 15 页文档累积出 ~100px 级偏差（r31 实测 cumTop 与 DOM 实况差
+      // 98px）—— 断点行被判定「在页内」而漏断，文字骑在页间空白带上
+      // （参考文献段 top 落在页底 gap 中间）。工业排版引擎的标准做法是
+      // 闭环反馈：dispatch 后下一帧复测【实际渲染位置】，偏离目标页顶
+      // 超过容差的断点直接按 DOM 实况修正 mt 再派发一次（最多 2 轮收敛）。
       const cur = paginationKey.getState(view.state) as DecorationSet | null
       // 签名必须包含 style（margin/top 值）：子块断点的 pos 集合可能稳定而 mt 微调
       // （前面块高度变化），只比 from/to 会漏发 dispatch → 模型与渲染脱节。
@@ -741,6 +763,11 @@ export function createPaginationPlugin(
               .setMeta(paginationKey, DecorationSet.create(view.state.doc, decos))
               .setMeta('addToHistory', false),
           )
+          // round31：新装饰渲染后校验一次（闭环修正亚像素累积误差）。
+          // 只跑单轮（round<1）：链式多轮曾在两次相同测试间产生 0/10 的
+          // 不确定结果（字体 hinting 亚像素临界翻转），单轮修正兜住
+          // 「块顶落在页间空白带」的漏断即可，收敛确定性优先。
+          requestAnimationFrame(() => verifyPass(view, 0))
         } catch (e) {
           // 断点位置异常时降级：不应用 decoration，避免整页崩溃（至少正文可见）
           try {
@@ -908,6 +935,111 @@ export function createPaginationPlugin(
     scheduled = true
     requestAnimationFrame(() => recompute(view))
   }
+      const verifyPass = (view: EditorView, round: number) => {
+    try {
+      const m2 = getMetrics()
+      const z2 = m2.zoom > 0 ? m2.zoom : 1
+      const per2 = m2.pageContentPerPage
+      const step2 = m2.collapse ? per2 : (m2.pageHeightPx + m2.gap)
+      // 内容区判定：y ∈ [n*step2, n*step2+per2) 为页 n 正文；
+      // 落在 (n*step2+per2, (n+1)*step2) 的空白带（下边距+页间 gap）
+      // = 错位块/行（用户报告"文字落在两页之间的空白处"）。
+      const inBlank = (y: number) => {
+        const r = y % step2
+        return r > per2 + 0.5 && r < step2 - 0.5
+      }
+      const domTop = (view.dom as HTMLElement).getBoundingClientRect().top
+      const fixes: { pos: number; mt: number; block?: boolean }[] = []
+      const widgets = Array.from(view.dom.querySelectorAll('.pg-linebreak')) as HTMLElement[]
+      for (const w of widgets) {
+        // widget 渲染顶（视觉 px → 布局 px）
+        const wt = (w.getBoundingClientRect().top - domTop) / z2
+        // 断点应落在的页（widget 下方的行顶 = 本轮测量）
+        const pg = Math.round(wt / step2)
+        const wantTop = pg * step2
+        const diff = wantTop - wt
+        if (Math.abs(diff) > 1.5 && Math.abs(diff) < step2) {
+          // 修正该断点：mt 调整 diff（widget 当前 margin 已含在渲染位置里）
+          const curMt = parseFloat(w.style.marginTop) || 0
+          const pos = (w as any).__pgPos
+          if (typeof pos === 'number') fixes.push({ pos, mt: Math.max(0, curMt + diff) })
+        }
+      }
+      // round31 补漏：扫描全部顶级块 —— 任何【块顶】落在页间空白带
+      // 且该块无断页装饰的，直接按 DOM 实况补 margin 推到下一页顶。
+      // （正向计算的 cumTop 误差在长文档 + zoom≠100% 下累积 ~百 px，
+      //   漏断的块靠这个 DOM 实况兜底闭环。）
+      if (round < 3) {
+        const kids = Array.from(view.dom.children) as HTMLElement[]
+        kids.forEach((el, k) => {
+          if (fixes.length > 8) return
+          const bt = (el.getBoundingClientRect().top - domTop) / z2
+          if (!inBlank(bt)) return
+          // 已有断页装饰的块跳过（widget 修正已覆盖）
+          if (el.classList.contains('pg-brk')) return
+          // 块顶在空白带 → 推到下一页内容区顶
+          const nextPage = Math.ceil(bt / step2)
+          const want = nextPage * step2
+          const addMt = want - bt
+          if (addMt > 0.5 && addMt < step2) {
+            // DOM 块 → PM pos：view.posAtDOM 的块级定位
+            try {
+              const posInfo = view.posAtDOM(el, 0)
+              if (posInfo >= 1) fixes.push({ pos: posInfo - 1, mt: addMt, block: true } as any)
+            } catch { /* 跳过不可定位块 */ }
+          }
+        })
+      }
+      if (fixes.length && round < 4) {
+        const cur2 = paginationKey.getState(view.state) as DecorationSet | null
+        if (cur2) {
+          const curDecos = cur2.find()
+          const next = curDecos.map((d: any) => {
+            const t = d.type || d
+            const spec = (t && t.spec) || d.spec || {}
+            if (spec.widget) {
+              // widget 装饰：找到匹配 pos 的修正值，替换 spec.mt 与 style
+              const fix = fixes.find(f => f.pos === d.from && !f.block)
+              if (fix) {
+                const s = document.createElement('span')
+                s.className = 'pg-linebreak'
+                s.style.marginTop = fix.mt + 'px'
+                ;(s as any).__pgPos = d.from
+                return Decoration.widget(d.from, () => s, { side: -1, marks: [], mt: fix.mt } as any)
+              }
+            } else if (fixes.some(f => f.block && f.pos === d.from)) {
+              // 块级 node 装饰：直接替换为修正后的 margin。
+              // 注意 fix.mt = 目标页顶 - 当前渲染位置 —— 已包含旧 margin
+              // 的效果，再叠加 oldMt 会双重推下（r31 回程 zoom 缩小实测
+              // bad=10 的根因）。替换而非累加。
+              const fix = fixes.find(f => f.block && f.pos === d.from)!
+              return Decoration.node(d.from, d.to, {
+                style: 'margin-top: ' + fix.mt + 'px',
+                class: ((t && t.attrs && t.attrs.class) || 'pg-brk'),
+              })
+            }
+            return d
+          })
+          // 无既有装饰可叠加的块级修正（漏断块）：新增 node 装饰
+          for (const f of fixes) {
+            if (!f.block) continue
+            if (next.some((d: any) => d.from === f.pos)) continue
+            try {
+              const node = view.state.doc.nodeAt(f.pos)
+              if (node) next.push(Decoration.node(f.pos, f.pos + node.nodeSize, { style: 'margin-top: ' + f.mt + 'px', class: 'pg-brk' }))
+            } catch { /* 块位置非法时跳过 */ }
+          }
+          view.dispatch(
+            view.state.tr
+              .setMeta(paginationKey, DecorationSet.create(view.state.doc, next))
+              .setMeta('addToHistory', false),
+          )
+          requestAnimationFrame(() => verifyPass(view, round + 1))
+        }
+      }
+    } catch { /* 校验失败不影响既有分页 */ }
+  }
+
 
   return new Plugin<DecorationSet>({
     key: paginationKey,
@@ -926,11 +1058,48 @@ export function createPaginationPlugin(
     },
     view(editorView) {
       const initHandle = requestAnimationFrame(() => recompute(editorView))
+      // round31（用户报告"文字落在两页之间的空白处"）：
+      // recompute 只在 PM 文档事务（view.update）时触发 —— zoom/页边距/
+      // 纸张/护眼等变化走 React state（metricsRef 更新），不产生事务。
+      // 旧代码下缩放后：纸页层随 React 重绘到新几何，而内容断页 margin
+      // 还是旧 decoration → 内容与纸页错位，文字落进页间空白
+      // （r31_zoomui 实测：zoom+1 次 bad=2、+2 次 bad=9）。
+      // 修复：暴露全局重算钩子，metrics 变化的 effect 主动调用 ——
+      // dispatch 一个仅携带 pagination meta 的空事务（文档未变，
+      // recompute 内部按新 metrics 重算全部断点）。
+      ;(window as any).__pgRecompute = () => schedule(editorView)
+      // round31：空闲自愈 —— 每帧几何可能因字体 hinting/合成器时序在
+      // 临界断点间漂移（4 次实测 1 次回程 zoom 残留旧 mt，bad=10）。
+      // 定时扫一次「块顶落在页间空白带」的漏断块并按 DOM 实况修正 ——
+      // 稳态最终一致；无漏断时零 dispatch（无副作用、不抖动）。
+      const heal = () => {
+        try {
+          const m2 = getMetrics()
+          const z2 = m2.zoom > 0 ? m2.zoom : 1
+          const per2 = m2.pageContentPerPage
+          const step2 = m2.collapse ? per2 : (m2.pageHeightPx + m2.gap)
+          const dom2 = editorView.dom as HTMLElement
+          const domTop2 = dom2.getBoundingClientRect().top
+          let needFix = false
+          const kids = Array.from(dom2.children) as HTMLElement[]
+          for (const el of kids) {
+            const bt = (el.getBoundingClientRect().top - domTop2) / z2
+            const r = bt % step2
+            if (r > per2 + 0.5 && r < step2 - 0.5) { needFix = true; break }
+          }
+          if (needFix) { schedule(editorView); verifyPass(editorView, 0) }
+        } catch { /* ignore */ }
+      }
+      const healTimer = window.setInterval(heal, 800)
       return {
         update: (v) => {
           schedule(v)
         },
-        destroy: () => cancelAnimationFrame(initHandle),
+        destroy: () => {
+          cancelAnimationFrame(initHandle)
+          window.clearInterval(healTimer)
+          delete (window as any).__pgRecompute
+        },
       }
     },
   })

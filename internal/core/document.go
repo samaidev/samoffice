@@ -189,6 +189,10 @@ func (BulletList) BlockType() string { return "bulletList" }
 type Table struct {
         Rows  [][]TableCell `json:"rows"`
         Width []float64     `json:"width,omitempty"`
+        // Align 为表格水平对齐（docx w:tblPr/w:jc）：left|center|right。
+        // round31：此前未解析 —— Word 居中表格在前端一律左对齐，
+        // 打印预览与文档实际不符（用户报告）。
+        Align string `json:"align,omitempty"`
         // RowHeights 为行高（px，最小高度语义）：前端拖拽行边框后固化，docx 导出为 w:trHeight。
         RowHeights []float64 `json:"rowHeights,omitempty"`
         Style      string    `json:"style,omitempty"`

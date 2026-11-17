@@ -1113,13 +1113,29 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
 
   // 边距 / 缩放 / 分栏等影响分页的布局变化后，强制重新计算分页
   // whiteSpaceHidden（页间空白收起/展开）改变页步长，同样需要重分页
+  // round31（用户报告"文字落在两页之间的空白处"）：旧实现 dispatch 一个
+  // 仅带 meta 的空事务 —— 但该事务不改变文档/选区/装饰，ProseMirror
+  // 判定 state 未变 → view.update 不触发 → 分页 recompute 从未执行；
+  // 纸页层（React）已按新几何重绘而内容断页 margin 还是旧值 →
+  // 内容与纸页错位、文字落进页间空白（r31_zoomui 实测 zoom+1 bad=2、
+  // +2 bad=9）。改用 pagination plugin 暴露的 __pgRecompute 钩子
+  // 直接 schedule（rAF 内重算并按需 dispatch 新装饰），双保险保留
+  // 原空事务（触发其他监听 forcePaginate 的逻辑）。
   useEffect(() => {
     const v = viewRef.current
     if (!v) return
-    const id = requestAnimationFrame(() =>
-      v.dispatch(v.state.tr.setMeta('forcePaginate', true).setMeta('addToHistory', false)),
-    )
-    return () => cancelAnimationFrame(id)
+    const id = requestAnimationFrame(() => {
+      v.dispatch(v.state.tr.setMeta('forcePaginate', true).setMeta('addToHistory', false))
+      ;(window as any).__pgRecompute?.()
+    })
+    // round31：zoom 切换（尤其缩小回程）存在竞态窗口 —— recompute 读取
+    // metricsRef/DOM 时 React 的 scale 样式与字体 hinting 尚未完全稳定，
+    // 偶发断点集合残留旧 zoom 的 mt（3 次实测 1 次回程 bad=10）。
+    // 第二帧再重算一次，拿到稳态几何（固定两帧，无链式不确定性）。
+    const id2 = requestAnimationFrame(() => requestAnimationFrame(() => {
+      ;(window as any).__pgRecompute?.()
+    }))
+    return () => { cancelAnimationFrame(id); cancelAnimationFrame(id2) }
   }, [zoom, pageSize, orientation, docMargins, pageWidthPx, pageHeightPx, docColumns, whiteSpaceHidden])
 
   // 供 tablePlugins（AutoFit/拖拽）读取缩放比例：getBoundingClientRect 返回视觉像素，
@@ -2988,50 +3004,87 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         const applySel = () => {
         setTimeout(() => {
           try {
-            // DOM 行列 → PM 位置：找到 wrapper 对应 table 节点
-            const pos = (() => {
-              let found = -1
-              v.state.doc.forEach((n, off) => {
-                if (found < 0 && n.type.name === 'table' && v.nodeDOM(off)) {
-                  const d = v.nodeDOM(off) as HTMLElement
-                  if (d === hitWrap || d.contains(hitWrap)) found = off
+            // round31（用户报告：点击格子里文字，光标固定落在第一个字前面）：
+            // 旧实现硬编码 target = cellStart + 1 且 DOM Selection setStart(tn, 0)
+            // —— 无论点哪都定位到 cell 开头。改为 caretRangeFromPoint 取
+            // 点击坐标处的精确 caret 位置（浏览器排版引擎给出的最近字符
+            // 边界），posAtDOM 映射为 PM 位置；点在文字上即落在所点字符
+            // 旁，点在空白区回退 cell 开头。
+            let target = -1
+            let caretDom: { node: Node; offset: number } | null = null
+            try {
+              // 点击代理层（z=7 全表格覆盖）会劫持 caretRangeFromPoint ——
+              // 返回 proxy 自身的空文本节点。临时禁用所有 proxy 的
+              // pointer-events 再取 caret（同步流程，恢复也在同帧）。
+              const proxies = Array.from(window.document.querySelectorAll('.pm-table-clickproxy')) as HTMLElement[]
+              const saved = proxies.map(pr => pr.style.pointerEvents)
+              proxies.forEach(pr => { pr.style.pointerEvents = 'none' })
+              try {
+                const cr = (window.document as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | null
+                if (cr) {
+                  const pmPos = v.posAtDOM(cr.startContainer, cr.startOffset)
+                  if (pmPos >= 0) { target = pmPos; caretDom = { node: cr.startContainer, offset: cr.startOffset } }
                 }
-              })
-              return found
-            })()
-            if (pos < 0) { v.focus(); return }
-            const table = v.state.doc.nodeAt(pos)!
-            const rowArr: { off: number; node: any }[] = []
-            table.forEach((row, off) => rowArr.push({ off, node: row }))
-            const row = rowArr[r]
-            if (!row) { v.focus(); return }
-            const cells: { off: number; node: any }[] = []
-            row.node.forEach((cell: any, off: number) => cells.push({ off, node: cell }))
-            const cell = cells[c]
-            if (!cell) { v.focus(); return }
-            const cellStart = pos + 1 + row.off + 1 + cell.off
-            const target = cellStart + 1 // cell 内容开头（实测可输入）
+              } finally {
+                proxies.forEach((pr, pi) => { pr.style.pointerEvents = saved[pi] })
+              }
+            } catch { /* caret 定位失败走兜底 */ }
+            if (target < 0) {
+              // 兜底：DOM 行列 → PM 位置（cell 内容开头）
+              const pos = (() => {
+                let found = -1
+                v.state.doc.forEach((n, off) => {
+                  if (found < 0 && n.type.name === 'table' && v.nodeDOM(off)) {
+                    const d = v.nodeDOM(off) as HTMLElement
+                    if (d === hitWrap || d.contains(hitWrap)) found = off
+                  }
+                })
+                return found
+              })()
+              if (pos < 0) { v.focus(); return }
+              const table = v.state.doc.nodeAt(pos)!
+              const rowArr: { off: number; node: any }[] = []
+              table.forEach((row, off) => rowArr.push({ off, node: row }))
+              const row = rowArr[r]
+              if (!row) { v.focus(); return }
+              const cells: { off: number; node: any }[] = []
+              row.node.forEach((cell: any, off: number) => cells.push({ off, node: cell }))
+              const cell = cells[c]
+              if (!cell) { v.focus(); return }
+              const cellStart = pos + 1 + row.off + 1 + cell.off
+              target = cellStart + 1
+            }
             v.dispatch(v.state.tr.setSelection((v.state.selection as any).constructor.near(v.state.doc.resolve(target), 1)))
             v.focus()
-            // 同步 DOM Selection 到该 td 文本：PM 的 beforeinput 依赖浏览器
-            // caret 位于编辑器文本节点（r26_last/Q5A1 实测必需）
+            // 同步 DOM Selection：caret 定位成功时同步到点击处字符边界；
+            // 兜底路径同步到 td 首文本节点开头（PM beforeinput 依赖浏览器
+            // caret 位于编辑器文本节点，r26_last/Q5A1 实测必需）
             try {
-              const tdEl = (hitWrap.querySelectorAll('tr')[r] as HTMLElement)?.querySelectorAll('td,th')[c] as HTMLElement | undefined
-              const findText = (el: Node): Text | null => {
-                for (const n of Array.from(el.childNodes)) {
-                  if (n.nodeType === 3) return n as Text
-                  const rr = findText(n); if (rr) return rr
-                }
-                return null
-              }
-              const tn = tdEl ? findText(tdEl) : null
-              if (tn) {
+              if (caretDom) {
                 const range = window.document.createRange()
-                range.setStart(tn, 0)
+                range.setStart(caretDom.node, caretDom.offset)
                 range.collapse(true)
                 const sel = window.getSelection()
                 sel?.removeAllRanges()
                 sel?.addRange(range)
+              } else {
+                const tdEl = (hitWrap.querySelectorAll('tr')[r] as HTMLElement)?.querySelectorAll('td,th')[c] as HTMLElement | undefined
+                const findText = (el: Node): Text | null => {
+                  for (const n of Array.from(el.childNodes)) {
+                    if (n.nodeType === 3) return n as Text
+                    const rr = findText(n); if (rr) return rr
+                  }
+                  return null
+                }
+                const tn = tdEl ? findText(tdEl) : null
+                if (tn) {
+                  const range = window.document.createRange()
+                  range.setStart(tn, 0)
+                  range.collapse(true)
+                  const sel = window.getSelection()
+                  sel?.removeAllRanges()
+                  sel?.addRange(range)
+                }
               }
             } catch { /* 同步失败不影响 selection */ }
           } catch { v.focus() }

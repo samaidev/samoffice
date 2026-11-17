@@ -390,6 +390,8 @@ function pmToBlock(node: Node): Block | null {
       const out: any = { rows }
       if (width) out.width = width
       if (hasHeights) out.rowHeights = rowHeights
+      // round31：表格水平对齐往返（docx w:tblPr/w:jc ↔ PM table.align）
+      if (node.attrs.align) out.align = node.attrs.align
       return out
     }
     default:
