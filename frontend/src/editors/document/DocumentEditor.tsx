@@ -15,6 +15,7 @@ import { searchPlugin, doSearch, doReplace, doReplaceAll, nextMatch, prevMatch, 
 import { mergeCells, splitCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, setCellAlign, setCellVAlign, setCellBorders } from './tableCommands'
 import { tableEditing, CellSelection, cellAround } from 'prosemirror-tables'
 import { DocTableView, createTableDragResizePlugin, autoFitTable, startRowDragSession } from './tablePlugins'
+import { createTableClickBridge } from './tableClickBridge'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
 import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
@@ -2885,319 +2886,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       setUnlockError(true)
     }
   }
-  // ===== round26 表格点击代理管理器（Chromium hit-test 死区修复）=====
-  // 机理（r26 全链实验）：.ProseMirror 内 tableWrapper 子树的鼠标 hit-test
-  // 失效；任何「挂载期/PM 调度内」创建的层同样失效；只有【用户首次交互
-  // 之后、由空闲任务创建】的层可正常接收事件。因此管理器：
-  // 1) 编辑器挂载后等用户首次 pointerdown；
-  // 2) 此后用独立于 PM 的空闲任务（setTimeout 链 + MutationObserver）
-  //    为每个 .tableWrapper 维护一个 alpha≈0.003 的点击代理层（pm-host 内）；
-  // 3) 代理层 mousedown → 定位 td → setSelection+focus（延时到 mouseup 后）。
+  // ===== round34：表格点击透传桥（重写 round26~33 的代理层）=====
+  // 死区事实（r34 全链实验）：Chromium 合成器把 .ProseMirror 内的
+  // <table> 子树排除出 input targets（点击事件根本不派发，document
+  // capture 收不到；同一 DOM 挪到 body 直属即恢复）。段落等普通块
+  // 不受影响。样式剥离 / 重绘 / 层扰动 / 嵌套 contenteditable 全部
+  // 无效 —— 这是 Chromium bug，无法在 PM 侧根治。
+  // → 必须保留 body/host 直属的接收层（该路径 hit-test 正常）。
+  // 新架构（tableClickBridge.ts，与旧代理层的区别）：
+  // 1. 零劫持：只处理 mousedown；mousemove/mouseup/click/dblclick
+  //    不监听不拦截，无 preventDefault 副作用。
+  // 2. caret 在 mousedown 同步阶段测量（round33 修复），无 60ms
+  //    补刀 / 滚动恢复 —— 那些是错位时代的防御 hack。
+  // 3. 原生手势对齐 Word：单击 caret / 按住拖选（setBaseAndExtent）/
+  //    双击选词（range.expand('word')）/ 三击选整个单元格。
+  // 4. CellSelection 行选中时按下 → 透传行拖拽会话。
+  // 5. 行拖拽入口同时注册到 tablePlugins 的原生 mousedown（表格
+  //    非死区环境/正常命中路径）与桥（死区兜底）。
   useEffect(() => {
-    let disposed = false
-    let cleanupExtra: (() => void) | null = null
-    const proxies = new Map<Element, HTMLElement>()
-    const kick = { timer: 0 }
-    const getHost = () => viewRef.current?.dom?.parentElement as HTMLElement | null
-
-    const ensureProxy = (wrapper: HTMLElement) => {
-      if (disposed || proxies.has(wrapper)) return
-      const host = getHost()
-      if (!host || !wrapper.isConnected) return
-      const proxy = window.document.createElement('div')
-      proxy.className = 'pm-table-clickproxy'
-      // alpha 必须大于 0：完全透明的层会被 hit-test 穿透（r26_fv7/8）
-      // z-index 必须 ≥7（r27_t27 实测）：z=6 的层会落在 Chromium hit-test
-      // 缓存中某个不可见旧层之下（点击被路由给已删除的层 → 事件丢失），
-      // z=7 起正常接收事件。alpha 必须 >0（完全透明的层被 hit-test 穿透）。
-      proxy.style.cssText = 'position:absolute;z-index:7;background:rgba(0,0,0,0.003)'
-      proxy.addEventListener('mousedown', (e: MouseEvent) => {
-        if (e.button !== 0) return
-        const v = viewRef.current
-        if (!v) return
-        // 行拖拽协同（round27）：已有 CellSelection（整行/多行选中）时点击
-        // 选中区域内 → 放行：不 preventDefault、不改选区，让 PM 表格插件与
-        // 行拖拽插件处理（否则会把行选中压成光标，行拖拽无法触发）。
-        const curSel = v.state.selection as any
-        if (curSel && curSel.$anchorCell && curSel.$headCell) {
-          // 点击是否落在 CellSelection 范围内（选中的行上）→ 启动行拖拽会话
-          //（preventDefault 保留 CellSelection，避免被 tableEditing 压成光标）
-          const cellSelFrom = Math.min(curSel.$anchorCell.pos, curSel.$headCell.pos)
-          const cellSelTo = Math.max(curSel.$anchorCell.pos, curSel.$headCell.pos)
-          // 判定用【DOM 几何】而非 posAtCoords（死区坐标下 posAtCoords 恒返回
-          // 表格起始位置 r27_matrix7 实锤 at=22 固定值）：命中 td 的行索引
-          // ∈ CellSelection 覆盖的行区间 → 视为拖选中行。
-          let inCellSel = false
-          {
-            // CellSelection 覆盖的行区间（doc 位置 → 行索引）
-            // 行索引：数兄弟 —— 行在 table 子节点中的序号
-            //（字节偏移 / 行高会误判，r27_m11 实锤 48 ≠ 3）
-            const rowIndexOf = ($cell: any) => {
-              try {
-                for (let d = $cell.depth; d >= 2; d--) {
-                  if ($cell.node(d).type.name === 'table_row') {
-                    const theRow = $cell.node(d)
-                    let idx = -1
-                    $cell.node(d - 1).forEach((rw: any, _o: number, i: number) => { if (rw === theRow) idx = i })
-                    return idx
-                  }
-                }
-              } catch { /* */ }
-              return -1
-            }
-            const selFromRow = Math.min(rowIndexOf(curSel.$anchorCell), rowIndexOf(curSel.$headCell))
-            const selToRow = Math.max(rowIndexOf(curSel.$anchorCell), rowIndexOf(curSel.$headCell))
-            // 点击命中的 td/th → 所在 wrapper 的行索引
-            // elementFromPoint 在死区坐标返回 proxy 自身（r27_matrix8）—— 
-            // 改为几何扫描 v.dom 里所有 wrapper 的 td（与下方 hit 匹配同法）
-            v.dom.querySelectorAll('.tableWrapper').forEach(w3 => {
-              if (inCellSel) return
-              ;(w3 as HTMLElement).querySelectorAll('tr').forEach((tr, ri) => {
-                if (inCellSel) return
-                ;(tr as HTMLElement).querySelectorAll('td,th').forEach((td2) => {
-                  if (inCellSel) return
-                  const rect = (td2 as HTMLElement).getBoundingClientRect()
-                  if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-                    if (ri >= selFromRow && ri <= selToRow) inCellSel = true
-                  }
-                })
-              })
-            })
-          }
-          if (inCellSel) {
-            e.preventDefault()
-            startRowDragSession(v, e.clientX, e.clientY)
-            return
-          }
-          // 点击在选区外：放行默认（改选/收起）—— 不 preventDefault
-        }
-        // 坐标 → td（DOM 几何匹配）。不使用建层时的闭包 wrapper —— 
-        // NodeView 会因 PM 更新重建（wrapper 换新节点、旧节点脱离文档，
-        // r27_f16 实锤 connected:false），每次点击从事件坐标实时定位。
-        let hit: { r: number; c: number; wrap: HTMLElement } | null = null
-        v.dom.querySelectorAll('.tableWrapper').forEach(w2 => {
-          if (hit) return
-          ;(w2 as HTMLElement).querySelectorAll('tr').forEach((tr, r) => {
-            if (hit) return
-            ;(tr as HTMLElement).querySelectorAll('td,th').forEach((td, c) => {
-              if (hit) return
-              const rect = (td as HTMLElement).getBoundingClientRect()
-              if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) hit = { r, c, wrap: w2 as HTMLElement }
-            })
-          })
-        })
-        const h0 = hit as { r: number; c: number; wrap: HTMLElement } | null
-        if (!h0) return
-        e.preventDefault()
-        const { r, c } = h0
-        const hitWrap = h0.wrap
-        // 延迟到 mouseup 后应用（原生 caret 放置会覆盖同步设置，r26_dbg14/15）。
-        // 双段应用：0ms 首次 + 60ms 补刀 —— Chromium 在 mouseup/click 后仍会
-        // 把 caret 放到表格后段落（from 被覆盖为 52），补刀重放后实测进格
-        // 输入成功（r27_final2）。
-        // round28：PM 的 domObserver 在 mouseup 后会把「浏览器放到文档
-        // 末尾的 caret」flush 成带 scrollIntoView 的事务（sel≈doc 末尾，
-        // r28_t17 事务[0] 实锤）导致页面跳走。applySel 后恢复点击时的
-        // 滚动位置，光标进格且视口稳定。
-        // round33（用户报告：点击表格文字光标错位到别的单元格/表格外）：
-        // 旧实现把 caretRangeFromPoint 放在 setTimeout(0) 里 —— mouseup 后
-        // PM domObserver 先 flush「浏览器放到文档末尾的 caret」事务（sel≈doc
-        // 尾）触发分页重算 dispatch，表格装饰在新布局上重排；此时才用
-        // 【mousedown 的旧坐标】取 caret，命中的已是错位后的字符
-        // （r33_diag7 实锤：点击行5 落行4，sel 5304→5264 漂移）。
-        // 修复：caret 在 mousedown 同步阶段（布局未变）测好，
-        // setTimeout 里只做 setSelection。
-        let target = -1
-        let caretDom: { node: Node; offset: number } | null = null
-        try {
-          // 点击代理层（z=7 全表格覆盖）会劫持 caretRangeFromPoint ——
-          // 返回 proxy 自身的空文本节点。临时禁用所有 proxy 的
-          // pointer-events 再取 caret（同步流程，恢复也在同帧）。
-          const proxies = Array.from(window.document.querySelectorAll('.pm-table-clickproxy')) as HTMLElement[]
-          const saved = proxies.map(pr => pr.style.pointerEvents)
-          proxies.forEach(pr => { pr.style.pointerEvents = 'none' })
-          try {
-            const cr = (window.document as any).caretRangeFromPoint?.(e.clientX, e.clientY) as Range | null
-            if (cr) {
-              const pmPos = v.posAtDOM(cr.startContainer, cr.startOffset)
-              if (pmPos >= 0) { target = pmPos; caretDom = { node: cr.startContainer, offset: cr.startOffset } }
-            }
-          } finally {
-            proxies.forEach((pr, pi) => { pr.style.pointerEvents = saved[pi] })
-          }
-        } catch { /* caret 定位失败走兜底（applySel 内 (r,c) 路径） */ }
-        // 校验：同步测得的 caret 必须落在表格 cell 内（caretRangeFromPoint
-        // 命中表格外节点时丢弃，走 (r,c) 兜底 —— 光标必在所点格）。
-        if (target >= 0) {
-          try {
-            const $tp = v.state.doc.resolve(Math.min(target, v.state.doc.content.size))
-            let inCell = false
-            for (let d = $tp.depth; d > 0; d--) {
-              const n = $tp.node(d)
-              if (n.type.name === 'table_cell' || n.type.name === 'table_header') { inCell = true; break }
-            }
-            if (!inCell) { target = -1; caretDom = null }
-          } catch { target = -1; caretDom = null }
-        }
-        const sc0 = (e.view ?? window).document.querySelector('.overflow-auto') as HTMLElement | null
-        const top0 = sc0?.scrollTop ?? -1
-        const applySel = () => {
-        setTimeout(() => {
-          try {
-            // round31：caret 精确定位（round33 起在 mousedown 同步阶段测好，
-            // 此处只消费 target/caretDom）。
-            if (target < 0) {
-              // 兜底：DOM 行列 → PM 位置（cell 内容开头）
-              const pos = (() => {
-                let found = -1
-                v.state.doc.forEach((n, off) => {
-                  if (found < 0 && n.type.name === 'table' && v.nodeDOM(off)) {
-                    const d = v.nodeDOM(off) as HTMLElement
-                    if (d === hitWrap || d.contains(hitWrap)) found = off
-                  }
-                })
-                return found
-              })()
-              if (pos < 0) { v.focus(); return }
-              const table = v.state.doc.nodeAt(pos)!
-              const rowArr: { off: number; node: any }[] = []
-              table.forEach((row, off) => rowArr.push({ off, node: row }))
-              const row = rowArr[r]
-              if (!row) { v.focus(); return }
-              const cells: { off: number; node: any }[] = []
-              row.node.forEach((cell: any, off: number) => cells.push({ off, node: cell }))
-              const cell = cells[c]
-              if (!cell) { v.focus(); return }
-              const cellStart = pos + 1 + row.off + 1 + cell.off
-              target = cellStart + 1
-            }
-            v.dispatch(v.state.tr.setSelection((v.state.selection as any).constructor.near(v.state.doc.resolve(target), 1)))
-            v.focus()
-            // 同步 DOM Selection：caret 定位成功时同步到点击处字符边界；
-            // 兜底路径同步到 td 首文本节点开头（PM beforeinput 依赖浏览器
-            // caret 位于编辑器文本节点，r26_last/Q5A1 实测必需）
-            try {
-              if (caretDom) {
-                const range = window.document.createRange()
-                range.setStart(caretDom.node, caretDom.offset)
-                range.collapse(true)
-                const sel = window.getSelection()
-                sel?.removeAllRanges()
-                sel?.addRange(range)
-              } else {
-                const tdEl = (hitWrap.querySelectorAll('tr')[r] as HTMLElement)?.querySelectorAll('td,th')[c] as HTMLElement | undefined
-                const findText = (el: Node): Text | null => {
-                  for (const n of Array.from(el.childNodes)) {
-                    if (n.nodeType === 3) return n as Text
-                    const rr = findText(n); if (rr) return rr
-                  }
-                  return null
-                }
-                const tn = tdEl ? findText(tdEl) : null
-                if (tn) {
-                  const range = window.document.createRange()
-                  range.setStart(tn, 0)
-                  range.collapse(true)
-                  const sel = window.getSelection()
-                  sel?.removeAllRanges()
-                  sel?.addRange(range)
-                }
-              }
-            } catch { /* 同步失败不影响 selection */ }
-          } catch { v.focus() }
-        }, 0)
-        }
-        applySel()
-        setTimeout(() => { applySel(); if (top0 >= 0 && sc0) sc0.scrollTop = top0 }, 60)
-      })
-      proxy.addEventListener('mouseup', (e: MouseEvent) => e.preventDefault())
-      host.appendChild(proxy)
-      proxies.set(wrapper, proxy)
-      syncOne(wrapper, proxy)
-    }
-
-    const syncOne = (wrapper: Element, proxy: HTMLElement) => {
-      const host = proxy.parentElement
-      if (!host || !wrapper.isConnected) return
-      const wr = (wrapper as HTMLElement).getBoundingClientRect()
-      const hr = host.getBoundingClientRect()
-      if (wr.width < 2 || wr.height < 2) { proxy.style.display = 'none'; return }
-      proxy.style.display = 'block'
-      proxy.style.left = (wr.left - hr.left + 6) + 'px'
-      proxy.style.top = (wr.top - hr.top) + 'px'
-      proxy.style.width = Math.max(0, wr.width - 12) + 'px'
-      proxy.style.height = wr.height + 'px'
-    }
-
-    const scheduleSync = () => {
-      if (kick.timer || disposed) return
-      // 几何写入放在空闲任务里（渲染批次内写 style 的层会被合成器
-      // 排除出 hit-test，r26_ui8~11）。ensureProxy（建层）也必须在
-      // MessageChannel 任务里执行（r27_t16：effect 闭包 setTimeout 内
-      // 创建的层进死名单，Channel 任务内创建的正常）。
-      kick.timer = window.setTimeout(() => {
-        kick.timer = 0
-        const run = () => {
-          const pm = viewRef.current?.dom
-          if (!pm) return
-          pm.querySelectorAll('.tableWrapper').forEach(w => {
-            let proxy = proxies.get(w)
-            if (!proxy) { if (proxy === undefined && (w as HTMLElement).offsetParent !== null) ensureProxy(w as HTMLElement); proxy = proxies.get(w) }
-            if (proxy) syncOne(w, proxy)
-          })
-          // 清理已断开的
-          for (const [w, proxy] of [...proxies]) {
-            if (!w.isConnected) { proxy.remove(); proxies.delete(w) }
-          }
-        }
-        try {
-          const ch = new MessageChannel()
-          ch.port1.onmessage = () => { try { ch.port1.close() } catch { /* */ } run() }
-          ch.port2.postMessage('go')
-        } catch { run() }
-      }, 120)
-    }
-
-    // ★ round28：挂载期即建层（不再等首次交互）—— 真实用户流程是
-    // 打开文档直接点表格，等待首交互+2s 的方案让首次点击必然落入
-    // 合成器死区（r28_repro3/4 实锤）。r26 时代"挂载期建层会死"的根因
-    // 是 effect 闭包 setTimeout 建层，MessageChannel 建层实测全活
-    //（r27_t16/final 铁证）。多波次覆盖文档打开后的异步渲染：
-    // 0.6s/2s/4s/8s，之后 MutationObserver 持续维护。
-    // StrictMode 双挂载守卫（r27_matrix2）：同一 document 只允许一个
-    // 管理器实例（否则双 proxy 重叠 + 行拖拽双会话）。
-    if ((window as any).__samTableProxyMgr) return
-    ;(window as any).__samTableProxyMgr = true
-    let mgrArmed = true
-    const viaChannel = (fn: () => void, delay: number) => {
-      window.setTimeout(() => {
-        if (!mgrArmed || disposed) return
-        try {
-          const ch = new MessageChannel()
-          ch.port1.onmessage = () => { try { ch.port1.close() } catch { /* */ } fn() }
-          ch.port2.postMessage('go')
-        } catch { fn() }
-      }, delay)
-    }
-    for (const d of [600, 2000, 4000, 8000]) viaChannel(scheduleSync, d)
-    // 持续维护：wrapper 增删与几何变化（分页 margin、行高列宽、文档切换）
-    const mo = new MutationObserver(scheduleSync)
-    mo.observe(viewRef.current?.dom as Node, { childList: true, subtree: true })
-    const scroller = (viewRef.current?.dom as HTMLElement)?.closest('.overflow-auto')
-    scroller?.addEventListener('scroll', scheduleSync, { passive: true })
-    window.addEventListener('resize', scheduleSync, { passive: true })
-    cleanupExtra = () => {
-      mgrArmed = false
-      mo.disconnect(); scroller?.removeEventListener('scroll', scheduleSync); window.removeEventListener('resize', scheduleSync)
-    }
-    return () => {
-      disposed = true
-      if ((window as any).__samTableProxyMgr) (window as any).__samTableProxyMgr = false
-      cleanupExtra?.()
-      if (kick.timer) window.clearTimeout(kick.timer)
-      for (const [, proxy] of proxies) proxy.remove()
-      proxies.clear()
-    }
+    const cleanup = createTableClickBridge(() => viewRef.current)
+    ;(window as any).__samStartRowDrag = (v: any, x: number, y: number) => { try { startRowDragSession(v, x, y) } catch { /* */ } }
+    return () => { cleanup(); (window as any).__samStartRowDrag = undefined }
   }, [])
 
   const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
@@ -3945,14 +3654,78 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       </div>
       )}
 
-      {/* 表格工具栏 */}
+
+      {/* Mini 浮动工具栏 — round17 移除：与选区/光标位置冲突，遮挡正文且干扰编辑
+        *（用户主诉"太影响编辑了"）。加粗/斜体/字号/颜色等全部功能在 Ribbon 开始
+        * 选项卡与右键菜单中均有入口，不受影响。 */}
+
+      {/* 右键菜单 — 边界检测防止越界 */}
+      {showContextMenu && (() => {
+        const MENU_W = 180, MENU_H = 270
+        const vw = window.innerWidth, vh = window.innerHeight
+        let cx = contextMenuPos.x, cy = contextMenuPos.y
+        if (cx + MENU_W > vw - 8) cx = Math.max(8, vw - MENU_W - 8)
+        if (cy + MENU_H > vh - 8) cy = Math.max(8, vh - MENU_H - 8)
+        return (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setShowContextMenu(false)} />
+          <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: cx, top: cy, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}
+          // 右键菜单项同样不夺走编辑器焦点：保持选区高亮与 CellSelection（对齐 MS Office）
+          onMouseDown={(e: any) => { if (!(e.target as HTMLElement).closest?.('input, select, textarea')) e.preventDefault() }}>
+            <button onClick={() => exec('undo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↶ {t('doc.undo')}</button>
+            <button onClick={() => exec('redo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↷ {t('doc.redo')}</button>
+            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+            <button onClick={() => exec('cut')} disabled={!hasSelection()} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>✂ {t('doc.cut')}</button>
+            <button onClick={() => exec('copy')} disabled={!hasSelection()} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>⧉ {t('doc.copy')}</button>
+            <button onClick={() => exec('paste')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📋 {t('doc.paste')}</button>
+            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+            <button onClick={() => exec('bold')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><b>B</b> {t('doc.bold')}</button>
+            <button onClick={() => exec('italic')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><i>I</i> {t('doc.italic')}</button>
+            <button onClick={() => exec('underline')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><u>U</u> {t('doc.underline')}</button>
+            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+            <button onClick={() => { setSearchOpen(true); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🔍 {t('doc.findReplace')}</button>
+            <button onClick={() => exec('comment')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>💬 {t('doc.addComment')}</button>
+            <button onClick={() => { setRibbonTab('insert'); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📊 {t('doc.insertTable')}</button>
+            {contextMenuOnTextBox && (
+              <>
+                <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+                <button onClick={editTextBoxStyle} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🎨 {t('doc.editStyle')}</button>
+              </>
+            )}
+          </div>
+        </>
+        )
+      })()}
+
+      {watermark && (<div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)', fontSize: '72px', color: 'rgba(0,0,0,0.08)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap' }}>{watermark}</div>)}
+
+      {/* 导航窗口 (Navigation Pane) */}
+      {showNavPane && (
+        <div className="flex-shrink-0 overflow-auto animate-fade-in" style={{ width: 200, background: 'var(--color-surface)', borderRight: '1px solid var(--color-border)', padding: '8px 12px' }}>
+          <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('doc.navPane') || '导航'}</div>
+          {viewRef.current?.state.doc.content.firstChild ? (() => {
+            const headings: { level: number; text: string; pos: number }[] = []
+            viewRef.current.state.doc.descendants((node, pos) => {
+              if (node.type.name === 'heading') {
+                headings.push({ level: node.attrs.level, text: node.textContent, pos })
+              }
+            })
+            if (headings.length === 0) return <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.noHeadings') || '无标题'}</div>
+            return headings.map((h, i) => (
+              <div key={i} className="text-xs cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5" style={{ marginLeft: (h.level - 1) * 12, color: 'var(--color-text-secondary)' }}
+                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(h.pos)))); v.focus() } }}>
+                {h.text || `(H${h.level})`}
+              </div>
+            ))
+          })() : null}
+        </div>
+      )}
+
+      <div style={{ flex: '1 1 auto', display: 'flex', minHeight: 0, flexDirection: compareTarget ? 'row' : 'column', position: 'relative' }}>
       {inTable && (
-        <div className="px-3 py-1 flex items-center gap-1 flex-shrink-0 animate-fade-in" style={{ background: 'var(--color-primary-light)', borderBottom: '1px solid var(--color-border)' }}
-          // 对齐 MS Office：点击表格工具栏（含边框/自动调整下拉）不夺走编辑器焦点。
-          // 否则浏览器折叠原生选区、PM DOMObserver 同步后 CellSelection 被清 ——
-          // “全选表格后点边框，选择状态消失且边框不生效”的根因。
-          // input/select/textarea 需要真实焦点行为，跳过。
+        <div className="px-3 py-1 flex items-center gap-1 animate-fade-in" style={{ position: 'absolute', left: 0, right: 0, top: 0, zIndex: 30, background: 'var(--color-primary-light)', borderBottom: '1px solid var(--color-border)' }}
           onMouseDown={(e: any) => { const t = e.target as HTMLElement; if (!t.closest?.('input, select, textarea')) e.preventDefault() }}>
+          {/* 对齐 MS Office：点击表格工具栏不夺走编辑器焦点，保持 CellSelection */}
           <span className="text-xs font-medium px-2" style={{ color: 'var(--color-primary)' }}>{t('doc.tableTools')}</span>
           <button onClick={() => mergeCells(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.merge')} type="button">⊟</button>
           <button onClick={() => splitCell(viewRef.current!.state, viewRef.current!.dispatch)} className="toolbar-btn" title={t('doc.split')} type="button">⊞</button>
@@ -4058,76 +3831,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
               </>
             )}
           </div>
+
         </div>
       )}
-
-      {/* Mini 浮动工具栏 — round17 移除：与选区/光标位置冲突，遮挡正文且干扰编辑
-        *（用户主诉"太影响编辑了"）。加粗/斜体/字号/颜色等全部功能在 Ribbon 开始
-        * 选项卡与右键菜单中均有入口，不受影响。 */}
-
-      {/* 右键菜单 — 边界检测防止越界 */}
-      {showContextMenu && (() => {
-        const MENU_W = 180, MENU_H = 270
-        const vw = window.innerWidth, vh = window.innerHeight
-        let cx = contextMenuPos.x, cy = contextMenuPos.y
-        if (cx + MENU_W > vw - 8) cx = Math.max(8, vw - MENU_W - 8)
-        if (cy + MENU_H > vh - 8) cy = Math.max(8, vh - MENU_H - 8)
-        return (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setShowContextMenu(false)} />
-          <div className="fixed z-50 py-1.5 rounded-lg shadow-xl animate-fade-in" style={{ left: cx, top: cy, background: 'var(--color-surface)', border: '1px solid var(--color-border)', minWidth: 180 }}
-          // 右键菜单项同样不夺走编辑器焦点：保持选区高亮与 CellSelection（对齐 MS Office）
-          onMouseDown={(e: any) => { if (!(e.target as HTMLElement).closest?.('input, select, textarea')) e.preventDefault() }}>
-            <button onClick={() => exec('undo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↶ {t('doc.undo')}</button>
-            <button onClick={() => exec('redo')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>↷ {t('doc.redo')}</button>
-            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
-            <button onClick={() => exec('cut')} disabled={!hasSelection()} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>✂ {t('doc.cut')}</button>
-            <button onClick={() => exec('copy')} disabled={!hasSelection()} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>⧉ {t('doc.copy')}</button>
-            <button onClick={() => exec('paste')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📋 {t('doc.paste')}</button>
-            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
-            <button onClick={() => exec('bold')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><b>B</b> {t('doc.bold')}</button>
-            <button onClick={() => exec('italic')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><i>I</i> {t('doc.italic')}</button>
-            <button onClick={() => exec('underline')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}><u>U</u> {t('doc.underline')}</button>
-            <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
-            <button onClick={() => { setSearchOpen(true); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🔍 {t('doc.findReplace')}</button>
-            <button onClick={() => exec('comment')} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>💬 {t('doc.addComment')}</button>
-            <button onClick={() => { setRibbonTab('insert'); setShowContextMenu(false) }} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>📊 {t('doc.insertTable')}</button>
-            {contextMenuOnTextBox && (
-              <>
-                <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
-                <button onClick={editTextBoxStyle} className="flex w-full items-center px-3 py-1.5 text-xs gap-3 transition-colors" style={{ color: 'var(--color-text)' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--color-bg-alt)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>🎨 {t('doc.editStyle')}</button>
-              </>
-            )}
-          </div>
-        </>
-        )
-      })()}
-
-      {watermark && (<div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)', fontSize: '72px', color: 'rgba(0,0,0,0.08)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap' }}>{watermark}</div>)}
-
-      {/* 导航窗口 (Navigation Pane) */}
-      {showNavPane && (
-        <div className="flex-shrink-0 overflow-auto animate-fade-in" style={{ width: 200, background: 'var(--color-surface)', borderRight: '1px solid var(--color-border)', padding: '8px 12px' }}>
-          <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-text-muted)' }}>{t('doc.navPane') || '导航'}</div>
-          {viewRef.current?.state.doc.content.firstChild ? (() => {
-            const headings: { level: number; text: string; pos: number }[] = []
-            viewRef.current.state.doc.descendants((node, pos) => {
-              if (node.type.name === 'heading') {
-                headings.push({ level: node.attrs.level, text: node.textContent, pos })
-              }
-            })
-            if (headings.length === 0) return <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.noHeadings') || '无标题'}</div>
-            return headings.map((h, i) => (
-              <div key={i} className="text-xs cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5" style={{ marginLeft: (h.level - 1) * 12, color: 'var(--color-text-secondary)' }}
-                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(h.pos)))); v.focus() } }}>
-                {h.text || `(H${h.level})`}
-              </div>
-            ))
-          })() : null}
-        </div>
-      )}
-
-      <div style={{ flex: '1 1 auto', display: 'flex', minHeight: 0, flexDirection: compareTarget ? 'row' : 'column' }}>
       <div
         ref={leftScrollRef}
         onScroll={() => syncScroll('left')}
@@ -4172,10 +3878,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
           // 点击页面空白区（页边距 / 纸页正文下方空白 / 尾页下方）：把光标放到最近可输入位置，
           // 对齐 MS Word"点击页面任意空白处即可开始输入"（修复表格后无法输入新文本的一部分场景）。
           // ProseMirror 内容区与交互控件（标尺/文本框/按钮/页脚）不拦截。
+          // round34：表格点击桥层（.pm-table-clickbridge，死区 workaround ——
+          // 挂在 pm-host 的接收层）必须豁免 —— 它是 pageRef 后代，点击语义是
+          // "表格内放 caret"，落到这里会被误判为空白区点击并 dispatch
+          // setSelection(文档末尾)，把桥刚放好的 caret 打飞（r34_v11 栈追踪
+          // 实锤 pos=9615 由此处写入；旧代理层靠 60ms 补刀压过它 ——
+          // 「每次点击像刷新」的病根）。
           const v = viewRef.current
           if (!v) return
           const target = e.target as HTMLElement
-          if (target.closest && target.closest('.ProseMirror, .text-box, button, input, select, textarea, [contenteditable], .sam-ruler, .comment-card')) return
+          if (target.closest && target.closest('.ProseMirror, .text-box, button, input, select, textarea, [contenteditable], .sam-ruler, .comment-card, .pm-table-clickbridge, .pm-table-clickproxy, .tableWrapper')) return
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
           const zoomRatio = zoom / 100
           const below = e.clientY > rect.top + (docMargins.top * zoomRatio)

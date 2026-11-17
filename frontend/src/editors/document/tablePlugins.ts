@@ -299,9 +299,11 @@ function widthsAfterDrag(grid: TableGrid, b: number, dx: number): number[] {
 }
 
 // ============ 行拖拽换位置（对齐 MS Word：选中行后拖到目标行） ============
-// 由点击代理层（DocumentEditor 管理器）在 CellSelection 上 mousedown 时驱动：
-// PM 的 tableEditing 插件会把 CellSelection 压成光标，事件也到不了
-// view.dom，因此行拖拽会话必须在 window 级、从 proxy 直接启动。
+// round34：由本插件的 mousedown（CellSelection 上按下左键）驱动。
+// 旧架构（round26~33）从点击代理层启动；代理层删除后，PM 的
+// handleDOMEvents.mousedown 在 tableEditing 处理之前先收到事件：
+// 若是 CellSelection 区域内的按下 → preventDefault 保留行选并启动
+// 拖拽会话；否则放行（原生光标定位 / 框选交给 PM）。
 
 /** 在 CellSelection（行选中）上开始行拖拽会话：拖动显示插入指示线，
  * 松开把选中行区间移动到目标行。返回 true 表示会话已启动（调用方应
@@ -638,6 +640,39 @@ export function createTableDragResizePlugin(getZoom: () => number) {
           if (e.button !== 0 || drag) return false
           const ctx = findTableCtx(view, e)
           if (!ctx) return false
+          // round34 行拖拽（原代理层职责）：已有 CellSelection（整行/多行
+          // 选中）时在选中区域内按下左键 → 启动行拖拽会话（preventDefault
+          // 保留 CellSelection，不被 tableEditing 压成光标）。点击选中区
+          // 之外 → 放行，让 PM 原生改选（与 Word 行为一致）。
+          {
+            const curSel = view.state.selection as any
+            if (curSel && curSel.$anchorCell && curSel.$headCell) {
+              const rowOf = ($cell: any) => {
+                try {
+                  for (let d = $cell.depth; d >= 2; d--) {
+                    if ($cell.node(d).type.name === 'table_row') {
+                      const theRow = $cell.node(d)
+                      let idx = -1
+                      $cell.node(d - 1).forEach((rw: PMNode, _o: number, i: number) => { if (rw === theRow) idx = i })
+                      return idx
+                    }
+                  }
+                } catch { /* */ }
+                return -1
+              }
+              const selFromRow = Math.min(rowOf(curSel.$anchorCell), rowOf(curSel.$headCell))
+              const selToRow = Math.max(rowOf(curSel.$anchorCell), rowOf(curSel.$headCell))
+              // 命中行的索引（事件 target → tr 在表格中的序号）
+              const hitTr = (e.target as HTMLElement).closest?.('tr') as HTMLTableRowElement | null
+              const trs: HTMLTableRowElement[] = Array.from(ctx.tableEl.querySelectorAll('tr'))
+              const hitRow = hitTr ? trs.indexOf(hitTr) : -1
+              if (hitRow >= 0 && selFromRow >= 0 && hitRow >= selFromRow && hitRow <= selToRow) {
+                e.preventDefault()
+                startRowDragSession(view, e.clientX, e.clientY)
+                return true
+              }
+            }
+          }
           const z = Math.max(0.1, getZoom() || 1)
           const tRect = ctx.tableEl.getBoundingClientRect()
           const lx = (e.clientX - tRect.left) / z
