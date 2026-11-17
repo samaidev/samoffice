@@ -214,6 +214,100 @@ func parsePlaceholderXfrms(files map[string]*zip.File, path string) map[string]p
 	return out
 }
 
+// parsePlaceholderVanchors 解析版式/母版占位符的 bodyPr anchor（t/ctr/b）。
+// key 与 parsePlaceholderXfrms 同构（t:type / b:type|idx / i:idx）。
+func parsePlaceholderVanchors(files map[string]*zip.File, path string) map[string]string {
+	out := map[string]string{}
+	f, ok := files[path]
+	if !ok {
+		return out
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return out
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	var inSp bool
+	var phType, phIdx, anc string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "sp":
+				inSp = true
+				phType, phIdx, anc = "", "", ""
+			case "ph":
+				if inSp {
+					phType = attrVal(t, "type")
+					phIdx = attrVal(t, "idx")
+				}
+			case "bodyPr":
+				// 自闭合或带子元素均适用：anchor 属性在 StartElement 上
+				if inSp {
+					if a := attrVal(t, "anchor"); a != "" {
+						anc = mapVanchor(a)
+					}
+				}
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "sp":
+				if inSp && anc != "" && (phType != "" || phIdx != "") {
+					if phType != "" {
+						out["t:"+phType] = anc
+						if phIdx != "" {
+							out["b:"+phType+"|"+phIdx] = anc
+						}
+					}
+					if phIdx != "" {
+						out["i:"+phIdx] = anc
+					}
+				}
+				inSp = false
+			}
+		}
+	}
+	return out
+}
+
+// lookupPhVanchor 与 lookupPhXfrm 同序查找垂直锚点
+func lookupPhVanchor(layout, master map[string]string, ph, idx string) (string, bool) {
+	altType := ph
+	switch ph {
+	case "ctrTitle":
+		altType = "title"
+	case "subTitle":
+		altType = "body"
+	}
+	keys := make([]string, 0, 4)
+	if ph != "" && idx != "" {
+		keys = append(keys, "b:"+ph+"|"+idx)
+	}
+	if ph != "" {
+		keys = append(keys, "t:"+ph)
+		if altType != ph {
+			keys = append(keys, "t:"+altType)
+		}
+	}
+	if idx != "" {
+		keys = append(keys, "i:"+idx)
+	}
+	for _, m := range []map[string]string{layout, master} {
+		for _, k := range keys {
+			if v, ok := m[k]; ok {
+				return v, true
+			}
+		}
+	}
+	return "", false
+}
+
 // lookupPhXfrm 按 类型+idx → 类型 → 等价类型（ctrTitle→title 等）→ idx 的顺序，
 // 先版式后母版地查找占位符几何
 func lookupPhXfrm(layout, master map[string]phXfrm, ph, idx string) (phXfrm, bool) {
@@ -1416,7 +1510,7 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 			// 随首页 slide 数据回传前端（母版视图可编辑，普通视图作装饰底层渲染）
 			if mf, ok := files[masterPath]; ok {
 				if mrc, merr := mf.Open(); merr == nil {
-					ms := parseSlide(mrc, masterPath, files, map[string]string{}, theme, master, map[string]phXfrm{}, map[string]phXfrm{})
+					ms := parseSlide(mrc, masterPath, files, map[string]string{}, theme, master, map[string]phXfrm{}, map[string]phXfrm{}, map[string]string{}, map[string]string{})
 					mrc.Close()
 					masterShapes = ms.Shapes
 				}
@@ -1449,11 +1543,16 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 		// 版式背景（幻灯片未设背景时回退）+ 版式/母版占位符几何
 		layoutBg := ""
 		layoutPh := map[string]phXfrm{}
+		layoutVanc := map[string]string{}
 		if layoutPath := relsOfType(files, relsName, "slideLayout"); layoutPath != "" {
 			layoutBg = parseBgColor(files, layoutPath, theme, master.clrMap)
 			layoutPh = parsePlaceholderXfrms(files, layoutPath)
+			// round29：占位符垂直锚点继承（layout bodyPr anchor="b" 等 ——
+			// slide 未设 anchor 时按版式/母版继承，LibreOffice 同行为）
+			layoutVanc = parsePlaceholderVanchors(files, layoutPath)
 		}
 		masterPh := map[string]phXfrm{}
+		masterVanc := map[string]string{}
 		for nm := range files {
 			if strings.HasPrefix(nm, "ppt/slideMasters/slideMaster") && strings.HasSuffix(nm, ".xml") {
 				for k, v := range parsePlaceholderXfrms(files, nm) {
@@ -1461,10 +1560,15 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 						masterPh[k] = v
 					}
 				}
+				for k, v := range parsePlaceholderVanchors(files, nm) {
+					if _, dup := masterVanc[k]; !dup {
+						masterVanc[k] = v
+					}
+				}
 			}
 		}
 
-		slide := parseSlide(rc, slideName, files, rels, theme, master, layoutPh, masterPh)
+		slide := parseSlide(rc, slideName, files, rels, theme, master, layoutPh, masterPh, layoutVanc, masterVanc)
 		rc.Close()
 
 		// 背景逐级回退：slide 自身 → 版式 → 母版
@@ -1593,7 +1697,8 @@ type slideParseCtx struct {
 
 // parseSlide 解析单张幻灯片 XML，提取形状（文本/矩形/图片），含完整段落样式
 func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[string]string,
-	theme themeScheme, master *masterExtras, layoutPh, masterPh map[string]phXfrm) *slideContent {
+	theme themeScheme, master *masterExtras, layoutPh, masterPh map[string]phXfrm,
+	layoutVanc, masterVanc map[string]string) *slideContent {
 
 	slide := &slideContent{}
 	dec := xml.NewDecoder(r)
@@ -1665,6 +1770,14 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 				styleKey = "title"
 			case "body", "subTitle":
 				styleKey = "body"
+			case "":
+				// round29：无 type 只有 idx 的占位符（<p:ph idx="1"/>）
+				// 按版式语义是正文占位符（Title and Content 版式）→ body
+				// 样式（26pt 白字等来自 master bodyStyle；此前落 other
+				// 默认 → 12px 深灰，正文几乎不可见）
+				if curPhIdx != "" {
+					styleKey = "body"
+				}
 			}
 		}
 		defSize := shapeDefault.SizePt
@@ -2183,14 +2296,24 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 			switch local {
 			case "sp", "cxnSp":
 				if cur != nil && cur.Kind != "pic" {
-					// 占位符无自有 xfrm 时从版式/母版继承几何
-					if cur.Ph != "" && !(sawOff && sawExt) {
+					// 占位符无自有 xfrm 时从版式/母版继承几何。
+					// round29：无 type 只有 idx 的占位符（<p:ph idx="1"/>，
+					// 标题和内容版式的正文格）也是占位符 —— 旧条件
+					// cur.Ph != "" 把它们排除 → 正文几何丢失（y=0 h=0）。
+					if (cur.Ph != "" || curPhIdx != "") && !(sawOff && sawExt) {
 						if xf, ok := lookupPhXfrm(layoutPh, masterPh, cur.Ph, curPhIdx); ok {
 							cur.X, cur.Y, cur.Cx, cur.Cy = xf[0], xf[1], xf[2], xf[3]
 						}
 					}
 					if cur.Vanchor == "" {
 						cur.Vanchor = bodyVanchor
+					}
+					// round29：slide 自身 bodyPr 无 anchor 时从版式/母版
+					// 占位符继承（ctrTitle 的 layout anchor="b" 等）
+					if cur.Vanchor == "" && (cur.Ph != "" || curPhIdx != "") {
+						if va, ok := lookupPhVanchor(layoutVanc, masterVanc, cur.Ph, curPhIdx); ok {
+							cur.Vanchor = va
+						}
 					}
 					finalizeShape()
 					finishChild(cur)

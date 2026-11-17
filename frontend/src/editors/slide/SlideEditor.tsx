@@ -1961,7 +1961,11 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                     lineHeight: sh.lineHeight || 1.2,
                     paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined,
                     width: '100%',
-                    display: 'block',
+                    // round29：display 必须保持 flex —— 内联 block 会覆盖
+                    // className 的 flex，justify-content:center（垂直对齐
+                    // vanchor ctr）随之失效，文字全部堆到框顶（装备工业
+                    // PPT 标题应在 40-47% 中央却渲染在 22-28%）。
+                    display: 'flex',
                   }}>
                     {sh.media && sh.media.type === 'video' && (
                       <video src={sh.media.src} controls style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000', pointerEvents: 'none' }} />
