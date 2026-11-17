@@ -1,0 +1,27 @@
+{
+  "meta": { "title": "批注连接线测试文档" },
+  "comments": [
+    { "id": "c1", "author": "编辑部", "content": "该图中不知道横纵坐标分别表示什么，也没有任何单位。请补充坐标轴标签与单位说明。" },
+    { "id": "c2", "author": "张审稿人", "content": "文章为黑白排版，为便于区分，请在线条上添加不同形状加以区分不同变量。" },
+    { "id": "c3", "author": "李编辑", "content": "摘要部分建议控制在 300 字以内，突出研究方法与主要结论。" },
+    { "id": "c4", "author": "王教授", "content": "此处公式推导建议补充中间步骤，目前从式(3)到式(5)跳跃过大，读者难以跟随。" },
+    { "id": "c5", "author": "编辑部", "content": "参考文献格式请统一为 GB/T 7714-2015，注意页码与 DOI 的书写规范。" },
+    { "id": "c6", "author": "赵评审", "content": "表 2 数据与正文描述不一致：正文说增长 15%，表中为 12.4%，请核实数据来源。" },
+    { "id": "c7", "author": "编辑部", "content": "结论部分过于简略，建议分点总结研究贡献、局限性与后续工作方向。" }
+  ],
+  "blocks": [
+    { "type": "heading", "level": 1, "inline": [ { "type": "text", "content": "合同能源管理模式下能源管理公司和用户的效益分配研究", "commentId": "c1" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "朱东山，孔英（北京大学深圳研究生院，广东 深圳 518055）", "commentId": "c2" } ] },
+    { "type": "heading", "level": 2, "inline": [ { "type": "text", "content": "摘要" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "在全球气温升高、节能减排的发展趋势下，合同能源管理（EPC）模式成为推动用能单位实施节能改造的重要市场机制。本文基于委托代理理论构建了能源管理公司（EMCO）与用户之间的效益分配模型，分析不同风险偏好与努力成本下的最优分配比例。研究表明，当双方风险规避系数趋近时，效益分配比例趋于均衡；信息不对称程度越高，激励合约的最优分成比例越低。", "commentId": "c3" } ] },
+    { "type": "heading", "level": 2, "inline": [ { "type": "text", "content": "1 引言" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "合同能源管理起源于 20 世纪 70 年代的石油危机，其核心是以节省的能源费用支付节能项目的全部成本。能源管理公司提供诊断、设计、改造、运营等一体化服务，用户以节能效益分享方式付款。", "commentId": "c4" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "现有研究多聚焦于单期合约的激励设计，对多期动态合约下的效益分配演化关注不足。本文将声誉机制引入多期模型，考察贴现因子与考核门槛对分配比例收敛速度的影响。" } ] },
+    { "type": "heading", "level": 2, "inline": [ { "type": "text", "content": "2 模型构建" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "设 EMCO 的努力成本函数为 C(e) = ke²/2，产出函数取线性形式 π = ae + θ，其中 θ 为外生随机变量，服从正态分布 N(0, σ²)。线性合约 w = α + βπ 中，α 为固定支付，β 为效益分享比例。", "commentId": "c5" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "参与约束要求 EMCO 的确定性等价收入不低于保留效用 ū；激励相容约束下，最优努力水平 e* = aβ/k。代入可得 β 的最优解与风险规避度 ρ、方差 σ² 及努力成本系数 k 的关系式，详见表 1 的数值模拟结果。" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "表 1 不同参数组合下的最优分享比例模拟显示：σ² 越大，β* 越小；k 越大，β* 越小；ρ 对 β* 的影响呈非线性。", "commentId": "c6" } ] },
+    { "type": "heading", "level": 2, "inline": [ { "type": "text", "content": "3 结论" } ] },
+    { "type": "paragraph", "inline": [ { "type": "text", "content": "本文构建的委托代理模型表明，效益分配比例由风险分担、努力成本与信息结构共同决定。政策上应通过第三方节能量认证降低 σ²，从而提高可行分享比例区间。", "commentId": "c7" } ] }
+  ]
+}

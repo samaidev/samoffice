@@ -757,6 +757,76 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   }
   // 批注卡片编辑态：正在编辑的批注 id（null 表示只读查看）
   const [editingComment, setEditingComment] = useState<string | null>(null)
+  // round35（用户反馈"右侧备注缺少连接线"）：两阶段布局。
+  // 阶段1 measure：渲染后测量每张卡片自然高度（先全部 top:-9999 离屏渲染，不闪跳）；
+  // 阶段2 layout：按文档顺序取锚点 y（.comment-mark 实时 rect），卡片 top 对齐锚点、
+  // 与前一张卡冲突时下移（Word 式防重叠），最后回填面板内容高度 + 计算连线端点。
+  // 触发：comments/active/编辑态/缩放/分页几何/滚动（rAF 节流）。
+  const commentsLayoutTick = useRef(0)
+  const runCommentsLayout = () => {
+    const scroll = leftScrollRef.current
+    const pane = scroll?.querySelector('.comments-pane') as HTMLElement | null
+    if (!scroll || !pane) { setCommentCardsLayout({}); setCommentLinks([]); return }
+    const sr = scroll.getBoundingClientRect()
+    const pr = pane.getBoundingClientRect()
+    // 面板顶相对滚动容器顶（面板 sticky，通常 = 0；分栏/对比布局下可能非零）
+    const paneOffset = pr.top - sr.top
+    // 滚动容器可视高（卡片 clamp 用）——面板 maxHeight 100%，可视高即容器高
+    const viewH = scroll.clientHeight
+    const nextLayout: Record<string, { top: number; height: number }> = {}
+    const anchors: { id: string; ay: number; height: number }[] = []
+    // 阶段1：测量自然高度
+    const heights: Record<string, number> = {}
+    for (const c of comments) {
+      const card = pane.querySelector(`#comment-card-${CSS.escape(c.id)}`) as HTMLElement | null
+      if (card) heights[c.id] = card.offsetHeight
+    }
+    // 阶段2：锚点 y（相对面板顶）→ 卡片 top 防重叠堆叠
+    let prevBottom = -Infinity
+    for (const c of comments) {
+      const h = heights[c.id] ?? 64
+      const mark = scroll.querySelector(`.comment-mark[data-comment-id="${CSS.escape(c.id)}"]`) as HTMLElement | null
+      // 锚点相对面板顶：rect.top - sr.top 为相对容器内容顶（含滚动量），
+      // 面板是 sticky 的 —— 面板内容不随滚动平移，锚点随滚动平移。
+      // 两者须在同一坐标系：把锚点换算到「面板 sticky 视口」= rect.top - pr.top + 当前堆叠游标基线。
+      let top: number
+      if (mark) {
+        const mr = mark.getBoundingClientRect()
+        top = mr.top - pr.top + mr.height / 2 - h / 2
+      } else {
+        top = prevBottom === -Infinity ? 30 : prevBottom + 10
+      }
+      // clamp 到面板可视范围（首卡不小于标题下 0，尾卡不超出可视底）
+      top = Math.max(top, 30)
+      if (top < prevBottom) top = prevBottom + 8
+      // 底部钳制（视口内）后再防重叠：maxTop 若把卡片拉回上一张之上，
+      // 保持防重叠优先（卡片允许滚出面板底部可视区，但绝不允许叠在一起）
+      const maxTop = viewH - h - 4
+      if (top > maxTop && maxTop > prevBottom) top = maxTop
+      nextLayout[c.id] = { top, height: h }
+      anchors.push({ id: c.id, ay: top + h / 2, height: h })
+      prevBottom = top + h
+    }
+    setCommentCardsLayout(nextLayout)
+    setCommentPaneH(prevBottom + 12)
+    // 阶段3：连线端点（锚点右缘 → 面板左缘，卡片中心 y）
+    const links: { id: string; x1: number; y1: number; x2: number; y2: number; cx: number }[] = []
+    for (const c of comments) {
+      const mark = scroll.querySelector(`.comment-mark[data-comment-id="${CSS.escape(c.id)}"]`) as HTMLElement | null
+      const lay = nextLayout[c.id]
+      if (!mark || !lay) continue
+      const mr = mark.getBoundingClientRect()
+      links.push({
+        id: c.id,
+        x1: mr.right - sr.left,
+        y1: mr.top + mr.height / 2 - sr.top,
+        x2: pr.left - sr.left - 5,
+        y2: paneOffset + lay.top + lay.height / 2,
+        cx: pr.left - sr.left,
+      })
+    }
+    setCommentLinks(links)
+  }
   const editComment = (id: string) => {
     const v = viewRef.current; if (!v) return
     const idx = comments.findIndex(c => c.id === id); if (idx < 0) return
@@ -1060,6 +1130,17 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   // 分页引擎回报的真实内容底部（内容盒坐标系）：纸张层据此裁掉尾部无内容纸，
   // 根除“文末大量空白页”（.doc 导入的尾部空段落 / 瞬态测量虚增不再产生幽灵纸）。
   const [contentMaxY, setContentMaxY] = useState(0)
+  // round35（用户反馈"右侧备注缺少连接线"）：批注锚点 → 卡片连线几何。
+  // 每条批注一条：从正文 comment-mark 圆点右侧出发，水平走到卡片左缘，
+  // y 不同时以斜线/折线衔接（MS Word 审阅样式）。坐标为 leftScrollRef 容器
+  // 内容坐标系（随滚动平移由层本身承担 —— SVG 层放在容器内 sticky 对齐卡片面板）。
+  const [commentLinks, setCommentLinks] = useState<{
+    id: string; x1: number; y1: number; x2: number; y2: number; cx: number
+  }[]>([])
+  // 卡片在批注面板内的绝对定位（top, height 由测量回填，防重叠堆叠由布局阶段计算）
+  const [commentCardsLayout, setCommentCardsLayout] = useState<Record<string, { top: number; height: number }>>({})
+  // 批注面板内容高度（至少盖住最后一张卡：绝对定位卡片超出面板盒则滚动不可达）
+  const [commentPaneH, setCommentPaneH] = useState(0)
   const pageContentPerPage = Math.max(50, pageHeightPx - docMargins.top - docMargins.bottom)
   const pageGap = Math.max(16, Math.round(pageHeightPx * 0.03))
   const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100, collapse: whiteSpaceHidden })
@@ -1076,6 +1157,37 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const pageRefMinH = visibleRects.length
     ? Math.max(...visibleRects.map((r) => bodyTop + r.top + r.height)) + 24
     : pageHeightPx
+
+  // round35：批注布局触发（数据/交互/几何变化跑一帧；滚动 rAF 节流）。
+  // 定义在全部依赖变量声明之后（zoom/pageRects/whiteSpaceHidden/docMargins 等）。
+  useEffect(() => {
+    const id = requestAnimationFrame(runCommentsLayout)
+    return () => cancelAnimationFrame(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comments, activeComment, editingComment, zoom, pageRects, whiteSpaceHidden, docMargins, comments.length > 0])
+  useEffect(() => {
+    const scroll = leftScrollRef.current
+    if (!scroll || comments.length === 0) return
+    let raf = 0
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        runCommentsLayout()
+        // 滚动中 rAF 回调读取的是"本帧已滚动但滚动未完"的中间态，
+        // 锚点 rect 会再变（实测偏差 ~18px）。补第二帧拿稳态坐标。
+        requestAnimationFrame(() => runCommentsLayout())
+      })
+    }
+    scroll.addEventListener('scroll', onScroll, { passive: true })
+    // 字体加载完成 / 窗口尺寸变化都会移动锚点（分页重排），ResizeObserver 兜底
+    const ro = new ResizeObserver(() => onScroll())
+    ro.observe(scroll)
+    const pm = scroll.querySelector('.ProseMirror')
+    if (pm) ro.observe(pm)
+    return () => { scroll.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf); ro.disconnect() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comments.length > 0])
 
   // 测量编辑器内容实际高度，使“页面”容器随内容增高（多页文档不再被裁切）。
   // 同时监听缩放变化后重新测量。
@@ -4183,7 +4295,39 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         </div>
         </div>
 
-        {/* 右侧批注栏（对齐 MS Word 审阅窗格：批注卡片显示在正文右侧，与批注锚点对应） */}
+        {/* round35：批注连线层（sticky 覆盖层，不随滚动平移；锚点/卡片端点均用
+            视口 rect 实时换算，滚动/布局变化由 rAF 重算）。横跨正文右缘 → 批注面板左缘，
+            pointerEvents:none 不挡正文编辑。zIndex 高于纸页与内容，低于弹出层。 */}
+        {comments.length > 0 && (
+          <svg
+            className="comment-links-layer"
+            style={{ position: 'sticky', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 30, alignSelf: 'flex-start', order: -1, marginLeft: '-100%', flexBasis: '100%' } as any}
+          >
+            {commentLinks.map(l => {
+              const isActive = activeComment === l.id
+              const color = isActive ? '#4f46e5' : '#94a3b8'
+              // 斜线起点（锚点）→ 终点（卡片左缘中点）；激活时加粗
+              return (
+                <g key={l.id}>
+                  <path
+                    d={`M ${l.x1} ${l.y1} L ${l.x2} ${l.y2}`}
+                    stroke={color}
+                    strokeWidth={isActive ? 1.6 : 1}
+                    strokeDasharray={isActive ? undefined : '3 3'}
+                    fill="none"
+                    opacity={isActive ? 0.95 : 0.6}
+                  />
+                  {/* 卡片端小圆点：连线落点标记 */}
+                  <circle cx={l.x2} cy={l.y2} r={isActive ? 3 : 2.2} fill={color} opacity={isActive ? 0.95 : 0.6} />
+                </g>
+              )
+            })}
+          </svg>
+        )}
+
+        {/* 右侧批注栏（对齐 MS Word 审阅窗格：批注卡片显示在正文右侧，与批注锚点对应）。
+            round35：卡片改为面板内绝对定位（top 由布局阶段对齐锚点并防重叠计算），
+            并新增连线层把卡片与正文锚点连起来（用户反馈"缺少连接线"）。 */}
         {comments.length > 0 && (
           <div
             className="comments-pane"
@@ -4198,13 +4342,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
               top: 0,
               alignSelf: 'flex-start',
               maxHeight: '100%',
+              minHeight: commentPaneH > 0 ? Math.min(commentPaneH, 100000) : undefined,
             }}
           >
             <div className="comments-pane-header">{t('doc.comments') || '批注'} ({comments.length})</div>
             {comments.map(c => {
-              const anchor = viewRef.current?.domAtPos(Math.min(c.pos + 1, viewRef.current.state.doc.content.size))
-              let top = 0
-              if (anchor) { const rect = (anchor.node as HTMLElement).getBoundingClientRect?.(); const scroll = (window.document.querySelector('.editor-scroll') as HTMLElement); if (rect) top = rect.top - (scroll ? scroll.getBoundingClientRect().top : 0) }
+              const layout = commentCardsLayout[c.id]
               const isActive = activeComment === c.id
               const isEditing = editingComment === c.id
               return (
@@ -4212,7 +4355,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
                   key={c.id}
                   id={`comment-card-${c.id}`}
                   className={`comment-card ${isActive ? 'active' : ''}`}
-                  style={{ position: 'relative', marginTop: top > 0 ? top : undefined, marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', border: `1px solid ${isActive ? '#4f46e5' : 'var(--color-border)'}`, background: isActive ? 'var(--color-bg-alt)' : 'var(--color-surface)' }}
+                  style={{ position: 'absolute', left: 10, right: 10, top: layout ? layout.top : -9999, visibility: layout ? 'visible' : 'hidden', padding: '8px 10px', borderRadius: '6px', border: `1px solid ${isActive ? '#4f46e5' : 'var(--color-border)'}`, background: isActive ? 'var(--color-bg-alt)' : 'var(--color-surface)' }}
                   onClick={() => { setActiveComment(c.id); const v = viewRef.current; if (v) { const node = v.state.doc.nodeAt(c.pos); if (node && node.type.name === 'comment_mark') { const from = c.pos, to = c.pos + node.nodeSize; v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to))); v.focus() } } }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
