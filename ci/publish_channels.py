@@ -249,12 +249,19 @@ def main() -> int:
     # 固定基础设施仓（catalog 三渠道副本）：HF=tchbcn / MS=luoyunlan168
     infra_hf = cat0["channels"]["hf"].get("catalog_repo")
     infra_ms = cat0["channels"]["ms"].get("catalog_repo")
+    # 基建仓 catalog 副本为冗余备份：产品账号通常无基建仓写权限，失败仅告警
     if not args.skip_catalog_push and os.environ.get("HF_TOKEN") and infra_hf:
-        upload_hf(catalog_path, "catalog.json", infra_hf)
-        print(f"[publish] catalog -> HF {infra_hf}")
+        try:
+            upload_hf(catalog_path, "catalog.json", infra_hf)
+            print(f"[publish] catalog -> HF {infra_hf}")
+        except Exception as e:
+            print(f"[publish] WARN: infra HF copy skipped ({str(e)[:120]})")
     if not args.skip_catalog_push and os.environ.get("MS_TOKEN") and infra_ms:
-        upload_ms(catalog_path, "catalog.json", infra_ms)
-        print(f"[publish] catalog -> MS {infra_ms}")
+        try:
+            upload_ms(catalog_path, "catalog.json", infra_ms)
+            print(f"[publish] catalog -> MS {infra_ms}")
+        except Exception as e:
+            print(f"[publish] WARN: infra MS copy skipped ({str(e)[:120]})")
 
     print("[publish] done")
     return 0
