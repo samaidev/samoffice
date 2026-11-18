@@ -163,3 +163,45 @@ jobs:
             Write-Host "delete $($r.tagName)"
             gh release delete $r.tagName --yes --cleanup-tag
           }
+
+  # ---------------------------------------------------------------------------
+  # Mirror release artifacts to ModelScope + HuggingFace and update the unified
+  # catalog (samaidev/samai-releases). Tag pushes only, after the Release job.
+  # ---------------------------------------------------------------------------
+  mirror-catalog:
+    name: Mirror (MS/HF) + update catalog
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install upload SDKs
+        run: pip install huggingface_hub modelscope
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --dir assets --repo "$GITHUB_REPOSITORY"
+          ls -lh assets
+
+      - name: Fetch current catalog (single source of truth)
+        run: |
+          curl -fsSL -o catalog.json \
+            https://raw.githubusercontent.com/samaidev/samai-releases/main/catalog.json
+
+      - name: Mirror to MS/HF + update catalog
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MS_TOKEN: ${{ secrets.MS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          python ci/publish_channels.py \
+            --dist assets --product samoffice --version "$GITHUB_REF_NAME" \
+            --repo samaidev/samoffice --catalog catalog.json \
+            --glob "samoffice"
