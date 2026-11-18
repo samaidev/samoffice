@@ -1162,7 +1162,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   // 定义在全部依赖变量声明之后（zoom/pageRects/whiteSpaceHidden/docMargins 等）。
   useEffect(() => {
     const id = requestAnimationFrame(runCommentsLayout)
-    return () => cancelAnimationFrame(id)
+    // round36 补丁：末锚点稳态兜底 —— 文档底部分页引擎的最终重排发生在
+    // 批注布局之后（pageRects 引用不变 → 本 effect 不重跑），末条批注
+    // 连线偏 ±18px（r36 八连测稳定复现）。布局后 300ms/1200ms 各补跑一次，
+    // 拿分页终态坐标。setCommentLinks 内部同值短路（无 geometry 变化时
+    // React state 引用不变，不触发重渲染循环）。
+    const t1 = window.setTimeout(() => requestAnimationFrame(runCommentsLayout), 300)
+    const t2 = window.setTimeout(() => requestAnimationFrame(runCommentsLayout), 1200)
+    return () => { cancelAnimationFrame(id); window.clearTimeout(t1); window.clearTimeout(t2) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comments, activeComment, editingComment, zoom, pageRects, whiteSpaceHidden, docMargins, comments.length > 0])
   useEffect(() => {

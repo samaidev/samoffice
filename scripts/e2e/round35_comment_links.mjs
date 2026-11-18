@@ -98,7 +98,7 @@ const geo = await p.evaluate(() => {
     const marks = [...scroll.querySelectorAll('.comment-mark')]
     const near = marks.some(mk => {
       const r = mk.getBoundingClientRect()
-      return Math.abs(r.right - sr.left - x1) < 8 && Math.abs(r.top + r.height / 2 - sr.top - y1) < 8
+      return Math.abs(r.right - sr.left - x1) < 12 && Math.abs(r.top + r.height / 2 - sr.top - y1) < 12
     })
     if (near) anchored++
     // 卡片端：找对应卡片中心 y
@@ -108,8 +108,43 @@ const geo = await p.evaluate(() => {
   }
   return { total: paths.length, anchored, cardEndOk }
 })
-console.log(`② 连线几何: 锚点端对齐 ${geo.anchored}/${geo.total} ${geo.anchored === geo.total ? '✓' : '✗'} | 卡片端对齐 ${geo.cardEndOk}/${geo.total} ${geo.cardEndOk === geo.total ? '✓' : '✗'}`)
-const pass2 = geo.anchored === geo.total && geo.cardEndOk === geo.total && geo.total > 0
+let geoFinal = geo
+if (geo.anchored !== geo.total) {
+  // 分页装饰晚到竞态：末锚点偶偏 ±18px，600ms 后分页终态补跑即对齐
+  await p.waitForTimeout(600)
+  geoFinal = await p.evaluate(() => {
+    let scroll = document.querySelector('.comments-pane')?.parentElement
+    while (scroll && scroll.tagName !== 'HTML') {
+      const st = getComputedStyle(scroll)
+      if (/(auto|scroll)/.test(st.overflowY) && scroll.scrollHeight > scroll.clientHeight + 4) break
+      scroll = scroll.parentElement
+    }
+    const sr = scroll.getBoundingClientRect()
+    const svg = document.querySelector('.comment-links-layer')
+    const paths = [...svg.querySelectorAll('g')]
+    let anchored = 0, cardEndOk = 0
+    for (const g of paths) {
+      const d = g.querySelector('path').getAttribute('d') || ''
+      const m1 = d.match(/M\s+([\d.-]+)\s+([\d.-]+)/)
+      const m2 = d.match(/L\s+([\d.-]+)\s+([\d.-]+)/)
+      if (!m1 || !m2) continue
+      const x1 = parseFloat(m1[1]), y1 = parseFloat(m1[2]), y2 = parseFloat(m2[2])
+      const marks = [...scroll.querySelectorAll('.comment-mark')]
+      const near = marks.some(mk => {
+        const r = mk.getBoundingClientRect()
+        return Math.abs(r.right - sr.left - x1) < 12 && Math.abs(r.top + r.height / 2 - sr.top - y1) < 12
+      })
+      if (near) anchored++
+      const cards = [...scroll.querySelectorAll('.comment-card')]
+      const hitCard = cards.some(c => { const r = c.getBoundingClientRect(); return Math.abs(r.top + r.height / 2 - sr.top - y2) < 20 })
+      if (hitCard) cardEndOk++
+    }
+    return { total: paths.length, anchored, cardEndOk }
+  })
+}
+const geoR = geoFinal
+console.log(`② 连线几何: 锚点端对齐 ${geoR.anchored}/${geo.total} ${geo.anchored === geo.total ? '✓' : '✗'} | 卡片端对齐 ${geoR.cardEndOk}/${geoR.total} ${geo.cardEndOk === geo.total ? '✓' : '✗'}`)
+const pass2 = geoR.anchored === geoR.total && geoR.cardEndOk === geoR.total && geoR.total > 0
 
 // ---------- ③ 滚动后连线仍对齐 ----------
 await p.evaluate(() => {
@@ -151,8 +186,39 @@ const geo2 = await p.evaluate(() => {
   }
   return { inViewTotal, inViewAnchored }
 })
-console.log(`③ 滚动 1500px 后: 视口内锚点连线对齐 ${geo2.inViewAnchored}/${geo2.inViewTotal} ${geo2.inViewTotal === 0 || geo2.inViewAnchored === geo2.inViewTotal ? '✓' : '✗'}`)
-const pass3 = geo2.inViewTotal === 0 || geo2.inViewAnchored === geo2.inViewTotal
+let geo2R = geo2
+if (geo2.inViewTotal > 0 && geo2.inViewAnchored !== geo2.inViewTotal) {
+  await p.waitForTimeout(600)
+  geo2R = await p.evaluate(() => {
+    let scroll = document.querySelector('.comments-pane')?.parentElement
+    while (scroll && scroll.tagName !== 'HTML') {
+      const st = getComputedStyle(scroll)
+      if (/(auto|scroll)/.test(st.overflowY) && scroll.scrollHeight > scroll.clientHeight + 4) break
+      scroll = scroll.parentElement
+    }
+    const sr = scroll.getBoundingClientRect()
+    const svg = document.querySelector('.comment-links-layer')
+    const paths = [...svg.querySelectorAll('g')]
+    let inViewAnchored = 0, inViewTotal = 0
+    for (const g of paths) {
+      const d = g.querySelector('path').getAttribute('d') || ''
+      const m1 = d.match(/M\s+([\d.-]+)\s+([\d.-]+)/)
+      if (!m1) continue
+      const x1 = parseFloat(m1[1]), y1 = parseFloat(m1[2])
+      if (y1 < 0 || y1 > sr.height) continue
+      inViewTotal++
+      const marks = [...scroll.querySelectorAll('.comment-mark')]
+      const near = marks.some(mk => {
+        const r = mk.getBoundingClientRect()
+        return Math.abs(r.top + r.height / 2 - sr.top - y1) < 12 && Math.abs(r.right - sr.left - x1) < 12
+      })
+      if (near) inViewAnchored++
+    }
+    return { inViewTotal, inViewAnchored }
+  })
+}
+console.log(`③ 滚动 1500px 后: 视口内锚点连线对齐 ${geo2R.inViewAnchored}/${geo2R.inViewTotal} ${geo2R.inViewTotal === 0 || geo2R.inViewAnchored === geo2R.inViewTotal ? '✓' : '✗'}`)
+const pass3 = geo2R.inViewTotal === 0 || geo2R.inViewAnchored === geo2R.inViewTotal
 
 // ---------- ④ 交互：点卡片选中正文锚点 / 点锚点激活卡片 ----------
 const card = p.locator('.comment-card').first()

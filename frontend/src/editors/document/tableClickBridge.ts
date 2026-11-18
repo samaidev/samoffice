@@ -29,6 +29,7 @@
 
 import { EditorView } from 'prosemirror-view'
 import { TextSelection } from 'prosemirror-state'
+import { CellSelection } from 'prosemirror-tables'
 
 /** 桥层管理器：为每个 .tableWrapper 在 pm-host 内维护一个接收层。
  * 返回 cleanup。幂等（同 window 只跑一个实例，StrictMode 双挂载安全）。 */
@@ -43,8 +44,16 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
   const host = () => (getView()?.dom?.parentElement as HTMLElement) || null
 
   // ---- 手势状态机（每个 mousedown 会话） ----
+  // round36（用户反馈"无法拖拽多选文字、无法跨格多选"）：
+  // anchor 不再缓存 DOM 文本节点 —— mousedown 单击路径的 dispatch 会触发
+  // PM 重渲染（分页重排重建 <td> 内段落），缓存的节点变孤儿，
+  // setBaseAndExtent 对 detached 节点静默失败（实测 anchorConnected=false
+  // 而选区为空）。改为缓存 PM pos（文档位置，重渲染后依然有效），
+  // 拖选全程走 PM selection（dispatch），DOM 选区由 PM 的 selectionToDOM
+  // 同步 —— 不再直接操作 DOM selection。
   let gesture: {
-    anchor: { node: Node; offset: number } | null // mousedown 处 caret（拖选锚点）
+    anchorPos: number | null // mousedown 处 caret 的 PM 位置（拖选锚点）
+    anchorCellPos: number | null // mousedown 所在单元格的 PM 位置（跨格拖选用）
     startX: number; startY: number
     moved: boolean
     clickCount: number // 同位置累计点击次数（dblclick 判定）
@@ -68,8 +77,11 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     return hit
   }
 
-  /** 坐标 → 精确 caret（禁用全部桥层后 caretRangeFromPoint，同步恢复）。 */
-  const caretAt = (x: number, y: number): { node: Node; offset: number } | null => {
+  /** 坐标 → 精确 caret DOM 位置（禁用全部桥层后 caretRangeFromPoint，同步恢复）。
+   * 仅 mousedown 同步阶段一次性使用（随即换算成 PM pos）；绝不缓存返回的
+   * DOM 节点跨事件使用（round36 根因：dispatch 重渲染后成孤儿节点，
+   * setBaseAndExtent 对其静默失败）。 */
+  const caretDomAt = (x: number, y: number): { node: Node; offset: number } | null => {
     const saved: { el: HTMLElement; v: string }[] = []
     try {
       layers.forEach(l => { saved.push({ el: l, v: l.style.pointerEvents }); l.style.pointerEvents = 'none' })
@@ -83,6 +95,45 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     } catch { return null } finally {
       saved.forEach(s => { s.el.style.pointerEvents = s.v })
     }
+  }
+
+  /** 坐标 → 精确 caret 的 PM 位置（caretDomAt + posAtDOM 一次性换算 ——
+   * round36：拖选全程以 PM pos 为准，DOM 节点仅作同步换算的桥梁）。 */
+  const caretPosAt = (x: number, y: number): number | null => {
+    const v = getView()
+    if (!v) return null
+    const d = caretDomAt(x, y)
+    if (!d) return null
+    try {
+      const pos = v.posAtDOM(d.node, d.offset)
+      if (pos >= 0 && pos <= v.state.doc.content.size) return pos
+    } catch { /* */ }
+    return null
+  }
+
+  /** DOM td → 该单元格节点的 PM 文档位置（跨格拖选 CellSelection 锚点）。
+   * 实现：td 内首个叶子节点 posAtDOM → resolve 向上找 table_cell 层 → before(d)。 */
+  const domCellPos = (v: EditorView, td: HTMLElement): number | null => {
+    try {
+      const firstLeaf = (function findLeaf(el: Node): Node | null {
+        for (const n of Array.from(el.childNodes)) {
+          if (n.nodeType === 3) return n
+          if (n.childNodes && n.childNodes.length > 0) {
+            const r = findLeaf(n)
+            if (r) return r
+          }
+        }
+        return null
+      })(td)
+      if (!firstLeaf) return null
+      const pos = v.posAtDOM(firstLeaf, 0)
+      const $p = v.state.doc.resolve(pos)
+      for (let d = $p.depth; d > 0; d--) {
+        const name = $p.node(d).type.name
+        if (name === 'table_cell' || name === 'table_header') return $p.before(d)
+      }
+      return null
+    } catch { return null }
   }
 
   const selectCellAll = (td: HTMLElement) => {
@@ -138,17 +189,30 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     if (gesture && now - gesture.lastUp < 500 && Math.abs(e.clientX - gesture.startX) < 5 && Math.abs(e.clientY - gesture.startY) < 5) {
       gesture.clickCount++
     } else {
-      gesture = { anchor: null, startX: e.clientX, startY: e.clientY, moved: false, clickCount: 1, lastUp: 0 }
+      gesture = { anchorPos: null, anchorCellPos: null, startX: e.clientX, startY: e.clientY, moved: false, clickCount: 1, lastUp: 0 }
     }
     const g = gesture!
 
-    ;(window as any).__bridgeLog = ((window as any).__bridgeLog || []).concat(['md count=' + g.clickCount + ' td=' + (td.textContent || '').slice(0, 10) + ' xy=' + Math.round(e.clientX) + ',' + Math.round(e.clientY)])
+    // 锚点 caret 与所在格的 PM 位置（同步测量 —— round33 关键修复；
+    // round36：只存 pos 不存 DOM 节点，dispatch 重渲染不影响）
+    const anchorDom = caretDomAt(e.clientX, e.clientY)
+    if (anchorDom) {
+      try {
+        const pos = v.posAtDOM(anchorDom.node, anchorDom.offset)
+        if (pos >= 0 && pos <= v.state.doc.content.size) g.anchorPos = pos
+      } catch { /* */ }
+    }
+    // 所在单元格的 PM 位置：跨格拖选的 CellSelection 锚点。
+    // td 定位法（cellAt 返回的 DOM td）→ 向上找 td 的 pos（DOM 遍历）。
+    g.anchorCellPos = domCellPos(v, td)
+
+    ;(window as any).__bridgeLog = ((window as any).__bridgeLog || []).concat(['md count=' + g.clickCount + ' td=' + (td.textContent || '').slice(0, 10) + ' anchorPos=' + g.anchorPos + ' cellPos=' + g.anchorCellPos])
     if (g.clickCount === 3) {
       // 三击：选中整个单元格。PM state 也要同步（focus 的
       // selectionToDOM 会用 state.selection 覆盖 DOM 选区 —— 双击
       // 同款坑，round34）。
       selectCellAll(td)
-      g.anchor = null
+      g.anchorPos = null
       try {
         const sel = window.getSelection()
         if (sel && sel.rangeCount > 0) {
@@ -162,18 +226,14 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
       return
     }
 
-    // 单击/双击的锚点 caret（同步测量 —— round33 关键修复）
-    g.anchor = caretAt(e.clientX, e.clientY)
-    ;(window as any).__bridgeLog = ((window as any).__bridgeLog || []).concat(['anchor=' + (g.anchor ? (g.anchor.node.textContent || '').slice(0, 10) + '@' + g.anchor.offset : 'null')])
-
     // 双击：选中所点单词。Range.expand('word') 对中文/数字混排不可靠
     // （r34 实测 "[10 000" 上 expand 保持 collapsed）—— 改用
     // Selection.modify 的 word granularity 双向扩展（Chromium 稳定）。
-    if (g.clickCount === 2 && g.anchor) {
+    if (g.clickCount === 2 && anchorDom) {
       const sel = window.getSelection()
       try {
         const range = window.document.createRange()
-        range.setStart(g.anchor.node, g.anchor.offset)
+        range.setStart(anchorDom.node, anchorDom.offset)
         range.collapse(true)
         sel?.removeAllRanges()
         sel?.addRange(range)
@@ -200,19 +260,16 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     // 顺序关键（round34 时间线实锤）：focus() 若在 selection 设置之后，
     // Chromium 会在 focus 归位时把 caret 重放到编辑器末尾（9615）；
     // 必须先 focus（清掉旧焦点状态），再放 DOM selection，再同步 PM。
-    if (g.anchor) {
+    if (g.anchorPos != null) {
       (v.dom as HTMLElement).focus({ preventScroll: true })
       try {
-        const pmPos = v.posAtDOM(g.anchor.node, g.anchor.offset)
-        if (pmPos >= 0) {
-          // 禁止 PM 自动 scrollIntoView（round34：点击后 wrapper 被滚到
-          // 视口顶 y=0，后续点击全部错位 —— 用户「点击像刷新」的观感来源）。
-          // 点击的 caret 本来就在视口内，无需滚动。
-          v.dispatch(v.state.tr.setSelection((v.state.selection as any).constructor.near(v.state.doc.resolve(Math.min(pmPos, v.state.doc.content.size)), 1)).setMeta('scrollIntoView', false))
-        }
+        // 禁止 PM 自动 scrollIntoView（round34：点击后 wrapper 被滚到
+        // 视口顶 y=0，后续点击全部错位 —— 用户「点击像刷新」的观感来源）。
+        // 点击的 caret 本来就在视口内，无需滚动。
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(Math.min(g.anchorPos, v.state.doc.content.size)), 1)).setMeta('scrollIntoView', false))
       } catch { /* PM 同步失败不阻塞 DOM caret */ }
       const range = window.document.createRange()
-      range.setStart(g.anchor.node, g.anchor.offset)
+      range.setStart(anchorDom!.node, anchorDom!.offset)
       range.collapse(true)
       const sel = window.getSelection()
       sel?.removeAllRanges()
@@ -230,7 +287,10 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
         (v.dom as HTMLElement).focus({ preventScroll: true })
         try {
           const pmPos = v.posAtDOM(firstText, 0)
-          if (pmPos >= 0) v.dispatch(v.state.tr.setSelection((v.state.selection as any).constructor.near(v.state.doc.resolve(pmPos), 1)).setMeta('scrollIntoView', false))
+          if (pmPos >= 0) {
+            g.anchorPos = pmPos
+            v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(pmPos), 1)).setMeta('scrollIntoView', false))
+          }
         } catch { /* */ }
         const range = window.document.createRange()
         range.setStart(firstText, 0)
@@ -242,16 +302,50 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     }
   }
 
-  // 拖选：mousedown 后 move —— 从 anchor 到当前点扩选
+  // 拖选：mousedown 后 move —— 从 anchor 到当前点扩选（round36 重写）。
+  // 全程走 PM selection（dispatch TextSelection / CellSelection），由 PM 的
+  // selectionToDOM 同步 DOM 选区 —— 不再直接 setBaseAndExtent（旧实现缓存
+  // 的 DOM 节点被 dispatch 重渲染成孤儿，静默失败，拖选全空）。
+  // 跨格规则（对齐 MS Word）：按下格 ≠ 当前格 → CellSelection 矩形多选；
+  // 同格内 → 文本选区。
   const onMousemove = (e: MouseEvent) => {
-    if (!gesture || !gesture.anchor || !gesture.moved) return
+    if (!gesture || gesture.anchorPos == null || !gesture.moved) return
+    // buttons 守卫：无按键按下（mouseup 后的悬停移动）不处理，
+    // 防止选区跟着悬停乱跑（旧实现的悬停污染）。
+    if (!(e.buttons & 1)) return
     const v = getView()
     if (!v) return
-    const caret = caretAt(e.clientX, e.clientY)
-    if (!caret) return
+    const doc = v.state.doc
+
+    // 当前 caret 所在格
+    const curTd = cellAt(e.clientX, e.clientY)
+    const anchorCellPos = gesture.anchorCellPos
+    if (curTd && anchorCellPos != null) {
+      const curCellPos = domCellPos(v, curTd)
+      if (curCellPos != null && curCellPos !== anchorCellPos) {
+        // ---- 跨格拖选：CellSelection（anchor 格 → 当前格矩形） ----
+        // create 的参数是【cell 节点的 before 位置】（对齐 tablePlugins:190
+        // 全表选择的成功先例：pos+2 = table+row 开标签 = 首 cell before）。
+        // resolve(before(cell)) 的 depth=2（parent=row），node(-1)=table，
+        // CellSelection 构造器 TableMap.get(node(-1)) 才能通过 —— 传 cell
+        // 内容位置（+2/+3）会在 node(-1) 上取到 row，抛
+        // "Not a table node: table_row"（r36 实测两次）。
+        try {
+          v.dispatch(v.state.tr.setSelection(CellSelection.create(doc, anchorCellPos, curCellPos)).setMeta('scrollIntoView', false))
+          return
+        } catch { /* CellSelection 失败退回文本选区 */ }
+      }
+    }
+
+    // ---- 格内文本拖选：anchor PM pos → 当前 caret PM pos ----
+    const caretPos = caretPosAt(e.clientX, e.clientY)
+    if (caretPos == null) return
     try {
-      const sel = window.getSelection()
-      if (sel) sel.setBaseAndExtent(gesture.anchor.node, gesture.anchor.offset, caret.node, caret.offset)
+      const from = Math.min(gesture.anchorPos, caretPos)
+      const to = Math.max(gesture.anchorPos, caretPos)
+      if (to > from) {
+        v.dispatch(v.state.tr.setSelection(TextSelection.create(doc, from, to)).setMeta('scrollIntoView', false))
+      }
     } catch { /* */ }
   }
 
@@ -265,11 +359,22 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     // preventDefault，mousedown 里放好的 caret 才能存活。
     // 旧代理层的 60ms 补刀就是在对抗这个 —— 从根上阻止即可。
     e.preventDefault()
+    // round36：拖选会话结束 —— moved 时不保留 anchor（下次 mousedown
+    // 重新判定单击/双击）；未 moved（纯单击）保留 gesture 让 clickCount
+    // 累计（双击/三击判定用），但不保留 anchorPos（防 mousemove 悬停污染）。
+    if (gesture.moved) {
+      gesture.anchorPos = null
+      gesture.anchorCellPos = null
+      gesture.moved = false
+    } else {
+      gesture.anchorPos = null
+    }
   }
 
   // move 超过阈值才进入拖选（避免手抖把单击变拖选）
   const onMousemoveArm = (e: MouseEvent) => {
-    if (!gesture || !gesture.anchor) return
+    if (!gesture || gesture.anchorPos == null) return
+    if (!(e.buttons & 1)) return
     if (!gesture.moved) {
       if (Math.abs(e.clientX - gesture.startX) < 4 && Math.abs(e.clientY - gesture.startY) < 4) return
       gesture.moved = true
