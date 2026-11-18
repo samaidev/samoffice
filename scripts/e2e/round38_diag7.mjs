@@ -1,0 +1,25 @@
+import { chromium } from 'playwright'
+import fs from 'fs'
+const DOC = JSON.parse(fs.readFileSync('/home/z/my-project/samoffice/scripts/fixtures/comments_doc.udm.json', 'utf-8'))
+const b = await chromium.launch({ args: ['--no-sandbox'] })
+const p = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage()
+await p.goto('http://localhost:18400/?r38g=' + Date.now(), { waitUntil: 'networkidle' })
+await p.waitForTimeout(1200)
+await p.evaluate(() => { window.__r38LayoutLog = [] })
+await p.evaluate(d => window.__setDocForTest(d), DOC)
+await p.waitForTimeout(2500)
+const n1 = await p.evaluate(() => window.__r38LayoutLog.length)
+const t1 = await p.evaluate(() => window.__r38LayoutLog.map(e => e.t))
+await p.evaluate(() => { window.__r38LayoutLog = [] })
+await p.click('.ProseMirror', { position: { x: 300, y: 80 }, force: true, timeout: 8000 })
+await p.waitForTimeout(200)
+for (let i = 0; i < 30; i++) await p.keyboard.press('Enter')
+await p.waitForTimeout(2500)
+const n2 = await p.evaluate(() => window.__r38LayoutLog.length)
+const m = await p.evaluate(() => {
+  const mm = document.querySelector('.comment-mark[data-comment-id="c1"]')
+  const c = document.getElementById('comment-card-c1')
+  return mm && c ? { markTop: Math.round(mm.getBoundingClientRect().top), styleTop: c.style.top } : null
+})
+console.log('注入期布局次数:', n1, '| Enter 后布局次数:', n2, '| 终态:', JSON.stringify(m))
+await b.close()

@@ -772,7 +772,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     // 面板顶相对滚动容器顶（面板 sticky，通常 = 0；分栏/对比布局下可能非零）
     const paneOffset = pr.top - sr.top
     // 滚动容器可视高（卡片 clamp 用）——面板 maxHeight 100%，可视高即容器高
-    const viewH = scroll.clientHeight
     const nextLayout: Record<string, { top: number; height: number }> = {}
     const anchors: { id: string; ay: number; height: number }[] = []
     // 阶段1：测量自然高度
@@ -796,19 +795,18 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       } else {
         top = prevBottom === -Infinity ? 30 : prevBottom + 10
       }
-      // clamp 到面板可视范围（首卡不小于标题下 0，尾卡不超出可视底）
+      // 首卡不小于面板顶（标题下方），其后只做防重叠 —— 不做底部钳制：
+      // round38 根因：maxTop=viewH-h-4 曾把卡片强行压回可视窗口，长文档
+      // 多批注时锚点已滚远而卡片被钉在窗口底（用户反馈"批注不跟正文走"）。
+      // Word 式行为：卡片 top 始终对齐锚点（相对 sticky 面板顶），
+      // 锚点滚出视口的卡片自然落在面板可视区外，由面板 overflow 剪切。
       top = Math.max(top, 30)
       if (top < prevBottom) top = prevBottom + 8
-      // 底部钳制（视口内）后再防重叠：maxTop 若把卡片拉回上一张之上，
-      // 保持防重叠优先（卡片允许滚出面板底部可视区，但绝不允许叠在一起）
-      const maxTop = viewH - h - 4
-      if (top > maxTop && maxTop > prevBottom) top = maxTop
       nextLayout[c.id] = { top, height: h }
       anchors.push({ id: c.id, ay: top + h / 2, height: h })
       prevBottom = top + h
     }
     setCommentCardsLayout(nextLayout)
-    setCommentPaneH(prevBottom + 12)
     // 阶段3：连线端点（锚点右缘 → 面板左缘，卡片中心 y）
     const links: { id: string; x1: number; y1: number; x2: number; y2: number; cx: number }[] = []
     for (const c of comments) {
@@ -1140,7 +1138,6 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   // 卡片在批注面板内的绝对定位（top, height 由测量回填，防重叠堆叠由布局阶段计算）
   const [commentCardsLayout, setCommentCardsLayout] = useState<Record<string, { top: number; height: number }>>({})
   // 批注面板内容高度（至少盖住最后一张卡：绝对定位卡片超出面板盒则滚动不可达）
-  const [commentPaneH, setCommentPaneH] = useState(0)
   const pageContentPerPage = Math.max(50, pageHeightPx - docMargins.top - docMargins.bottom)
   const pageGap = Math.max(16, Math.round(pageHeightPx * 0.03))
   const metricsRef = useRef({ pageContentPerPage, gap: pageGap, marginTop: docMargins.top, marginBottom: docMargins.bottom, pageHeightPx, zoom: zoom / 100, collapse: whiteSpaceHidden })
@@ -4334,7 +4331,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
 
         {/* 右侧批注栏（对齐 MS Word 审阅窗格：批注卡片显示在正文右侧，与批注锚点对应）。
             round35：卡片改为面板内绝对定位（top 由布局阶段对齐锚点并防重叠计算），
-            并新增连线层把卡片与正文锚点连起来（用户反馈"缺少连接线"）。 */}
+            并新增连线层把卡片与正文锚点连起来（用户反馈"缺少连接线"）。
+            round38：minHeight 撑高已移除 —— 面板高度=可视高（sticky 视口），
+            卡片随锚点定位（可能落在面板外被 overflow 剪切），面板自身不再滚动。 */}
         {comments.length > 0 && (
           <div
             className="comments-pane"
@@ -4343,13 +4342,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
               flexShrink: 0,
               borderLeft: '1px solid var(--color-border)',
               background: 'var(--color-surface)',
-              overflowY: 'auto',
+              overflowY: 'hidden',
               padding: '12px 10px',
               position: 'sticky',
               top: 0,
               alignSelf: 'flex-start',
+              height: '100%',
               maxHeight: '100%',
-              minHeight: commentPaneH > 0 ? Math.min(commentPaneH, 100000) : undefined,
             }}
           >
             <div className="comments-pane-header">{t('doc.comments') || '批注'} ({comments.length})</div>
