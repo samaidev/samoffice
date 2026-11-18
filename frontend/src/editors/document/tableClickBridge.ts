@@ -29,7 +29,7 @@
 
 import { EditorView } from 'prosemirror-view'
 import { TextSelection } from 'prosemirror-state'
-import { CellSelection } from 'prosemirror-tables'
+import { CellSelection, cellAround, inSameTable, tableEditingKey } from 'prosemirror-tables'
 
 /** 桥层管理器：为每个 .tableWrapper 在 pm-host 内维护一个接收层。
  * 返回 cleanup。幂等（同 window 只跑一个实例，StrictMode 双挂载安全）。 */
@@ -44,16 +44,18 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
   const host = () => (getView()?.dom?.parentElement as HTMLElement) || null
 
   // ---- 手势状态机（每个 mousedown 会话） ----
-  // round36（用户反馈"无法拖拽多选文字、无法跨格多选"）：
-  // anchor 不再缓存 DOM 文本节点 —— mousedown 单击路径的 dispatch 会触发
-  // PM 重渲染（分页重排重建 <td> 内段落），缓存的节点变孤儿，
-  // setBaseAndExtent 对 detached 节点静默失败（实测 anchorConnected=false
-  // 而选区为空）。改为缓存 PM pos（文档位置，重渲染后依然有效），
-  // 拖选全程走 PM selection（dispatch），DOM 选区由 PM 的 selectionToDOM
-  // 同步 —— 不再直接操作 DOM selection。
+  // round37：跨格拖选不再手写 domCellPos 坐标运算，改为移植开源引擎
+  // prosemirror-tables 的 handleMouseDown$1（dist 2203 行）同款算法：
+  // anchor 存 cell 的 $resolved pos（cellAround 解析），mousemove 里
+  // cellUnderMouse→posAtCoords 重新解析目标格，inSameTable 校验，
+  // CellSelection 直接构造 —— 与 TipTap/Atlassian 编辑器逐字节同源。
+  // （r36 手写算法实测可用，但 corner-case 全靠人肉枚举；引擎算法
+  // 经过了上游全部测试集。）
+  // 格内文字拖选仍走 round36 的 PM pos 方案（引擎的文本选区依赖
+  // 浏览器原生 drag-select —— 死区下没有，必须桥内自建）。
   let gesture: {
-    anchorPos: number | null // mousedown 处 caret 的 PM 位置（拖选锚点）
-    anchorCellPos: number | null // mousedown 所在单元格的 PM 位置（跨格拖选用）
+    anchorPos: number | null // mousedown 处 caret 的 PM 位置（格内文本拖选锚点）
+    anchorCellPosNum: number | null // mousedown 所在格 cell pos（数字；move 时重新 resolve —— 引擎同源：ResolvedPos 跨事务后 doc 失配会抛 "must point at the current document"，r37 实测）
     startX: number; startY: number
     moved: boolean
     clickCount: number // 同位置累计点击次数（dblclick 判定）
@@ -111,30 +113,8 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     return null
   }
 
-  /** DOM td → 该单元格节点的 PM 文档位置（跨格拖选 CellSelection 锚点）。
-   * 实现：td 内首个叶子节点 posAtDOM → resolve 向上找 table_cell 层 → before(d)。 */
-  const domCellPos = (v: EditorView, td: HTMLElement): number | null => {
-    try {
-      const firstLeaf = (function findLeaf(el: Node): Node | null {
-        for (const n of Array.from(el.childNodes)) {
-          if (n.nodeType === 3) return n
-          if (n.childNodes && n.childNodes.length > 0) {
-            const r = findLeaf(n)
-            if (r) return r
-          }
-        }
-        return null
-      })(td)
-      if (!firstLeaf) return null
-      const pos = v.posAtDOM(firstLeaf, 0)
-      const $p = v.state.doc.resolve(pos)
-      for (let d = $p.depth; d > 0; d--) {
-        const name = $p.node(d).type.name
-        if (name === 'table_cell' || name === 'table_header') return $p.before(d)
-      }
-      return null
-    } catch { return null }
-  }
+  // （round37：domCellPos 手写坐标运算已退役 —— 跨格拖选改用引擎算法
+  //  cellAround/inSameTable/CellSelection，见 onMousemove。）
 
   const selectCellAll = (td: HTMLElement) => {
     const range = window.document.createRange()
@@ -189,11 +169,11 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     if (gesture && now - gesture.lastUp < 500 && Math.abs(e.clientX - gesture.startX) < 5 && Math.abs(e.clientY - gesture.startY) < 5) {
       gesture.clickCount++
     } else {
-      gesture = { anchorPos: null, anchorCellPos: null, startX: e.clientX, startY: e.clientY, moved: false, clickCount: 1, lastUp: 0 }
+      gesture = { anchorPos: null, anchorCellPosNum: null, startX: e.clientX, startY: e.clientY, moved: false, clickCount: 1, lastUp: 0 }
     }
     const g = gesture!
 
-    // 锚点 caret 与所在格的 PM 位置（同步测量 —— round33 关键修复；
+    // 锚点 caret（同步测量 —— round33 关键修复；
     // round36：只存 pos 不存 DOM 节点，dispatch 重渲染不影响）
     const anchorDom = caretDomAt(e.clientX, e.clientY)
     if (anchorDom) {
@@ -202,15 +182,94 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
         if (pos >= 0 && pos <= v.state.doc.content.size) g.anchorPos = pos
       } catch { /* */ }
     }
-    // 所在单元格的 PM 位置：跨格拖选的 CellSelection 锚点。
-    // td 定位法（cellAt 返回的 DOM td）→ 向上找 td 的 pos（DOM 遍历）。
-    g.anchorCellPos = domCellPos(v, td)
+    // 所在格的 cell pos（数字）：跨格拖选锚点（round37 引擎算法）。
+    // 引擎同源逻辑（handleMouseDown$1）：domInCell(view, target) + 
+    // cellUnderMouse 事件坐标 → cellAround。桥下 target 是层不是 td，
+    // 用 cellAt 几何扫描得到的 td 内 caret pos 反解。
+    // ★ 只存数字 pos —— ResolvedPos 跨事务（doc 替换）后失配，引擎在
+    //   move() 里也是存 pos（tableEditingKey state）每次重新 resolve。
+    const resolveAnchorCell = (): number | null => {
+      try {
+        if (anchorDom) {
+          const caretPos = v.posAtDOM(anchorDom.node, anchorDom.offset)
+          if (caretPos >= 0) {
+            const $cell = cellAround(v.state.doc.resolve(caretPos))
+            if ($cell) return $cell.pos
+          }
+        }
+        // caret 测量失败（空白 padding 处）：td 内首文本 pos 反解
+        const firstText = (function findText(el: Node): Text | null {
+          for (const n of Array.from(el.childNodes)) {
+            if (n.nodeType === 3) return n as Text
+            const r = findText(n); if (r) return r
+          }
+          return null
+        })(td)
+        if (firstText) {
+          const pos = v.posAtDOM(firstText, 0)
+          if (pos >= 0) {
+            const $cell = cellAround(v.state.doc.resolve(pos))
+            if ($cell) return $cell.pos
+          }
+        }
+      } catch { /* */ }
+      return null
+    }
+    g.anchorCellPosNum = resolveAnchorCell()
 
-    ;(window as any).__bridgeLog = ((window as any).__bridgeLog || []).concat(['md count=' + g.clickCount + ' td=' + (td.textContent || '').slice(0, 10) + ' anchorPos=' + g.anchorPos + ' cellPos=' + g.anchorCellPos])
+    // ---- Shift+click：扩展 CellSelection（round37，引擎 handleMouseDown$1
+    // 的 shift 分支移植，dist 2210-2216）：
+    //   分支A（已有 CellSelection）：以 state.selection.$anchorCell 为锚、
+    //         点击格为 head 扩展 —— setCellSelection($anchorCell, event)。
+    //   分支B（文本选区）：锚 = cellAround(state.selection.$anchor)（当前
+    //         caret 所在格），头 = 点击格；两者异格才扩展。
+    //         （r37 初版把分支B写成"本次点击格 vs 本次点击格"恒等永假，
+    //          E2E 实测 ③ 全空后修正。）
+    if (e.shiftKey) {
+      const curSel = v.state.selection as any
+      const shiftHeadPos = resolveAnchorCell() // 点击格（head）
+      if (shiftHeadPos != null) {
+        if (curSel && curSel.$anchorCell && curSel.$headCell) {
+          // 分支A：从 CellSelection 的 anchorCell 扩展
+          try {
+            const $anchor = v.state.doc.resolve(curSel.$anchorCell.pos)
+            const $head = v.state.doc.resolve(shiftHeadPos)
+            v.dispatch(v.state.tr.setSelection(new CellSelection($anchor, $head)).setMeta('scrollIntoView', false))
+            ;(v.dom as HTMLElement).focus({ preventScroll: true })
+            return
+          } catch { /* 扩展失败走正常点击 */ }
+        } else {
+          // 分支B：文本选区 → 锚 = 当前 caret 所在格（引擎 cellAround($anchor)）
+          try {
+            const $anchorCell = cellAround(curSel?.$anchor ?? v.state.selection.$anchor)
+            if ($anchorCell && $anchorCell.pos !== shiftHeadPos) {
+              const $head = v.state.doc.resolve(shiftHeadPos)
+              v.dispatch(v.state.tr.setSelection(new CellSelection($anchorCell, $head)).setMeta('scrollIntoView', false))
+              ;(v.dom as HTMLElement).focus({ preventScroll: true })
+              return
+            }
+          } catch { /* 扩展失败走正常点击 */ }
+        }
+      }
+    }
+
+    ;(window as any).__bridgeLog = ((window as any).__bridgeLog || []).concat(['md count=' + g.clickCount + ' td=' + (td.textContent || '').slice(0, 10) + ' anchorPos=' + g.anchorPos + ' anchorCellPos=' + g.anchorCellPosNum])
     if (g.clickCount === 3) {
-      // 三击：选中整个单元格。PM state 也要同步（focus 的
-      // selectionToDOM 会用 state.selection 覆盖 DOM 选区 —— 双击
-      // 同款坑，round34）。
+      // 三击：选中整个单元格 —— round37 对齐开源引擎 handleTripleClick
+      //（dist 2171：CellSelection($cell) 单格选区）。引擎语义是
+      // CellSelection（含 pm-tables 的 .selectedCell 高亮 + Delete 清格），
+      // 与「点击格选中整格再拖跨格」的连续体验一致。
+      // anchorCellPosNum 是 cell 节点位置（before），resolve 即 $anchorCell ——
+      // 不能再包 cellAround（resolve 后 depth=2，cellAround 从 depth-1 起步
+      // 找不到 row，返回 null 走 catch 回退，r37 diag12 实测）。
+      if (g.anchorCellPosNum != null) {
+        try {
+          const $cell = v.state.doc.resolve(g.anchorCellPosNum)
+          ;(v.dom as HTMLElement).focus({ preventScroll: true })
+          v.dispatch(v.state.tr.setSelection(new CellSelection($cell)).setMeta('scrollIntoView', false))
+          return
+        } catch { /* 引擎路径失败退回 DOM 全选 */ }
+      }
       selectCellAll(td)
       g.anchorPos = null
       try {
@@ -226,27 +285,41 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
       return
     }
 
-    // 双击：选中所点单词。Range.expand('word') 对中文/数字混排不可靠
-    // （r34 实测 "[10 000" 上 expand 保持 collapsed）—— 改用
-    // Selection.modify 的 word granularity 双向扩展（Chromium 稳定）。
-    if (g.clickCount === 2 && anchorDom) {
+    // 双击：选中所点单词（round37 重写）。
+    // 旧实现（v0.7.18）Selection.modify backward+forward 连击在同一 selection
+    // 上执行 —— 第二次 modify 在非空选区上把 focus 推回 anchor 导致清空
+    //（r37 diag9 实测 mid-forward 后 sel=""）。改为【两次独立测量】：
+    // 各自从 collapsed caret 出发测词首/词尾 focusOffset，再组合区间。
+    // clamp：测得的 start > 点击 offset（backward 越过 cell 边界反跳，
+    // r37 diag11 off0 实测 focusOffset=6 跳到别处）时回退点击 offset 本身。
+    if (g.clickCount === 2 && anchorDom && anchorDom.node.nodeType === 3) {
       const sel = window.getSelection()
       try {
-        const range = window.document.createRange()
-        range.setStart(anchorDom.node, anchorDom.offset)
-        range.collapse(true)
-        sel?.removeAllRanges()
-        sel?.addRange(range)
-        ;(sel as any).modify?.('extend', 'backward', 'word')
-        ;(sel as any).modify?.('extend', 'forward', 'word')
-        if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+        const tn = anchorDom.node as Text
+        const off = anchorDom.offset
+        const measure = (dir: 'backward' | 'forward'): number => {
+          const range = window.document.createRange()
+          range.setStart(tn, off)
+          range.collapse(true)
+          sel?.removeAllRanges()
+          sel?.addRange(range)
+          ;(sel as any)?.modify?.('extend', dir, 'word')
+          return sel?.focusOffset ?? off
+        }
+        const start = Math.min(measure('backward'), off)
+        const end = Math.max(measure('forward'), off)
+        if (start < end) {
+          const range = window.document.createRange()
+          range.setStart(tn, start)
+          range.setEnd(tn, end)
+          sel?.removeAllRanges()
+          sel?.addRange(range)
           // PM 的 selectionToDOM 会在 focus 后用 state.selection 覆盖
           // DOM 选区 —— 必须把词选区同步进 PM state（round34：双击
           // 选词被 focus 清空的根因）。
           try {
-            const r0 = sel.getRangeAt(0)
-            const fromP = v.posAtDOM(r0.startContainer, r0.startOffset)
-            const toP = v.posAtDOM(r0.endContainer, r0.endOffset)
+            const fromP = v.posAtDOM(tn, start)
+            const toP = v.posAtDOM(tn, end)
             v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, fromP, toP)).setMeta('scrollIntoView', false))
           } catch { /* 同步失败保留 DOM 选区 */ }
           (v.dom as HTMLElement).focus({ preventScroll: true })
@@ -302,14 +375,16 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     }
   }
 
-  // 拖选：mousedown 后 move —— 从 anchor 到当前点扩选（round36 重写）。
-  // 全程走 PM selection（dispatch TextSelection / CellSelection），由 PM 的
-  // selectionToDOM 同步 DOM 选区 —— 不再直接 setBaseAndExtent（旧实现缓存
-  // 的 DOM 节点被 dispatch 重渲染成孤儿，静默失败，拖选全空）。
-  // 跨格规则（对齐 MS Word）：按下格 ≠ 当前格 → CellSelection 矩形多选；
-  // 同格内 → 文本选区。
+  // 拖选：mousedown 后 move —— 从 anchor 到当前点扩选（round37 引擎移植）。
+  // 格内文本拖选：round36 的 PM pos 方案（引擎依赖浏览器原生 drag-select，
+  // 死区下没有，必须桥内自建）。
+  // 跨格拖选：移植 prosemirror-tables handleMouseDown$1 的 setCellSelection
+  //（dist 2203 行）—— cellUnderMouse 解析目标格 → inSameTable 校验 →
+  // CellSelection(anchor, head) dispatch。唯一桥内适配：引擎的
+  // cellUnderMouse 调 view.posAtCoords（死区下 null），改用 caretPosAt
+  //（禁层 + caretRangeFromPoint + posAtDOM 链路）。
   const onMousemove = (e: MouseEvent) => {
-    if (!gesture || gesture.anchorPos == null || !gesture.moved) return
+    if (!gesture || !gesture.moved) return
     // buttons 守卫：无按键按下（mouseup 后的悬停移动）不处理，
     // 防止选区跟着悬停乱跑（旧实现的悬停污染）。
     if (!(e.buttons & 1)) return
@@ -317,27 +392,45 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     if (!v) return
     const doc = v.state.doc
 
-    // 当前 caret 所在格
-    const curTd = cellAt(e.clientX, e.clientY)
-    const anchorCellPos = gesture.anchorCellPos
-    if (curTd && anchorCellPos != null) {
-      const curCellPos = domCellPos(v, curTd)
-      if (curCellPos != null && curCellPos !== anchorCellPos) {
-        // ---- 跨格拖选：CellSelection（anchor 格 → 当前格矩形） ----
-        // create 的参数是【cell 节点的 before 位置】（对齐 tablePlugins:190
-        // 全表选择的成功先例：pos+2 = table+row 开标签 = 首 cell before）。
-        // resolve(before(cell)) 的 depth=2（parent=row），node(-1)=table，
-        // CellSelection 构造器 TableMap.get(node(-1)) 才能通过 —— 传 cell
-        // 内容位置（+2/+3）会在 node(-1) 上取到 row，抛
-        // "Not a table node: table_row"（r36 实测两次）。
-        try {
-          v.dispatch(v.state.tr.setSelection(CellSelection.create(doc, anchorCellPos, curCellPos)).setMeta('scrollIntoView', false))
-          return
-        } catch { /* CellSelection 失败退回文本选区 */ }
+    // ---- 引擎算法：跨格 CellSelection ----
+    // 引擎语义（handleMouseDown$1.move）：目标格 ≠ 起始格 → CellSelection。
+    // 桥适配：锚存数字 pos（mousedown 时），每次 move 从当前 doc 重新
+    // resolve（引擎 move 同款 —— ResolvedPos 缓存跨事务会 doc 失配抛
+    // "must point at the current document"，r37 实测踩坑）；目标格用
+    // caret pos 反解。
+    if (gesture.anchorCellPosNum != null) {
+      // 引擎 move 同源：anchor 存 $anchorCell.pos（cell 节点位置），
+      // 每次 resolve 即得 $anchorCell —— 不能再包 cellAround（resolve(cell
+      // 节点位置) 的 depth 停在 row，cellAround 找不到 row 祖先返回 null，
+      // r37 mv 日志 $a=null 实锤）。
+      let $anchorCell: any = null
+      try { $anchorCell = doc.resolve(gesture.anchorCellPosNum) } catch { /* */ }
+      const curTd = cellAt(e.clientX, e.clientY)
+      if ($anchorCell && curTd) {
+        const curCaret = caretPosAt(e.clientX, e.clientY)
+        // $head：引擎 cellUnderMouse 的桥内版 —— caret pos 在 cell 内容内，
+        // cellAround(resolve(caretPos)) 返回 $headCell（cell 节点位置）。
+        // 同格判定（引擎语义 head.pos != anchor.pos 才跨格）。
+        const $head = curCaret != null ? cellAround(doc.resolve(curCaret)) : null
+        if ($head && $head.pos !== $anchorCell.pos) {
+          try {
+            // inSameTable 用 $resolved 深度+范围校验（引擎 dist 434）
+            if (inSameTable($head, $anchorCell)) {
+              v.dispatch(v.state.tr.setSelection(new CellSelection($anchorCell, $head)).setMeta('scrollIntoView', false))
+              return
+            }
+          } catch { /* CellSelection 失败退回文本选区 */ }
+        }
+        // 同格或解析失败 → 落到格内文本拖选
+      } else if (!$anchorCell || (curTd === null && caretPosAt(e.clientX, e.clientY) === null)) {
+        // 移出表格（间隙/表格外）→ 引擎 move 里 domInCell 变更时 stop；
+        // 桥语义：保留当前选区不动（不做任何 dispatch）
+        return
       }
     }
 
     // ---- 格内文本拖选：anchor PM pos → 当前 caret PM pos ----
+    if (gesture.anchorPos == null) return
     const caretPos = caretPosAt(e.clientX, e.clientY)
     if (caretPos == null) return
     try {
@@ -359,21 +452,15 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     // preventDefault，mousedown 里放好的 caret 才能存活。
     // 旧代理层的 60ms 补刀就是在对抗这个 —— 从根上阻止即可。
     e.preventDefault()
-    // round36：拖选会话结束 —— moved 时不保留 anchor（下次 mousedown
-    // 重新判定单击/双击）；未 moved（纯单击）保留 gesture 让 clickCount
-    // 累计（双击/三击判定用），但不保留 anchorPos（防 mousemove 悬停污染）。
-    if (gesture.moved) {
-      gesture.anchorPos = null
-      gesture.anchorCellPos = null
-      gesture.moved = false
-    } else {
-      gesture.anchorPos = null
-    }
+    // round37：会话结束清 anchor（clickCount 保留供双击/三击累计）。
+    gesture.anchorPos = null
+    gesture.anchorCellPosNum = null
+    gesture.moved = false
   }
 
   // move 超过阈值才进入拖选（避免手抖把单击变拖选）
   const onMousemoveArm = (e: MouseEvent) => {
-    if (!gesture || gesture.anchorPos == null) return
+    if (!gesture || (gesture.anchorPos == null && gesture.anchorCellPosNum == null)) return
     if (!(e.buttons & 1)) return
     if (!gesture.moved) {
       if (Math.abs(e.clientX - gesture.startX) < 4 && Math.abs(e.clientY - gesture.startY) < 4) return
