@@ -240,6 +240,12 @@ def main() -> int:
     print(f"[publish] slot: ms={ms_account} hf={hf_account}")
 
     v = args.version.lstrip("v")
+    # 旧 tag 重推保护：版本早于 catalog 最新版时整体跳过（不上传、不回写）
+    cur_latest = next((p.get("latest") for p in cat0["products"] if p["id"] == args.product), None)
+    if cur_latest and _ver_tuple(v) < _ver_tuple(str(cur_latest)):
+        print(f"[publish] SKIP: {args.product} {v} older than catalog latest {cur_latest} "
+              f"(stale tag re-push; nothing uploaded, catalog untouched)")
+        return 0
     pattern = args.glob or f"{args.product}_{v}*"
     low_prefix = pattern.replace("*", "").lower()
     targets = sorted(p for p in dist.iterdir() if p.name.lower().startswith(low_prefix))
