@@ -1,0 +1,4 @@
+v0.7.19
+SamOffice-setup-0.7.19.exe
+20140875
+8c4e97f4444b88df46a92e2996bffd7e26ad3d4c6a268df17b9238f6fc4fbbb6
