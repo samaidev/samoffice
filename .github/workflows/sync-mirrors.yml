@@ -1,0 +1,126 @@
+# sync-release-mirrors: Release 发布后自动——
+#   1) 从最新统一发布取安装包资产, 重算 manifest.txt 并提交回本仓库 (GitHub raw 清单立即生效)
+#   2) HuggingFace dataset 镜像 (mojoz/samoffice_r): 删仓重建, latest-only
+#   3) ModelScope dataset 镜像 (luoyunlan168/samoffice_r): 同步上传 + 清理旧版 exe
+# 镜像执行 latest-only 策略: 只保留当前最新安装包, 真实文件名原样上传。
+# 凭证全部走仓库 Secrets: HF_TOKEN / MS_TOKEN (未配置则自动跳过对应渠道)。
+# 本文件由统一分发体系生成 (downinstall/products), 路由安装器 config.h 与此对应。
+name: sync-release-mirrors
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-mirrors
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release asset (SamOffice-setup-*.exe)
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            gh api "repos/${{ github.repository }}/releases/tags/$TAG" > rel.json
+          else
+            gh api "repos/${{ github.repository }}/releases?per_page=100" \
+              --jq '[.[] | select(any(.assets[]; .name | test("^SamOffice-setup-.*\\.exe$")))][0]' > rel.json
+          fi
+          if [ ! -s rel.json ] || [ "$(jq -r '.message // empty' rel.json)" = "Not Found" ]; then
+            echo "::notice::no installer asset found, skip"
+            exit 0
+          fi
+          URL="$(jq -r '[.assets[] | select(.name | test("^SamOffice-setup-.*\\.exe$")) | .browser_download_url][0]' rel.json)"
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "::notice::no installer asset in release, skip"
+            exit 0
+          fi
+          FNAME="${URL##*/}"
+          VER="${FNAME#SamOffice-setup-}"; VER="${VER%.exe}"
+          curl -fsSL --retry 3 -o "$FNAME" "$URL"
+          echo "ver=$VER"     >> "$GITHUB_OUTPUT"
+          echo "fname=$FNAME" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import hashlib, os
+          fname, ver = os.environ['FNAME'], os.environ['VER']
+          h = hashlib.sha256()
+          with open(fname, 'rb') as f:
+              for chunk in iter(lambda: f.read(1 << 20), b''):
+                  h.update(chunk)
+          open('manifest.txt', 'w').write(f"v{ver}\n{fname}\n{os.path.getsize(fname)}\n{h.hexdigest()}\n")
+          print(open('manifest.txt').read())
+          PY
+
+      - name: Commit manifest (GitHub raw 立即生效)
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.txt
+          if git diff --cached --quiet; then
+            echo "manifest unchanged, skip commit"
+          else
+            git commit -m "chore: sync manifest to ${{ steps.rel.outputs.fname }}"
+            git push
+          fi
+
+      - name: Sync to HuggingFace (mojoz/samoffice_r, latest-only)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HF_TOKEN:-}" ]; then echo "::warning::HF_TOKEN not set, skip HF"; exit 0; fi
+          pip install -q "huggingface_hub>=0.30"
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ['HF_TOKEN'])
+          repo, fname = 'mojoz/samoffice_r', os.environ['FNAME']
+          try:
+              api.delete_repo(repo_id=repo, repo_type='dataset')
+          except Exception as e:
+              if '404' not in str(e) and 'RepositoryNotFound' not in type(e).__name__:
+                  print('delete warn:', type(e).__name__)
+          api.create_repo(repo_id=repo, repo_type='dataset', private=False, exist_ok=True)
+          api.upload_file(path_or_fileobj=fname, path_in_repo=fname, repo_id=repo,
+                          repo_type='dataset', commit_message=f'mirror {fname} (latest-only)')
+          api.upload_file(path_or_fileobj='manifest.txt', path_in_repo='manifest.txt', repo_id=repo,
+                          repo_type='dataset', commit_message='mirror manifest (latest-only)')
+          print('HF synced:', repo)
+          PY
+
+      - name: Sync to ModelScope (luoyunlan168/samoffice_r, latest-only)
+        env:
+          MS_TOKEN: ${{ secrets.MS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MS_TOKEN:-}" ]; then echo "::warning::MS_TOKEN not set, skip MS"; exit 0; fi
+          pip install -q modelscope
+          python3 - <<'PY'
+          import os
+          from modelscope.hub.api import HubApi
+          api = HubApi()
+          api.login(os.environ['MS_TOKEN'])
+          repo, fname = 'luoyunlan168/samoffice_r', os.environ['FNAME']
+          try:
+              api.create_repo(repo_id=repo, repo_type='dataset', exist_ok=True)
+          except Exception:
+              pass
+          api.upload_file(path_or_fileobj=fname, path_in_repo=fname, repo_id=repo,
+                          repo_type='dataset', commit_message='mirror latest-only')
+          api.upload_file(path_or_fileobj='manifest.txt', path_in_repo='manifest.txt', repo_id=repo,
+                          repo_type='dataset', commit_message='mirror manifest')
+          print('MS synced:', repo)
+          PY
