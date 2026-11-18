@@ -104,7 +104,8 @@ def detect_platform(name: str, default: str) -> str | None:
 def detect_kind(name: str) -> str:
     """installer = 双击安装（setup.exe / .pkg）；portable = 解包即用。"""
     low = name.lower()
-    if low.endswith("setup.exe") or low.endswith(".pkg"):
+    if low.endswith(".pkg") or low.endswith("setup.exe") \
+            or ("setup" in low and low.endswith(".exe")):
         return "installer"
     return "portable"
 
@@ -166,15 +167,33 @@ def push_catalog_to_github(catalog_path: Path, repo: str, branch: str = "main") 
             file_sha = json.load(r).get("sha")
     except Exception:
         pass
-    content = base64.b64encode(catalog_path.read_bytes()).decode()
-    body = {"message": f"catalog: auto update from publish_channels",
-            "content": content, "branch": branch}
-    if file_sha:
-        body["sha"] = file_sha
-    req = urllib.request.Request(api, method="PUT", headers=headers,
-                                 data=json.dumps(body).encode())
-    with urllib.request.urlopen(req, timeout=60) as r:
-        print(f"[catalog] pushed to {repo} ({r.status})")
+    import time
+    for attempt in range(4):
+        if attempt:  # 409 = 并发回写冲突，取最新 sha 重试
+            time.sleep(3 + attempt * 2)
+            file_sha = None
+            try:
+                req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    file_sha = json.load(r).get("sha")
+            except Exception:
+                pass
+        content = base64.b64encode(catalog_path.read_bytes()).decode()
+        body = {"message": f"catalog: auto update from publish_channels",
+                "content": content, "branch": branch}
+        if file_sha:
+            body["sha"] = file_sha
+        req = urllib.request.Request(api, method="PUT", headers=headers,
+                                     data=json.dumps(body).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                print(f"[catalog] pushed to {repo} ({r.status})")
+                return
+        except urllib.error.HTTPError as e:
+            if e.code == 409 and attempt < 3:
+                print(f"[catalog] 409 conflict, retry {attempt + 1}/3")
+                continue
+            raise
 
 
 # ---------------------------------------------------------------- 主流程
