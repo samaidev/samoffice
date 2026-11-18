@@ -20,6 +20,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -110,6 +111,15 @@ def detect_kind(name: str) -> str:
     return "portable"
 
 
+def _ver_tuple(v: str):
+    """'1.4.11' -> (1, 4, 11)；非数字段按 0 处理。"""
+    parts = []
+    for seg in re.split(r"[.\-+]", v):
+        digits = re.findall(r"\d+", seg)
+        parts.append(int(digits[0]) if digits else 0)
+    return tuple(parts)
+
+
 def update_catalog(catalog_path: Path, product: str, version: str, platform: str,
                    local: Path, hf_url: str, ms_url: str,
                    gh_release_repo: str | None = None) -> None:
@@ -133,6 +143,10 @@ def update_catalog(catalog_path: Path, product: str, version: str, platform: str
     }
     for p in cat["products"]:
         if p["id"] == product:
+            cur_latest = (p.get("latest") or "").strip()
+            if cur_latest and _ver_tuple(v) < _ver_tuple(cur_latest):
+                print(f"[publish] WARN: {product} {v} older than catalog latest {cur_latest} — skip downgrade")
+                return
             p["latest"] = v
             files = p.setdefault("files", {})
             cur = files.get(platform)
