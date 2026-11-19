@@ -14,7 +14,7 @@
   },
   "info": {
     "productName": "SamOffice",
-    "productVersion": "0.7.21",
+    "productVersion": "0.7.22",
     "copyright": "Copyright © 2026 SamOffice",
     "comments": "Cross-platform office suite built with Go + Web"
   }
