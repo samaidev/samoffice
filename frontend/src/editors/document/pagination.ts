@@ -55,6 +55,37 @@ export function createPaginationPlugin(
   let lastSkipSig = ''
   let lastDocSig = ''
   let lastContentMaxY = 0
+  // round40（用户反馈"无法跨行/跨段落/中间几个字多选"）：
+  // 拖选进行中（mousedown 已按下且未 mouseup）挂起全部重算/校验/heal。
+  // 根因：PM 拖选每帧产生 selection 事务 → view.update → schedule →
+  // recompute（pg-measuring 布局扰动）+ 装饰 dispatch → PM selectionToDOM
+  // 把 DOM selection 重置回 state.selection（collapsed）—— 浏览器原生
+  // 拖选永远建立不起来（多页文档必现，单页因装饰签名稳定而不显）。
+  // 挂起期间记录 pending，mouseup 后补一轮重算，保证拖拽结束分页收敛。
+  let mouseDownActive = false
+  let pendingAfterGesture = false
+  const armGestureWatch = (view: EditorView) => {
+    const dom = view.dom as HTMLElement
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0) return
+      mouseDownActive = true
+      pendingAfterGesture = false
+    }
+    const onUp = () => {
+      if (!mouseDownActive) return
+      mouseDownActive = false
+      if (pendingAfterGesture) {
+        pendingAfterGesture = false
+        schedule(view)
+      }
+    }
+    window.document.addEventListener('mousedown', onDown, true)
+    window.addEventListener('mouseup', onUp, true)
+    return () => {
+      window.document.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('mouseup', onUp, true)
+    }
+  }
 
   // 测量可拆块（段落/标题/代码块）内部“行首”位置：
   // 返回 [{offset, top}]，offset 为块内字符偏移（用于换算文档 pos），
@@ -931,11 +962,15 @@ export function createPaginationPlugin(
   }
 
   const schedule = (view: EditorView) => {
+    // round40：拖选手势进行中挂起重算（见 mouseDownActive 声明处注释）
+    if (mouseDownActive) { pendingAfterGesture = true; return }
     if (scheduled) return
     scheduled = true
     requestAnimationFrame(() => recompute(view))
   }
       const verifyPass = (view: EditorView, round: number) => {
+    // round40：拖选手势进行中不校验不 dispatch（见 mouseDownActive 声明处注释）
+    if (mouseDownActive) { pendingAfterGesture = true; return }
     try {
       const m2 = getMetrics()
       const z2 = m2.zoom > 0 ? m2.zoom : 1
@@ -1073,6 +1108,8 @@ export function createPaginationPlugin(
       // 定时扫一次「块顶落在页间空白带」的漏断块并按 DOM 实况修正 ——
       // 稳态最终一致；无漏断时零 dispatch（无副作用、不抖动）。
       const heal = () => {
+        // round40：拖选进行中不做自愈检查（会 dispatch 装饰事务重置 DOM 选区）
+        if (mouseDownActive) return
         try {
           const m2 = getMetrics()
           const z2 = m2.zoom > 0 ? m2.zoom : 1
@@ -1091,13 +1128,22 @@ export function createPaginationPlugin(
         } catch { /* ignore */ }
       }
       const healTimer = window.setInterval(heal, 800)
+      // round40：手势监听（mousedown 挂起 / mouseup 恢复 + 补一轮重算）
+      const disarmGestureWatch = armGestureWatch(editorView)
       return {
-        update: (v) => {
+        update: (v, prevState) => {
+          // round40：纯 selection 事务（文档未变）不触发重算 ——
+          // 拖选/光标移动每帧产生 selection 事务，旧实现每次都进
+          // recompute（pg-measuring 布局扰动），多页文档下装饰 dispatch
+          // 会把 DOM selection 重置（用户反馈"无法跨行跨段选择"根因）。
+          // 分页只取决于文档与几何参数，与选区无关。
+          if (v.state.doc === prevState.doc) return
           schedule(v)
         },
         destroy: () => {
           cancelAnimationFrame(initHandle)
           window.clearInterval(healTimer)
+          disarmGestureWatch()
           delete (window as any).__pgRecompute
         },
       }

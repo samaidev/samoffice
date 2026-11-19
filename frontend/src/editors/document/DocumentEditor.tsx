@@ -818,7 +818,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       // 多批注时锚点已滚远而卡片被钉在窗口底（用户反馈"批注不跟正文走"）。
       // Word 式行为：卡片 top 始终对齐锚点（相对 sticky 面板顶），
       // 锚点滚出视口的卡片自然落在面板可视区外，由面板 overflow 剪切。
-      top = Math.max(top, 30)
+      // round40 修正：clamp 30 仅在锚点本身在面板顶以下时生效 ——
+      // 锚点已滚出视口上方（markTopInPane < 0）时卡片必须跟随锚点离开
+      // （否则卡片被钉在面板顶而锚点在 -600px，连线/对齐全部断裂；
+      // round38 E2E Enter30 用例实测复现）。跟随出视口由 overflow 剪切。
+      const markTopForClamp = mark ? (mark.getBoundingClientRect().top - pr.top) : top
+      if (markTopForClamp >= 0) top = Math.max(top, 30)
       if (top < prevBottom) top = prevBottom + 8
       // round39 同页约束：卡片必须完整落在锚点所在纸页的页带内。
       // 页带放不下（页尾锚点 + 长卡片）或锚点不在任何纸页上 → 隐藏卡片
@@ -1219,7 +1224,12 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     // React state 引用不变，不触发重渲染循环）。
     const t1 = window.setTimeout(() => requestAnimationFrame(runCommentsLayout), 300)
     const t2 = window.setTimeout(() => requestAnimationFrame(runCommentsLayout), 1200)
-    return () => { cancelAnimationFrame(id); window.clearTimeout(t1); window.clearTimeout(t2) }
+    // round40：Enter 连击等高频事务下，最后一次布局可能跑在分页装饰
+    // 最终应用之前（旧闭包竞态，r36 时代靠 pagination 无限 schedule 链的
+    // 级联事件兜底；update 钩子改为 doc-change-only 后链条变短）。
+    // 2500ms 尾部稳态补跑一次，拿终态坐标（同值短路，无重渲染循环）。
+    const t3 = window.setTimeout(() => requestAnimationFrame(runCommentsLayout), 2500)
+    return () => { cancelAnimationFrame(id); window.clearTimeout(t1); window.clearTimeout(t2); window.clearTimeout(t3) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comments, activeComment, editingComment, zoom, pageRects, whiteSpaceHidden, docMargins, comments.length > 0])
   useEffect(() => {
