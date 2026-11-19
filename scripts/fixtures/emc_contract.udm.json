@@ -1,0 +1,3396 @@
+{
+ "meta": {
+  "title": "EMC 合同效益分配"
+ },
+ "comments": [],
+ "blocks": [
+  {
+   "inline": [
+    {
+     "content": "mojoz@139.com  ",
+     "fontSize": 10
+    },
+    {
+     "content": "回复邮件时告知编辑部联系方式：",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "合同能源管理模式下能源管理公司和用户的效益分配比例研究",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "朱东山，孔英",
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "（北京大学深圳研究生院，广东  深圳  518055）",
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "摘要：",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "在全球气温升高，节能减排的发展趋势下，“合同能源管理”（energy performance contacting，EPC）这一节能金融机制，已成下一阶段节能减排的重要方向。但是目前学界关于节能率和效益分成机制的研究，尚缺乏全面系统的理论。为了弥补这一领域研究的不足，文章从经济学的角度，建立模型结合博弈理论对双边的合同能源效益博弈进行分析和探究，并且通过数据模拟分析了各个参数对节能率和分成比例的影响情况。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "关键字：",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "合同能源；效益分成；信息情形",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "中图分类号：",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "F406.9        ",
+     "fontSize": 10
+    },
+    {
+     "content": "文献标识码：",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "A        ",
+     "fontSize": 10
+    },
+    {
+     "content": "文章编号：",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "1671-4407(2016)",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "Research on the Sharing Proportion of Benefit of EPC between ESCo and client ",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "ZHU Dongshan, KONG Ying",
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "(Peking University Shenzhen Graduate School, Shenzhen Guangdong 518055, China)",
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "Abstract",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": ": In the trend of global temperature rising and energy conservation and emission reduction, the financial mechanism of energy saving performance contacting energy (EPC) has become an important direction of energy-saving emission reduction in the next phase. But at present, there is still a lack of comprehensive and systematic theoretical research on energy efficiency and benefit sharing mechanism. In order to make up for the lack of research in this field, this paper from the perspective of economics established models combined with game theory on bilateral EPC benefit, and analysed the effect of each parameter on energy-saving rate and sharing proportion by simulation.",
+     "fontSize": 10
+    },
+    {
+     "content": "Key words",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": ": energy performance contracting; sharing mechanism; information scenarios",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "作者简介：",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "朱东山，男，广东深圳人，经济学博士，研究方向为低碳经济与金融；孔英，男，加拿大多伦多人，经济学博士，教授，博士生导师，研究方向为低碳经济与金融。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "1  引言",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "合同能源管理（energy performance contacting，EPC）是各国应对气候变化、提高能源使用效率最为重要的一种节能融资机制，亦是沟通节能服务公司与客户间的重要桥梁，其制度设计不仅影响到社会总体节能效果，同时也会在合同双方间产生不同的福利分配效应",
+     "fontSize": 10
+    },
+    {
+     "content": "[1]",
+     "fontSize": 10
+    },
+    {
+     "content": "。我国从20世纪90年代通过世界银行全球环境基金项目，在山东、北京和大连开展试点，目前已有20余个省市出台文件，鼓励发展节能服务产业",
+     "fontSize": 10
+    },
+    {
+     "content": "[2]",
+     "fontSize": 10
+    },
+    {
+     "content": "。近年来，我国政府加大了对合同能源管理商业模式的扶持力度，合同能源发展迅速。据中国节能协会节能服务产业委员会的数据显示，从2006～2013年合同能源管理项目投资从13.1亿元递增到287.51亿元，增长了22倍。虽然合同能源管理发展迅速，但是相对于欧美成熟的合同能源管理市场，中国仍处在节能金融机制的探索阶段，而且即使是欧美的市场，其理论关于合同能源的研究并未能完全满足市场需求",
+     "fontSize": 10
+    },
+    {
+     "content": "[3]",
+     "fontSize": 10
+    },
+    {
+     "content": "。尤其是关于客户和能源服务公司之的节能效益分配问题，当前尚缺乏全面系统的理论。赵丹根据层次分析法，利用专家打分对能源管理公司的贡献、风险进行打分，以最终确定分成比例",
+     "fontSize": 10
+    },
+    {
+     "content": "[4]",
+     "fontSize": 10
+    },
+    {
+     "content": "。刘德军和吕林",
+     "fontSize": 10
+    },
+    {
+     "content": "[5]",
+     "fontSize": 10
+    },
+    {
+     "content": "，李翔鹏",
+     "fontSize": 10
+    },
+    {
+     "content": "[6]",
+     "fontSize": 10
+    },
+    {
+     "content": "等在同领域的应用做了研究。但他们的研究缺少从底层减排成本角度考虑的最优化的节能比例。而因为双方实施合同能源项目的根本目的所在就是以低成本获得这一期望节能收益，能否就节能效益的分配达成一致，直接关系到合同能源项目的顺利实施与否。因此，有必要对其进行深入研究。本文从一开始构建能源管理公司和客户的节能成本及收益函数，通过对最优化计算出公司选择是否进行节能改造，而后根据博弈模型对利润进行博弈分配，进而推导出一个符合经济学逻辑的能源管理公司和节能用户在进行节能后的节能率和效益分配比例。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "2  效益分成模型的构建",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "2.1  基本定义",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "（1）能源管理公司对每年节电收益占总收益的固定最低比例表示为",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "，则节能客户每年节电收益占总收益的比例为1-",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（2）能源管理公司对节能项目投资的要求年回报率为",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "，0<",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "<1。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（3）节能客户节电项目实施前的年耗电量为",
+     "fontSize": 10
+    },
+    {
+     "content": "M",
+     "fontSize": 10
+    },
+    {
+     "content": "。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "2.2  基本假设",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "（1）假设能源管理公司一旦承担减能任务，则承担所有节能费用。本文研究节能效益分享型能源管理服务，并且假设节能服务公司单独承担节能成本。项目分享回报期为",
+     "fontSize": 10
+    },
+    {
+     "content": "N",
+     "fontSize": 10
+    },
+    {
+     "content": "。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（2）客户要求能源公司为其进行节能的收益必须不小于自行进行节能的净收益，否则客户将采取自行节能或者寻求其他能源公司的合作。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（3）假设节能的收益主要形式为节电收益，且电价常年稳定在",
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "fontSize": 10
+    },
+    {
+     "content": "，所以节能客户自行节电的收益函数",
+     "fontSize": 10
+    },
+    {
+     "content": "I",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": ")等于节省电的贴现，而能源管理公司进行节电的收益",
+     "fontSize": 10
+    },
+    {
+     "content": "I",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": ")等于节电实施后项目回报期",
+     "fontSize": 10
+    },
+    {
+     "content": "N",
+     "fontSize": 10
+    },
+    {
+     "content": "内的分成现金流的贴现。用于贴现的无风险利率稳定在",
+     "fontSize": 10
+    },
+    {
+     "content": "r",
+     "fontSize": 10
+    },
+    {
+     "content": "，0<",
+     "fontSize": 10
+    },
+    {
+     "content": "r",
+     "fontSize": 10
+    },
+    {
+     "content": "<1。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（4）假设客户公司自行进行节能减少能耗面临的成本函数为",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "fontSize": 10
+    },
+    {
+     "content": ")=",
+     "fontSize": 10
+    },
+    {
+     "content": "ae",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "-",
+     "fontSize": 10
+    },
+    {
+     "content": "b",
+     "fontSize": 10
+    },
+    {
+     "content": "。其中e为自然对数的底，",
+     "fontSize": 10
+    },
+    {
+     "content": "a",
+     "fontSize": 10
+    },
+    {
+     "content": "、",
+     "fontSize": 10
+    },
+    {
+     "content": "b",
+     "fontSize": 10
+    },
+    {
+     "content": "为常数项，",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "为节能项目实施后每年节约的电量与原有年耗电量的比率（简称为节能率）。函数满足",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "(0)>0,一阶导",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": ")′>0，二阶导",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": ")″>0，即随着节能率的增加，边际成本也增大，而且加速上升。当",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "=0时，",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": ")=",
+     "fontSize": 10
+    },
+    {
+     "content": "a",
+     "fontSize": 10
+    },
+    {
+     "content": "-",
+     "fontSize": 10
+    },
+    {
+     "content": "b",
+     "fontSize": 10
+    },
+    {
+     "content": "，它的值与搜索、沟通成本有关，因为即使节能项目还没有开始实施，寻找能源管理公司也会产生搜索成本",
+     "fontSize": 10
+    },
+    {
+     "content": "[7]",
+     "fontSize": 10
+    },
+    {
+     "content": "。此外，该成本函数不包括融资成本，自行节能资金来自公司自有资金。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（5）假设能源管理公司进行节能减少能耗的成本函数为",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": ")=",
+     "fontSize": 10
+    },
+    {
+     "content": "ce",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "-",
+     "fontSize": 10
+    },
+    {
+     "content": "d",
+     "fontSize": 10
+    },
+    {
+     "content": "。其中",
+     "fontSize": 10
+    },
+    {
+     "content": "e",
+     "fontSize": 10
+    },
+    {
+     "content": "为自然对数的底，",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "、",
+     "fontSize": 10
+    },
+    {
+     "content": "d",
+     "fontSize": 10
+    },
+    {
+     "content": "为常数项，性质与节能客户成本函数中的",
+     "fontSize": 10
+    },
+    {
+     "content": "a",
+     "fontSize": 10
+    },
+    {
+     "content": "、",
+     "fontSize": 10
+    },
+    {
+     "content": "b",
+     "fontSize": 10
+    },
+    {
+     "content": "类似，",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "为节能率。函数满足一阶导",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": ")′>0，二阶导",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "(",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": ")″>0。此外，成本函数不包括融资成本，能源管理公司资金来自公司自有资金。此外，由于能源管理公司掌握节能技术，因此在相同的节能率下，节能成本更低，即",
+     "fontSize": 10
+    },
+    {
+     "content": "ce",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "-",
+     "fontSize": 10
+    },
+    {
+     "content": "d",
+     "fontSize": 10
+    },
+    {
+     "content": "<",
+     "fontSize": 10
+    },
+    {
+     "content": "ae",
+     "fontSize": 10
+    },
+    {
+     "content": "s",
+     "fontSize": 10
+    },
+    {
+     "content": "-",
+     "fontSize": 10
+    },
+    {
+     "content": "b",
+     "fontSize": 10
+    },
+    {
+     "content": "。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（6）假设节能客户及能源公司最终通过无限期的讨价还价的形式确定收益的分配比例（能源管理公司负责整体方案，是卖方，因此假设能源管理公司在谈判中先出价），节能客户的耐心因子为",
+     "fontSize": 10
+    },
+    {
+     "content": "δ",
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "fontSize": 10
+    },
+    {
+     "content": "，能源公司谈判的耐心因子为",
+     "fontSize": 10
+    },
+    {
+     "content": "δ",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（7）假设双方都知道彼此收益函数、成本函数及讨价还价过程中的耐心因子，即信息完全。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "2.3  模型推导",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "2.3.1  模型推导思路",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "如图1所示，基于边际收益等于边际成本，计算客户自身进行节能的最大收益，此结果可以作为要求外包节能业务的最低要求分成额。根据能源管理公司股东要求的最低投资回报，计算能源管理公司的最低要求分成额。从总的节能收益中扣除节能客户和合同能源管理公司的最低收益，即为双方讨教还价博弈的总“蛋糕”。而后双方根据鲁宾斯坦讨价还价模型最终确定分配比例。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "src": "blob:image1.png",
+     "width": 251,
+     "height": 189,
+     "alt": "图"
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图1  效益分成推导图",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "2.3.2  具体推导",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "（1）计算节能客户自行进行节能的最大收益（即客户的最低分成额）。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "节能客户的节电收入可由计算得出，则净收益为：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "I_{c}(s_{c})=\\frac{PMs_{c}}{1+r}+\\frac{PMs_{c}}{(1+r)^{2}}+\\frac{PMs_{c}}{(1+r)^{3}}+\\frac{PMs_{c}}{(1+r)^{n}}â¦=\\frac{PMs_{c}}{r},n∈(0,+∞)çæ­£æ´æ°"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "E_{c}(s_{c})=I_{c}(s_{c})-C_{c}(s_{c})=\\frac{PMs_{c}}{r}-ae^{s_{c}}+b"
+  },
+  {
+   "inline": [
+    {
+     "content": "最大化净收益：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "Max(E_{c}(s_{c}))=Max(I_{c}(s_{c})-C_{c}(s_{c}))=Max(\\frac{PMs_{c}}{r}-ae^{s_{c}}+b)"
+  },
+  {
+   "inline": [
+    {
+     "content": "则需满足：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "即",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "E_{c}(s_{c}^{*})^{'}=\\frac{PM}{r}-ae^{s_{c}^{*}}=0ï¼s_{c}^{*}=lnâ¡(\\frac{PM}{ar})"
+  },
+  {
+   "inline": [
+    {
+     "content": "若,则表明客户不应该自主进行节能，不节能的收益是最大的。因此，外包节能的时候，客户无回报要求，所以。若，客户自己进行节能使得,以获得最大净收益。,则为节能客户自行节能所能够获得的最大净收益的节能率，在接下来的模型推倒中，这一条件一直保持。在此情况下，节能客户自行进行节能的收益为：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "s_{c}^{*}le0K_{E}s_{c}^{*}ge1ås_{c}^{*}=1è¥s_{c}∈(0,1)s_{c}s_{c}∈(0,1)"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "E_{c}(s_{c}^{*})=\\frac{PMs_{c}^{*}}{r}-ae^{s_{c}^{*}}+b\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b"
+  },
+  {
+   "inline": [
+    {
+     "content": "（2）计算由能源管理公司进行节能，能源管理公司的最大化净收益对应的节能率。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "Max(E_{E}(s_{E}))=Max(I(s_{E})-C_{E}(s_{E}))=Max(K_{E}PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}-ce^{s_{E}}+d)"
+  },
+  {
+   "inline": [
+    {
+     "content": "则需满足：，。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "E_{E}(s_{E}^{*})^{'}=0s_{E}^{*}=ln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})"
+  },
+  {
+   "inline": [
+    {
+     "content": "若计算得出在的任何一点上的节能成本都高于其节能的贴现总收益，即该节能客户不存在任何节能的潜力，项目终止。若即，则为能源管理公司进行节能的最大净收益节能率。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "s_{E}∈(0,1)"
+  },
+  {
+   "inline": [
+    {
+     "content": "（3）能源管理公司对节电收益的最低分成额",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "由于能源管理公司以提供节能服务作为主营业务，支付所有的节能费用，投资回报分享期为",
+     "fontSize": 10
+    },
+    {
+     "content": "N",
+     "fontSize": 10
+    },
+    {
+     "content": "年，属于投资性质，对投资回报有要求，所以项目净现值要求大于0",
+     "fontSize": 10
+    },
+    {
+     "content": "①",
+     "fontSize": 10
+    },
+    {
+     "content": "：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "E_{E}(s_{E}^{*})=\\frac{K_{E}PMs_{E}^{*}}{1+R}+\\frac{K_{E}PMs_{E}^{*}}{(1+R)^{2}}+â¦+\\frac{K_{E}PMs_{E}^{*}}{(1+R)^{N}}â¦-C_{E}(s_{E}^{*})ge0"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{K_{E}PMs_{E}^{*}}{1+R}+\\frac{K_{E}PMs_{E}^{*}}{(1+R)^{2}}+â¦+\\frac{K_{E}PMs_{E}^{*}}{(1+R)^{N}}â¦-ce^{s_{E}^{*}}+dge0"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "K_{E}PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}-ce^{s_{E}^{*}}+dge0"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "K_{E}ge\\frac{(ce^{s_{E}^{*}}-d)}{PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}"
+  },
+  {
+   "inline": [
+    {
+     "content": "因此能源管理公司在分享期",
+     "fontSize": 10
+    },
+    {
+     "content": "N",
+     "fontSize": 10
+    },
+    {
+     "content": "年内，要求的最低分成总额为：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "I_{E}(s_{E}^{*})=K_{E}PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}=\\frac{(ce^{s_{E}^{*}}-d)}{PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}=\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}"
+  },
+  {
+   "inline": [
+    {
+     "content": "（4）计算谈判的空间（蛋糕的大小）。若客户考虑由节能公司承担节能工作，支付所有节能成本，则要求从节能项目中获得的收益不小于自行进行节能的净收益。因为客户要求能源公司的为其进行节能的收益必须不小于自行进行节能的净收益，否则客户将采取自行节能。因此，从总收益中扣除节能客户的最低收益要求 ，再扣除能源管理公司的最低收益要求，",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{PMs_{E}^{*}}{r}\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b"
+  },
+  {
+   "inline": [
+    {
+     "content": "剩余的部分为谈判的空间，也即鲁宾斯坦讨价还价中的蛋糕：",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{PMs_{E}^{*}}{r}-(\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b)-(\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}})"
+  },
+  {
+   "inline": [
+    {
+     "content": "此蛋糕的值必须大于等于零，若此条件无法满足，即表明节能客户或者能源管理公司的要求没有得到满足。这就是为什么我们看到，虽然有很多企业存在节能的潜能，但是经过与能源服务公司交流后，最终无法谈成而放弃了由能源公司进行节能。有些公司在了解了具体情况后，甚至自己进行节能。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（5）鲁宾斯坦",
+     "fontSize": 10
+    },
+    {
+     "content": "[8]",
+     "fontSize": 10
+    },
+    {
+     "content": "讨价还价确定分成。鲁宾斯坦讨价还价属于合作博弈，在能源合同中，一方面客户与能源管理公司结成联盟，如果进行节能管理，整体收益大于其每个成员单独经营时的收益之和。另一方面由于能源管理公司在节能技术和知识储备上有优势和经验，在节能的成本上具有优势，因此与客户进行共同节能可以在不增加成本的情况下而增加收益。因此，合同能源分享比例的谈判满足合作博弈。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "在对收益分享比率进行无限期完美信息博弈时候，双方博弈过程符合鲁宾斯坦讨价还价，由于能源管理公司负责整套方案的提供，它对剩余谈判空间（蛋糕）的分成比为：。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "X_{E}=\\frac{1-δ_{c}}{1-δ_{E}δ_{c}Â }"
+  },
+  {
+   "inline": [
+    {
+     "content": "因此，能源管理公司的分成总额为（最低要求收益+谈判分得的蛋糕份额）：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}+\\frac{1-δ_{c}}{1-δ_{E}δ_{c}Â }.\\frac{PMs_{E}^{*}}{r}-(\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b)-(\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}})."
+  },
+  {
+   "inline": [
+    {
+     "content": "该值应该与能源管理公司实际分得的总额相等即：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": " ",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}+\\frac{1-δ_{c}}{1-δ_{E}δ_{c}Â }.\\frac{PMs_{E}^{*}}{r}-(\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b)-(\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}).=K_{E}PMs_{E}^{*}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "，得：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "å°s_{E}^{*}=ln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})ä»£å¥ä¸å¼"
+  },
+  {
+   "inline": [
+    {
+     "content": "（超越方程，",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "无显式解）",
+     "fontSize": 10
+    },
+    {
+     "content": "②",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{(K_{E}PM∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}+\\frac{1-δ_{c}}{1-δ_{E}δ_{c}Â }.\\frac{PMln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})}{r}-(\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b)-(\\frac{(K_{E}PM∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}}).=K_{E}PMln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}"
+  },
+  {
+   "inline": [
+    {
+     "content": "其中需要满足的条件：",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "，，0 <R <1，，。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "\\frac{PMs_{E}^{*}}{r}-(\\frac{PMlnâ¡(\\frac{PM}{ar})}{r}-\\frac{PM}{r}+b)-(\\frac{(ce^{s_{E}^{*}}-d)∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}{∑_{n=1}^{N}\\frac{1}{(1+R)^{n}}})ge0"
+  },
+  {
+   "inline": [
+    {
+     "content": "当其他条件不变，时，节能的收益归能源管理公司，所以。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "，（超越方程，",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "无显式解）。当其他条件不变，时，节能客户自行节能，",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "=0。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "å°s_{E}^{*}=ln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})ä»£å¥ä¸å¼K_{E}ln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}=\\frac{1}{r}s_{c}^{*}>1"
+  },
+  {
+   "inline": [
+    {
+     "content": "3  数据模拟",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "由于信息完全的情况下的模型中含有超越方程，无显式解，因此简单求导无法判断参数对分成比例的影响，故本文采取数据模拟的方式，通过选定一个参数作为变量，其他参数固定，以为了考察变量（电价、耗电量、利率、股东要求回报率、客户公司减排成本函数的系数等）的变动对分成比例、节能率、节能客户和能源管理公司分成总额的影响。在每一个模拟当中，在其他输入性参数不变的情况下，选择其中一个参数（电价",
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "fontSize": 10
+    },
+    {
+     "content": "、无风险利率",
+     "fontSize": 10
+    },
+    {
+     "content": "r",
+     "fontSize": 10
+    },
+    {
+     "content": "、合同能源管理公司股东要求的最低回报率",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "、客户的成本系数",
+     "fontSize": 10
+    },
+    {
+     "content": "a",
+     "fontSize": 10
+    },
+    {
+     "content": "，参数模拟的使用值详见表1）作为变量进行变动，将数值代入信息完全下的计算方程式，然后考察它对其他参数（分成比例",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "、节能比例、合同能源管理公司的分成额和客户公司的分成额）的影响。因此，这些等式一起构成了matlab的模拟条件。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "K_{E}=\\frac{\\frac{PMlnâ¡(\\frac{PM}{cr})}{r}-(\\frac{PM}{c}-d)-.PMlnâ¡(\\frac{PM}{ar})\\frac{1}{r}-(\\frac{PM}{r}-b).}{PMlnâ¡(\\frac{PM}{cr})∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}}"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "表1  参数模拟的使用值",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "rows": [
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "参数",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "作为变量的模拟值域",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "模拟步长",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "当作为固定参数时的值",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "P",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[0.5, 1.5]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.01",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.92元/kW",
+          "fontSize": 10
+         },
+         {
+          "content": "·",
+          "fontSize": 10
+         },
+         {
+          "content": "h",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "M",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[10 000, 20 000]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "500",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "13 000 kW",
+          "fontSize": 10
+         },
+         {
+          "content": "·",
+          "fontSize": 10
+         },
+         {
+          "content": "h",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "R",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[0.05, 0.18]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.005",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.09",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "r",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[0.03, 0.18]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.001",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.05",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "a",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "130 000",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "500",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "130 000",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "c",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[30 000, 80 000]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "500",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "50 000",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "δ",
+          "fontSize": 15
+         },
+         {
+          "content": "C",
+          "fontSize": 15
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[0.5, 0.99]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.01",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.95",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "δ",
+          "fontSize": 15
+         },
+         {
+          "content": "E",
+          "fontSize": 15
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "[0.5, 0.99]",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.01",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "blocks": [
+       {
+        "inline": [
+         {
+          "content": "0.95",
+          "fontSize": 10
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   ],
+   "width": [
+    103,
+    103,
+    103,
+    103
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "具体的模拟方法以电价作为变量的情形进行简述：以0.5为电价",
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "fontSize": 10
+    },
+    {
+     "content": "的起点，每次递增0.05，一直到1.5，其他参数则保持不变（取值见表1），将所有参数代入模拟条件，计算对应的分成比例",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "，节能率，能源管理公司分成总额，节能客户的分成份额（由总的节点收益减去能源管理公司的总份额求得）。对于没有解的情况，程序直接将",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "的值定为0。变量的定义及说明在前面的章节已详细描述，现就各变量的值域根据实际常理进行限定及构建。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "formula": "s_{E}^{*}K_{E}PMln(\\frac{K_{E}PM}{c}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}})^{*}∑_{n=1}^{N}\\frac{1}{(1+r)^{n}}"
+  },
+  {
+   "inline": [
+    {
+     "content": "4  模拟结果讨论",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "如图2所展示的，当电价太低的时候，合同能源管理公司无法从该合同能源管理项目中获得利润，所以导致了此处没有分成比例和节能率。当电价上升到一定水平以后，合同能源管理公司就会参与到项目中。并且，我们可以看到，随着电价的上升，项目的节能率也在上升，但是合同能源管理公司从项目中分得的收益比例确凿下降。分析其原因，主要由于合同能源管理公司的收益主要来源于其在执行项目与客户公司自行节能所产生的成本差。也就是说，在这种情况下，客户是电价上涨的主要受益者。所以，虽然随着电价上涨，来自节电的收益在上涨，但是合同能源公司分得的比例反而下降了。从图中，还可以看到，当电价继续上升到一定水平以后，客户倾向于自己进行节能来获得节能的收益，因此这里的",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "都没有解。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图2  当电价",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变动时，分成比例",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和节能率",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "的值",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "从图3中可以看到，当电价太低的时候，合同能源管理公司将不参与项目，因此两者无法就该合同能源管理项目进行分成，从项目分得的收益都为零。当电价上升到一定水平以后，随着电价的上涨，两者的分得收益都在上升。当电价上升到太高时，节能客户倾向于自己进行节能。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图3  电价",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变动时，合同能源管理公司与客户分得的收益额",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "如图4所示，随着合同能源管理公司股东要求最低投资回报R的上升，合同能源管理公司的分成比例在上升，节能率也在上升。其原因主要在于，合同能源管理公司股东要求最低投资回报的上升会使得合同能源管理公司倾向于进行更大比例的节能，并且要求从项目中分得更大的比例来满足股东的回报要求。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图4  合同能源管理公司股东要求最低投资回报",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变动时，",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "的值",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "从图4的结果，我们可以推断，随着合同能源管理公司股东要求最低投资回报",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "的上升，合同能源管理公司分成总额会上升，因为图4中的节能率的上少会引起总收益“蛋糕”的上升，与此同时，合同能源管理公司的分成比例也在上升，因此，合同能源管理公司最终分得的收益额也在上升。这与图5所显示的结果相一致。此外，虽然合同能源管理公司的分成额上升了，客户的分成额并没有减少，反而在上升，这是由于总收益上升所导致的。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图5  合同能源管理公司股东要求最低投资回报",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变动时，合同能源管理公司和客户的分成额",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "在图6里，两条曲线显示了，在一定的无风险利率范围内，无风险利率的上升会使得合同能源管理公司的分成比例和项目节能率的下降。这就意味着，较高的无风险利率将抑制合同能源管理公司进行更高程度低节能减排。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图6  当无风险利率",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "r",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变动时，",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "的值",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图7的曲线显示了，在一定的范围内，无风险利率的上升会导致合同能源管理公司和节能客户的分成额的下降。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图7  当无风险利率",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "r",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变动时，合同能源管理公司和节能客户的分成额",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "在图8中，",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "的关系曲线表明，随着合同能源管理公司成本函数系数",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "的上升，合同能源管理公司的分成比例将上升，但是项目的节能率将下降。这表明，为了覆盖由项目成本上升带来的冲击，合同能源管理公司会要求更高的分成比例。然后，随着合同能源管理公司成本函数系数",
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "fontSize": 10
+    },
+    {
+     "content": "的上升，项目的节能比率在下降。这说明了，为了最大化收益，合同能源管理公司倾向于减少节能率来应对成本的上升。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图8  成本函数系数",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变化时，",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "的值",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "图9中的曲线与之前关系图中的直线非常不同。其中合同能源管理公司收益额曲线表明，在开始阶段，随着项目执行成本的上升，合同能源管理公司获得的分成额在上升，但是当上升达一定程度以后，其分成额开下降，下降直到项目没有利润为止。这个倒U型的曲线是由分成比例的上升和项目节能率下降的结果共同导致。我们可以直觉地把分成比例的变化看成是替代效应。在一开始的时候，为了覆盖增加的成本，替代效应占了主导作用，因此分成额在增加。随着这个不断增加的成本，不断将地项目的节能率以及项目的总收益，渐渐地，收入效应成了主导效应，所以，合同能源管理公司的分成额开始下降。因为合同能源的分成比例在上升，而且，总收益在减少，所以节能客户的分成额如图9的红线所示，也在下降。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图9  成本函数系数",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "c",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变化时，合同能源管理公司和节能客户的分成额",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "根据鲁宾斯坦的讨价还价理论，在谈判中，耐心越强，即耐心因子越大，直接在蛋糕中的分配比例就越大，客户分得的份额越大，能源管理公司就越小。但是从关系图10可以看到，客户公司的谈判耐心因子的上升却导致能源管理公司分成比例的上升。这与谈判的直接分配相反，这是因为",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "并不是鲁宾斯坦中的直接分配份额比例，它是最终的分配比例。当谈判的对手节能客户的耐心越强，它在鲁宾斯坦讨价还价的份额确实越大，但是因为这是公开信息，能源管理公司知道客户会要更大的份额，为了使利益最大化，会增加节能率，使整个蛋糕变大，同时扩大分配比例，这样，即使在客户因为耐心程度的增加而要求更大的份额的时候，能源管理公司却可以获得更大的分配比例。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图10  客户耐心因子",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "δ",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "C",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "变化时，",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "S",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "的值",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "在图11中，X轴是电价",
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "fontSize": 10
+    },
+    {
+     "content": "，Y轴是合同能源管理公司的最低投资回报要求，Z轴是合同能源管理公司的分成比例。从图中可以看到，当电价太低或者太高的时候，合同能源管理公司不会执行项目，这一情况已经在图2中被解释过。因为，在",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "的不断上升会导致",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "的上升，",
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "fontSize": 10
+    },
+    {
+     "content": "的不断上升会导致",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "的下降，为了查看它们的同时增大对",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "的影响，通过对三维图进行旋转变换角度得到图12，从中可以看到",
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "fontSize": 10
+    },
+    {
+     "content": "在下降，这就意味着，同时增加",
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "fontSize": 10
+    },
+    {
+     "content": "会导致合同能源管理公司分成比例的下降。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "src": "blob:image2.png",
+     "width": 280,
+     "height": 185,
+     "alt": "图"
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图11  当",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "同时变动时，",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "值变动的三维图（角度1）",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "src": "blob:image3.png",
+     "width": 301,
+     "height": 199,
+     "alt": "图"
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": "图12  当",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "P",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "和",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "R",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "同时变动时，",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "K",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "E",
+     "bold": true,
+     "fontSize": 10
+    },
+    {
+     "content": "值变动的三维图（角度2）",
+     "bold": true,
+     "fontSize": 10
+    }
+   ],
+   "align": "center"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "5  结论",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "从本文的模型中，我们可以看到，节能客户是电价上涨的主要受益者，合同能源管理公司分成比例并不会因此而上升。这一结论的实践指导意义明显，即对于在合同能源的分享期间中的项目，如果电价上升了，根据模型的结果，提高客户的分成比例在经济学上讲是公平的，只是它可能会违背契约精神。因此，建议合同能源管理的合同中增加电价变动的分成说明，以增加项目执行的公平性和灵活性。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "模拟结果还显示，合同能源管理公司的项目最低投资回报要求在一定范围的上升，不仅有利于提高能源管理公司的分成比例，而且还有利于激励合同能源管理公司进行节能率更大的节能减排。通过节能率的上涨，还会使得节能客户获得更大的节能收益。只是，在竞争市场中，过高的投资回报要求，会导致合同能源管理公司错失项目的机会给竞争对手。所以，合同能源管理公司在项目考察过程中，可以适当提高对项目的最低投资回报要求。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "从模拟结果中，我们发现，无风险利率的上升不利于合同能源管理公司和节能客户，这是因为它使得项目的现值下降，最终导致了合同能源管理公司和节能客户收益的降低。可见，如果政府希望鼓励合同能源管理产业的发展，应该针对该产业提供低利率，或者针对合同能源管理项目提供贴息贷款。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "最后，合同能源管理公司的项目执行成本是项目收益的关键因素，更好的技术、更丰富的知识储备以及更低的税赋等可以降低成本的因素，都有利于合同能源管理项目的实施。因此，政府可以对企业节能技术的研发、知识储备的投入等进行适当的补贴。",
+     "fontSize": 10
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "注：",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "①内部收益率是资金流入现值总额与资金流出现值总额相等、净现值等于零时的折现率。它是一项投资可望达到的报酬率，该指标越大越好。一般情况下，内部收益率大于等于基准收益率时，该项目是可行的。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "②超越方程（transcendental equation）是包含超越函数的方程，也就是方程中有无法用自变量的多项式或开方表示的函数，与超越方程相对的是代数方程。大部分的超越方程求解没有一般的公式，也很难求得解析解。",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "参考文献：",
+     "bold": true,
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[1]Sorrell S. The contribution of energy service contracting to a low carbon economy [EB/OL].(2015-12-11). https://www.researchgate.net/publication/247818750_The_contribution_of_energy_service_contracting_to_a_low_carbon_economy.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[2]杨振宇，赵剑锋，王书保. 合同能源管理在中国的发展及待解决的问题[J]. 电力需求侧管理，2004（6）：10",
+     "fontSize": 10
+    },
+    {
+     "content": "～",
+     "fontSize": 10
+    },
+    {
+     "content": "12.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[3]袁海臻，高小钧，杨春权，等. 我国合同能源管理的现状、存在问题及对策[J]. 能源技术经济，2011（1）：58",
+     "fontSize": 10
+    },
+    {
+     "content": "～",
+     "fontSize": 10
+    },
+    {
+     "content": "61.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[4]赵丹. ESCo节能项目的经济效益评价及分享机制研究[D]. 保定：华北电力大学，2008.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[5]刘德军，吕林. 合同能源管理项目的风险与效益评价[J]. 电力需求侧管理，2009（1）：20",
+     "fontSize": 10
+    },
+    {
+     "content": "～",
+     "fontSize": 10
+    },
+    {
+     "content": "23.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[6]李翔鹏. 基于讨价还价理论的节能效益分享型EPC模式利益分配研究[D]. 天津：天津大学，2010.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[7]Stigler G J. The economics of information [J]. Routledge, 2007, 69(1):213.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": "[8]Rubinstein A. Perfect equilibrium in a bargaining model [J]. Econometrica, 1982, 50(1): 97-109.",
+     "fontSize": 10
+    }
+   ]
+  },
+  {
+   "inline": [
+    {
+     "content": ""
+    }
+   ],
+   "align": "left"
+  },
+  {
+   "inline": [
+    {
+     "content": "（责任编辑：张海艳）",
+     "fontSize": 10
+    }
+   ],
+   "align": "right"
+  }
+ ],
+ "pageSetup": {
+  "widthTwips": 11906,
+  "heightTwips": 16838,
+  "orientation": "portrait",
+  "marginTop": 1440,
+  "marginBottom": 1440,
+  "marginLeft": 1800,
+  "marginRight": 1800
+ }
+}

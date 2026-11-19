@@ -138,6 +138,15 @@ export function createPaginationPlugin(
       const next = res[i + 1]
       res[i].height = next ? next.top - res[i].top : Math.max(res[i].height || 0, blockH - res[i].top)
     }
+    // round41（用户报告：EMC 合同文档内容大量超出页面四角直角范围）：
+    // 纯图片段 / 空文本段没有任何文本节点，walk 收集不到任何行 ——
+    // 行级断页循环零次、renderedBottom 停留在 blockTop（漏掉整块高度），
+    // 图片整块压过页底 contentBottom（实测 216px 图片段越界 128px），
+    // 且后续块连锁偏移进页底空白带。兜底：无行时把整块当作一行，
+    // 行级判定自然生效（放不下当前页就整块推到下一页内容区顶）。
+    if (res.length === 0 && blockH > 0) {
+      res.push({ offset: 0, top: 0, height: blockH })
+    }
     return res
   }
 
