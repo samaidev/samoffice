@@ -234,14 +234,17 @@ func (b *RawBlock) UnmarshalJSON(data []byte) error {
 // Document 的 UnmarshalJSON：通过结构特征路由到正确的 Block 类型
 func (d *Document) UnmarshalJSON(data []byte) error {
 	type alias struct {
-		Meta      Meta              `json:"meta"`
-		Blocks    []json.RawMessage `json:"blocks"`
-		Comments  []Comment         `json:"comments,omitempty"`
-		Styles    []StyleDef        `json:"styles,omitempty"`
-		PageSetup *PageSetup        `json:"pageSetup,omitempty"`
-		Warnings  []Warning         `json:"warnings,omitempty"`
-		Protect   *DocumentProtect  `json:"protect,omitempty"`
-		Raw       map[string]any    `json:"raw,omitempty"`
+		Meta       Meta              `json:"meta"`
+		Blocks     []json.RawMessage `json:"blocks"`
+		Comments   []Comment         `json:"comments,omitempty"`
+		Styles     []StyleDef        `json:"styles,omitempty"`
+		PageNumber *PageNumberConfig `json:"pageNumber,omitempty"`
+		PageSetup  *PageSetup        `json:"pageSetup,omitempty"`
+		Header     *HeaderFooter     `json:"header,omitempty"`
+		Footer     *HeaderFooter     `json:"footer,omitempty"`
+		Warnings   []Warning         `json:"warnings,omitempty"`
+		Protect    *DocumentProtect  `json:"protect,omitempty"`
+		Raw        map[string]any    `json:"raw,omitempty"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
@@ -250,7 +253,10 @@ func (d *Document) UnmarshalJSON(data []byte) error {
 	d.Meta = a.Meta
 	d.Comments = a.Comments
 	d.Styles = a.Styles
+	d.PageNumber = a.PageNumber
 	d.PageSetup = a.PageSetup
+	d.Header = a.Header
+	d.Footer = a.Footer
 	d.Warnings = a.Warnings
 	d.Protect = a.Protect
 	d.Raw = a.Raw
