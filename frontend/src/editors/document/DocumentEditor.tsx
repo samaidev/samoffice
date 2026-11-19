@@ -680,9 +680,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const blockPagesRef = useRef<number[]>([])  // 供 generateTOC/updateTocPageNumbers 同步读取最新页码
   // 目录页码自动回填：分页引擎每次回报页码即刷新 TOC 条目（等价 MS Word“更新域”）。
   // updateTocPageNumbers 无变化时不派发事务，因此不会形成 dispatch→重算 死循环。
+  // round45 震荡防护：回填改变正文 → 触发重分页 → 回报新页码 → 再回填……
+  // 分页临界摆动时该反馈环永不收敛。5 秒窗口内最多回填 3 次，正常场景
+  // （页码一次就稳）不受影响，摆动时反馈环被有界截断。
+  const tocBackfillTsRef = useRef<number[]>([])
   useEffect(() => {
     if (blockPages.length === 0) return
-    const timer = setTimeout(() => updateTocPageNumbers(), 60)
+    const timer = setTimeout(() => {
+      const now = Date.now()
+      const recent = tocBackfillTsRef.current.filter(ts => now - ts < 5000)
+      if (recent.length >= 3) return
+      tocBackfillTsRef.current = [...recent, now]
+      updateTocPageNumbers()
+    }, 60)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockPages])

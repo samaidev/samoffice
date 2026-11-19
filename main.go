@@ -80,9 +80,11 @@ func pendingOpenPath() string {
 
 // round27 启动看门狗：诊断发现 shan 上偶发"Wails 启动死锁"（进程活着、
 // 窗口不出现、单实例互斥体不释放，后续启动全部被挡）。看门狗机制：
-//   - main 启动 30s 内 OnDomReady 未写入 boot_ok 标记 → 判定窗口未出现，
+//   - main 启动 45s 内 OnDomReady 未写入 boot_ok 标记 → 判定窗口未出现，
 //     写 boot.log 后 os.Exit(1) 强制退出（释放单实例锁，下次启动可恢复）。
 //   - 正常启动路径不受影响；boot.log 记录判定结果便于远程诊断。
+//   - round45：30s→45s。shan 实测打开大文档时 OnDomReady 可达 29s
+//     （分页震荡 + 日志 IO），30s 死线把正常启动误杀（用户"打不开"）。
 func bootOkPath() string {
 	dir, _ := os.UserCacheDir()
 	if dir == "" {
@@ -105,11 +107,11 @@ func markBootOk() {
 	_ = os.WriteFile(bootOkPath(), []byte(fmt.Sprintf("%d", time.Now().UnixMilli())), 0o644)
 }
 
-// startBootWatchdog 30s 内无 boot_ok 标记则自杀（返回前阻塞在 wails.Run
+// startBootWatchdog 45s 内无 boot_ok 标记则自杀（返回前阻塞在 wails.Run
 // 的主流程不受影响，由独立 goroutine 执行）。
 func startBootWatchdog() {
 	go func() {
-		deadline := time.Now().Add(30 * time.Second)
+		deadline := time.Now().Add(45 * time.Second)
 		for time.Now().Before(deadline) {
 			if _, err := os.Stat(bootOkPath()); err == nil {
 				_ = os.WriteFile(bootLogPath(), []byte(fmt.Sprintf("[%s] boot ok\n", time.Now().Format(time.RFC3339))), 0o644)
@@ -117,7 +119,7 @@ func startBootWatchdog() {
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
-		msg := fmt.Sprintf("[%s] BOOT WATCHDOG: no window in 30s, force exit (pid=%d)\n", time.Now().Format(time.RFC3339), os.Getpid())
+		msg := fmt.Sprintf("[%s] BOOT WATCHDOG: no window in 45s, force exit (pid=%d)\n", time.Now().Format(time.RFC3339), os.Getpid())
 		_ = os.MkdirAll(filepath.Dir(bootLogPath()), 0o755)
 		f, _ := os.OpenFile(bootLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if f != nil {
@@ -432,16 +434,32 @@ func (a *App) ReadFile(path string) (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
+// bootLogMaxBytes boot.log 轮转阈值（round45）：此前 PAGINATION_DEBUG 每次
+// 分页都写 ~20KB 大行，shan 机器上 boot.log 曾膨胀到 499MB，且每次追加都要
+// 打开巨型文件（ Defender 实时扫描放大的 IO），显著拖慢启动。
+const bootLogMaxBytes = 10 << 20
+
 // LogError 接收前端上报的错误/状态，写入 boot.log 便于排障（诊断用）。
+// 超过 10MB 自动轮转为 boot.log.old（最多保留一份旧文件）。
+// 前端渲染成功标记（FRONTEND_RENDERED_OK）同时写入 boot_ok —— 启动看门狗
+// 以此作为“窗口已出现”的兜底信号（OnDomReady 可能在 JS 忙时晚于首次渲染）。
 func (a *App) LogError(msg string) {
 	home, _ := os.UserHomeDir()
 	logPath := filepath.Join(home, ".samoffice", "boot.log")
+	if fi, err := os.Stat(logPath); err == nil && fi.Size() > bootLogMaxBytes {
+		old := logPath + ".old"
+		_ = os.Remove(old)
+		_ = os.Rename(logPath, old)
+	}
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	fmt.Fprintln(f, msg)
+	_, _ = f.WriteString(time.Now().Format("[2006-01-02T15:04:05] ") + msg + "\n")
+	_ = f.Close()
+	if strings.Contains(msg, "FRONTEND_RENDERED_OK") {
+		markBootOk()
+	}
 }
 
 // SaveFileDialog 弹出系统"保存/另存为"对话框，返回用户选择的完整路径；用户取消则返回空字符串。

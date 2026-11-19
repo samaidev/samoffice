@@ -55,6 +55,18 @@ export function createPaginationPlugin(
   let lastSkipSig = ''
   let lastDocSig = ''
   let lastContentMaxY = 0
+  // round45 震荡抑制状态：分页结果在两个布局间永久翻转（A→B→A→…）时，
+  // dispatch ↔ 重算闭环永不收敛（用户报告：打开大文档卡死/打不开 + 图片跳动）。
+  // 检测到签名回环即冻结输出，保持上一轮稳定布局；文档或页面度量真正变化时解除。
+  let oscRecentSigs: string[] = []
+  let oscDocSize = -1
+  let oscMetricsSig = ''
+  let oscLogged = false
+  // PAGINATION_DEBUG / PAGINATION_RENDER 调试日志默认关闭（每条 ~20KB，
+  // 开启时写 ~/.samoffice/boot.log 会膨胀至数百 MB 并拖慢启动，见 round45）。
+  // 需要诊断时在前端控制台执行 localStorage.setItem('samoffice_pgdebug','1') 后刷新。
+  let pgDebug = false
+  try { pgDebug = typeof localStorage !== 'undefined' && localStorage.getItem('samoffice_pgdebug') === '1' } catch { /* ignore */ }
   // round40（用户反馈"无法跨行/跨段落/中间几个字多选"）：
   // 拖选进行中（mousedown 已按下且未 mouseup）挂起全部重算/校验/heal。
   // 根因：PM 拖选每帧产生 selection 事务 → view.update → schedule →
@@ -817,8 +829,36 @@ export function createPaginationPlugin(
       const normSig = (arr: any[]) => arr.map(decoSig).sort().join('|')
       const curSig = cur ? normSig(cur.find()) : ''
       const newSig = normSig(decos)
+      // round45 震荡抑制：闭环校验（verifyPass）与 dispatch 相互触发时，
+      // 分页结果会在两个布局间永久翻转 —— 每轮 dispatch 改 DOM → 重算 →
+      // 翻回，主线程被打满，页面迟迟不就绪（启动看门狗 30s 强杀，用户
+      // 表现为“应用打不开”；正文中表现为图片/断点在分页附近跳动）。
+      // 签名回环检测：新签名在最近 6 轮中出现过 → 冻结本轮输出（不派发、
+      // 不回报纸页），保持上一轮稳定布局。文档内容或页面度量（zoom/纸高/
+      // 收起空白）真正变化时清空回环记录，自动解除冻结。
+      const docSizeNow = view.state.doc.content.size
+      const mNow = getMetrics()
+      const oscMetricsNow = [mNow.zoom, mNow.pageHeightPx, mNow.gap, mNow.pageContentPerPage, (mNow as any).collapse ? 1 : 0].join(':')
+      if (docSizeNow !== oscDocSize || oscMetricsNow !== oscMetricsSig) {
+        oscDocSize = docSizeNow
+        oscMetricsSig = oscMetricsNow
+        oscRecentSigs = []
+        oscLogged = false
+      }
+      if (newSig !== curSig && oscRecentSigs.includes(newSig)) {
+        if (!oscLogged) {
+          oscLogged = true
+          try {
+            ;(window as any).go?.main?.App?.LogError?.('PAGINATION_OSCILLATION_SUPPRESSED docSize=' + docSizeNow + ' metrics=' + oscMetricsNow)
+          } catch { /* ignore */ }
+        }
+        return
+      }
+      oscRecentSigs.push(newSig)
+      if (oscRecentSigs.length > 6) oscRecentSigs.shift()
       if (newSig !== curSig) {
         try {
+          ;(window as any).__pgDispatchCount = ((window as any).__pgDispatchCount || 0) + 1
           view.dispatch(
             view.state.tr
               .setMeta(paginationKey, DecorationSet.create(view.state.doc, decos))
@@ -840,9 +880,10 @@ export function createPaginationPlugin(
       // 渲染真值转储：仅在分页签名变化时输出一次（延迟 250ms 等 ProseMirror
       // 完成新 decoration 的渲染），供“模型 vs 渲染”精确对账。
       // 空闲时外部周期性事务会触发重算但签名不变 —— 此时绝不输出，防止日志膨胀。
+      // round45：默认关闭，仅 pgDebug 开启时输出（每条 ~5KB，含完整 papers/blocks）。
       try {
         const nowMs = Date.now()
-        if (newSig !== lastPgLogSig && nowMs - ((window as any).__lastRenderDumpTs || 0) > 1500) {
+        if (pgDebug && newSig !== lastPgLogSig && nowMs - ((window as any).__lastRenderDumpTs || 0) > 1500) {
           ;(window as any).__lastRenderDumpTs = nowMs
           const dumpRender = () => {
           const z = m.zoom > 0 ? m.zoom : 1
@@ -902,7 +943,9 @@ export function createPaginationPlugin(
         }
         onCount(pageCount)
         // 诊断：把真实坐标 dump 到全局变量，供外部脚本只读读取（不触发 wails bridge）
-        try {
+        // round45：默认关闭 —— 该对象含全部块的明细（长文档每轮 ~20KB 字符串），
+        // 且 PAGINATION_DEBUG 落盘 ~/.samoffice/boot.log 曾膨胀到 499MB、拖慢启动。
+        if (pgDebug) try {
           ;(window as any).__pg = {
             pageCount,
             pageHeightPx: Math.round(pageHeightPx),
@@ -1099,6 +1142,7 @@ export function createPaginationPlugin(
               .setMeta(paginationKey, DecorationSet.create(view.state.doc, next))
               .setMeta('addToHistory', false),
           )
+          ;(window as any).__pgDispatchCount = ((window as any).__pgDispatchCount || 0) + 1
           requestAnimationFrame(() => verifyPass(view, round + 1))
         }
       }
