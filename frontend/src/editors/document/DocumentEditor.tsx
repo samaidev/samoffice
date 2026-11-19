@@ -63,6 +63,48 @@ function readBool(key: string): boolean {
   try { return localStorage.getItem(key) === '1' } catch { return false }
 }
 
+// === round46：表格多选下的字符样式范围 ===
+// CellSelection（行/列/框选/整表选中）的 from/to 是锚点与头单元格的【起始位置】，
+// 直接 addMark(from,to) 只覆盖到头单元格开始为止 —— 用户报告"多选表格调字号
+// 只有一个格子生效"的根因。此助手把选区展开为逐单元格的文本范围
+// （普通文本选区原样返回 [from,to)；空选区返回空数组，由调用方走 storedMarks）。
+function selectionMarkRanges(state: any): Array<{ from: number; to: number }> {
+  const sel = state.selection as any
+  if (sel && sel.$anchorCell && sel.$headCell) {
+    const from = Math.min(sel.from, sel.to)
+    const to = Math.max(sel.from, sel.to)
+    const ranges: Array<{ from: number; to: number }> = []
+    state.doc.nodesBetween(from, Math.min(to + 1, state.doc.content.size), (node: any, pos: number) => {
+      if (node.type && node.type.name === 'table_cell') {
+        ranges.push({ from: pos + 1, to: pos + node.nodeSize - 1 })
+        return false // 单元格内部文本不再下钻（已覆盖整个内容区）
+      }
+      return true
+    })
+    if (ranges.length) return ranges
+  }
+  const { from, to, empty } = state.selection
+  if (empty) return []
+  return [{ from, to }]
+}
+
+// round46：多范围 toggleMark —— 表格多选（CellSelection）逐格生效；
+// 普通选区行为与 prosemirror-commands 的 toggleMark 一致（同属性 toggle 掉，
+// 带新属性则替换）。attrs 传 undefined 时为纯加粗/斜体式开关。
+function toggleMarkRanges(state: any, dispatch: any, mark: any, attrs?: Record<string, any>) {
+  const ranges = selectionMarkRanges(state)
+  if (!ranges.length) { toggleMark(mark, attrs as any)(state, dispatch); return }
+  const tr = state.tr
+  for (const r of ranges) {
+    const probePos = Math.max(0, Math.min(r.from, state.doc.content.size - 1))
+    const existing = mark.isInSet(state.doc.resolve(probePos).marks())
+    const same = existing && (!attrs || JSON.stringify(existing.attrs) === JSON.stringify(attrs || {}))
+    if (existing) tr.removeMark(r.from, r.to, mark)
+    if (!same) tr.addMark(r.from, r.to, mark.create(attrs || {}))
+  }
+  dispatch(tr)
+}
+
 // ============ 表格行/列选择插件（对齐 MS Word） ============
 // MS Word 交互：鼠标悬停在表格行首左侧边缘出现箭头，单击选中整行；
 // 悬停在首行顶部边缘出现下箭头，单击选中整列；按下后拖动可扩展多行/多列。
@@ -903,7 +945,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     if (!node || node.type.name !== 'comment_mark') return
     const item = schema.nodes.comment_mark.create({ id: cur.id, author: cur.author, text: newText })
     const tr = v.state.tr.replaceWith(cur.pos, cur.pos + node.nodeSize, item)
-    v.dispatch(tr); v.focus()
+    v.dispatch(tr); focusNoJump()
     try { setComments(extractComments(v.state.doc)) } catch (e) { /* ignore */ }
   }
   const deleteComment = (id: string) => {
@@ -924,7 +966,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     const from = cur.pos
     const to = cur.pos + node.nodeSize
     v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to)))
-    v.focus()
+    focusNoJump()
   }
   const onChangeRef = useRef(onChange)
   const onManualSpellCheckRef = useRef(onManualSpellCheck)
@@ -1007,7 +1049,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [showArtPanel, setShowArtPanel] = useState(false)
   // 独立公式编辑器弹窗（全屏模态）
   const [showMathModal, setShowMathModal] = useState(false)
-  const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null; fontSize: string }>({ latex: '', inline: false, pos: null, fontSize: '' })
+  const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null; fontSize: string; omml: string }>({ latex: '', inline: false, pos: null, fontSize: '', omml: '' })
   // 独立的“插入符号”小面板（与公式弹窗分开，不复用）
   const [showSymbolPanel, setShowSymbolPanel] = useState(false)
   const [symbolCategory, setSymbolCategory] = useState<'greek' | 'latin' | 'circled' | 'roman' | 'math' | 'arrows'>('greek')
@@ -1136,7 +1178,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     documentRef.current = updated
     lastEmittedRef.current = updated
     onChange?.(updated)
-    if (v) v.focus()
+    if (v) focusNoJump()
   }
   // 默认页边距采用 Word「普通」预设：上下 2.54cm、左右 3.18cm（96dpi 下分别为 96px / 120px）
   const [docMargins, setDocMargins] = useState({ top: 96, bottom: 96, left: 120, right: 120 })
@@ -1402,24 +1444,23 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
             if (names.length === 0) return null // 源格式为空，无意义，跳过
             const sel = newState.selection
             if (sel instanceof NodeSelection) return null
-            // 目标范围：拖选则取选区；仅光标（单击）则套用到光标所在文本块（段落），符合 Office 单击格式刷行为
-            let from: number, to: number
+            // 目标范围：拖选则取选区；仅光标（单击）则套用到光标所在文本块（段落），符合 Office 单击格式刷行为。
+            // round46：表格多选（CellSelection）展开为逐格范围 —— 否则只刷到一个格子。
+            let ranges: Array<{ from: number; to: number }>
             if (sel.empty) {
               const pos = Math.min(sel.from, newState.doc.content.size)
               const $pos = newState.doc.resolve(pos)
-              from = $pos.start()
-              to = $pos.end()
+              ranges = [{ from: $pos.start(), to: $pos.end() }]
             } else {
-              from = sel.from
-              to = sel.to
+              ranges = selectionMarkRanges(newState)
             }
-            if (from >= to) return null
+            if (!ranges.length) return null
             let tr: any = newState.tr
             let added = 0
             for (const name of names) {
               const attrs = (fp.marks as any)[name]
               const m = (schema.marks as any)[name]; if (!m) continue
-              tr = tr.addMark(from, to, m.create(attrs || {}))
+              for (const r of ranges) tr = tr.addMark(r.from, r.to, m.create(attrs || {}))
               added++
             }
             // 注意：appendTransaction 运行在 ProseMirror 应用 transaction 的同步流程中（DOM 处于中间态）。
@@ -1624,99 +1665,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
             },
           }
         },
-        math: (node: any, _view: any, getPos: any) => {
-          const dom = window.document.createElement(node.attrs.inline ? 'span' : 'div')
-          dom.className = 'sam-math' + (node.attrs.inline ? ' sam-math-inline' : '')
-          // 公式字号：atom 节点不受 fontSize mark 影响，NodeView 直接应用
-          // font-size（KaTeX 内部尺寸按 em 级联，根节点缩放即整体缩放）。
-          const applyFontSize = () => {
-            const fs = node.attrs.fontSize
-            if (fs) { dom.style.fontSize = parseFloat(fs) + 'px' }
-            else { dom.style.fontSize = '' }
-          }
-          applyFontSize()
-          // round23 性能修复：渲染签名缓存（见 update 注释）
-          let lastSig = `${node.attrs.latex}|${node.attrs.inline ? 1 : 0}|${node.attrs.fontSize || ''}`
-          const render = () => {
-            lastSig = `${node.attrs.latex}|${node.attrs.inline ? 1 : 0}|${node.attrs.fontSize || ''}`
-            const latex = node.attrs.latex || ''
-            if ((window as any).katex && latex) {
-              try {
-                ;(window as any).katex.render(latex, dom, { displayMode: !node.attrs.inline, throwOnError: false })
-                dom.classList.remove('sam-math-error')
-              } catch {
-                dom.textContent = latex
-                dom.classList.add('sam-math-error')
-              }
-            } else {
-              dom.textContent = latex ? `⟨formula:${latex}⟩` : '公式'
-            }
-            dom.setAttribute('data-latex', latex)
-            dom.setAttribute('data-font-size', node.attrs.fontSize || '')
-            dom.title = '双击编辑公式'
-            dom.style.cursor = 'pointer'
-            applyFontSize()
-          }
-          render()
-          dom.addEventListener('mousedown', (ev: Event) => {
-            // round24：单击即选中公式（NodeSelection）。实测 PM 对无内容 atom 的
-            // 点击会把 pos 解析到相邻段落（公式块有 padding/居中，无文本落点），
-            // 不会自动建 NodeSelection —— 显式 dispatch，保证功能区字号/字体
-            // 能作用于选中公式（对齐 Word 行为：点击公式即选中）。
-            const e = ev as MouseEvent
-            if (e.button !== 0) return
-            const pos = typeof getPos === 'function' ? getPos() : null
-            if (pos == null || !_view) return
-            e.preventDefault()
-            try {
-              _view.dispatch(_view.state.tr.setSelection(NodeSelection.create(_view.state.doc, pos)))
-              _view.focus()
-            } catch { /* 节点已被并发事务删除等情形下忽略 */ }
-          })
-          dom.addEventListener('dblclick', (e) => {
-            e.preventDefault()
-            // 打开富公式编辑模态框，预填当前公式并定位到该节点，确认后替换原节点。
-            // 注意：getPos 返回该 math 节点的绝对位置，比按 latex 全文搜索定位更可靠
-            // （同文档存在多个相同 latex 的公式时旧逻辑会误改第一个）。
-            const pos = typeof getPos === 'function' ? getPos() : null
-            setMathEdit({
-              latex: node.attrs.latex || '',
-              inline: !!node.attrs.inline,
-              pos: typeof pos === 'number' ? pos : null,
-              fontSize: node.attrs.fontSize || '',
-            })
-            setShowMathModal(true)
-          })
-          return {
-            dom,
-            // round24 字号修复：不再 stopEvent 全部事件 —— 旧版吞掉全部鼠标事件，
-            // 点击公式无法产生 NodeSelection，功能区"字号"永远写不进公式 attr。
-            // 仅拦 mousedown：选区由上面 dom 的 mousedown 监听显式建（PM 对无内容
-            // atom 的点击会把 pos 解析到相邻段落，且其默认处理会覆盖我们的
-            // NodeSelection —— 必须 stopEvent 阻断）；dblclick/键盘等仍交给 PM。
-            stopEvent: (e: Event) => e?.type === 'mousedown',
-            ignoreMutation: () => true,
-            selectNode() { dom.classList.add('sam-math-selected') },
-            deselectNode() { dom.classList.remove('sam-math-selected') },
-            // setFontSize 改 attrs.fontSize 时重渲染并应用新字号
-            update(newNode: any) {
-              if (newNode.type.name !== 'math') return false
-              node = newNode
-              // ★ round23 性能修复（用户报告：25 公式文档打字 800ms/键）：
-              // PM 在【每次文档事务】后对所有 math NodeView 调 update()（节点类型
-              // 未变即视为可复用）。旧版无条件 katex.render —— 打 5 个字符实测
-              // 触发 168 次 KaTeX 重渲染（每键全量 25 公式 × ~1.3），每次几毫秒到
-              // 几十毫秒，直接把打字延迟推到 800ms、滚动打到 3 FPS。
-              // 修复：latex/inline/fontSize 签名未变则跳过渲染（公式内容没变，
-              // KaTeX DOM 完全无需重建）。
-              const sig = `${newNode.attrs.latex}|${newNode.attrs.inline ? 1 : 0}|${newNode.attrs.fontSize || ''}`
-              if (sig === lastSig) return true
-              lastSig = sig
-              render()
-              return true
-            },
-          }
-        },
+        math: (node: any, _view: any, getPos: any) => createMathNodeView(node, _view, getPos),
+        math_inline: (node: any, _view: any, getPos: any) => createMathNodeView(node, _view, getPos),
         footnote_section: () => {
           // 脚注区在编辑器正文内隐藏渲染，实际显示在页面底部的脚注区
           const dom = window.document.createElement('div')
@@ -1890,7 +1840,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         v.dispatch(v.state.tr
           .setSelection(TextSelection.create(v.state.doc, h.from, h.to))
           .scrollIntoView())
-        v.focus()
+        focusNoJump()
         // 闪烁高亮：给包含该词的拼写错误装饰 DOM 加动画类（样式见 index.css）
         try {
           v.dom.querySelectorAll('.spell-error').forEach((el) => {
@@ -2075,7 +2025,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       }
       applyStyleMarks(tr, start + 1, end - 1, fmt)
     }
-    if (targets.length) { dispatch(tr); v.focus() }
+    if (targets.length) { dispatch(tr); focusNoJump() }
     setShowStyles(false)
   }
 
@@ -2096,7 +2046,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       tr.setNodeMarkup(pos, null, newAttrs)
       applyStyleMarks(tr, start + 1, end - 1, fmt)
     }
-    if (positions.length) { dispatch(tr); v.focus() }
+    if (positions.length) { dispatch(tr); focusNoJump() }
     setStyles((prev) => ({ ...prev, [name]: fmt }))
   }
 
@@ -2139,7 +2089,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     if (found >= 0) {
       const tr = state.tr.setSelection(TextSelection.create(state.doc, found + 1))
       v.dispatch(tr)
-      v.focus()
+      focusNoJump()
       const dom = v.nodeDOM(found) as HTMLElement | null
       dom?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
@@ -2279,7 +2229,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
     }
     dispatch(tr)
-    v.focus()
+    focusNoJump()
     // 5) 插入改变了分页 → 分页引擎回报新页码后自动回填（useEffect[blockPages] 也会触发）
     requestAnimationFrame(() => updateTocPageNumbers())
     setTimeout(() => updateTocPageNumbers(), 120)
@@ -2305,7 +2255,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     })
     let pos = v.state.selection.from
     nodes.forEach((n) => { tr.insert(pos, n); pos += n.nodeSize })
-    v.dispatch(tr); v.focus()
+    v.dispatch(tr); focusNoJump()
   }
 
   const styleDesc = (fmt: StyleFormat) => {
@@ -2358,17 +2308,130 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     onChangeRef.current(out)
   }
 
+  // round46：focus 不产生滚动跳页。选择表格（CellSelection）后点功能区/编辑命令，
+  // focusNoJump() 会同步原生选区，浏览器把视口滚到原生选区起点（锚点格所在页）——
+  // 跨页选区时视口直接跳到很远的其他页面（用户报告）。
+  // 处理：记录滚动容器位置 → focus → 若视口被浏览器改动则还原。
+  const focusNoJump = () => {
+    const v = viewRef.current; if (!v) return
+    const sc = leftScrollRef.current
+    const before = sc ? sc.scrollTop : 0
+    ;(v as any).focus()
+    if (sc && Math.abs(sc.scrollTop - before) > 1) sc.scrollTop = before
+  }
+
+  // math / math_inline 共用 NodeView（KaTeX 渲染 + 单击选中 + 双击编辑）。
+  // 行内模式判定：节点类型为 math_inline 或旧版块级公式的 inline attr。
+  const createMathNodeView = (node: any, _view: any, getPos: any) => {
+    const inlineMode = () => node.type.name === 'math_inline' || !!node.attrs.inline
+    const dom = window.document.createElement(inlineMode() ? 'span' : 'div')
+    dom.className = 'sam-math' + (inlineMode() ? ' sam-math-inline' : '')
+    // 公式字号：atom 节点不受 fontSize mark 影响，NodeView 直接应用
+    // font-size（KaTeX 内部尺寸按 em 级联，根节点缩放即整体缩放）。
+    const applyFontSize = () => {
+      const fs = node.attrs.fontSize
+      if (fs) { dom.style.fontSize = parseFloat(fs) + 'px' }
+      else { dom.style.fontSize = '' }
+    }
+    applyFontSize()
+    // round23 性能修复：渲染签名缓存（见 update 注释）
+    let lastSig = `${node.attrs.latex}|${inlineMode() ? 1 : 0}|${node.attrs.fontSize || ''}`
+    const render = () => {
+      lastSig = `${node.attrs.latex}|${inlineMode() ? 1 : 0}|${node.attrs.fontSize || ''}`
+      const latex = node.attrs.latex || ''
+      if ((window as any).katex && latex) {
+        try {
+          ;(window as any).katex.render(latex, dom, { displayMode: !inlineMode(), throwOnError: false })
+          dom.classList.remove('sam-math-error')
+        } catch {
+          dom.textContent = latex
+          dom.classList.add('sam-math-error')
+        }
+      } else {
+        // latex 为空但带 OMML 原文 = 空白公式（Word 公式里的空格 run）：
+        // 渲染为空格占位，不误导为"空公式"；导出时 OMML 直写不丢失
+        dom.textContent = latex ? `⟨formula:${latex}⟩` : (node.attrs.omml ? '\u00A0' : '公式')
+      }
+      dom.setAttribute('data-latex', latex)
+      dom.setAttribute('data-font-size', node.attrs.fontSize || '')
+      dom.setAttribute('data-omml', node.attrs.omml || '')
+      dom.title = '双击编辑公式'
+      dom.style.cursor = 'pointer'
+      applyFontSize()
+    }
+    render()
+    dom.addEventListener('mousedown', (ev: Event) => {
+      // round24：单击即选中公式（NodeSelection）。实测 PM 对无内容 atom 的
+      // 点击会把 pos 解析到相邻段落（公式块有 padding/居中，无文本落点），
+      // 不会自动建 NodeSelection —— 显式 dispatch，保证功能区字号/字体
+      // 能作用于选中公式（对齐 Word 行为：点击公式即选中）。
+      const e = ev as MouseEvent
+      if (e.button !== 0) return
+      const pos = typeof getPos === 'function' ? getPos() : null
+      if (pos == null || !_view) return
+      e.preventDefault()
+      try {
+        _view.dispatch(_view.state.tr.setSelection(NodeSelection.create(_view.state.doc, pos)))
+        _view.focus()
+      } catch { /* 节点已被并发事务删除等情形下忽略 */ }
+    })
+    dom.addEventListener('dblclick', (e) => {
+      e.preventDefault()
+      // 打开富公式编辑模态框，预填当前公式并定位到该节点，确认后替换原节点。
+      // 注意：getPos 返回该 math 节点的绝对位置，比按 latex 全文搜索定位更可靠
+      // （同文档存在多个相同 latex 的公式时旧逻辑会误改第一个）。
+      const pos = typeof getPos === 'function' ? getPos() : null
+      setMathEdit({
+        latex: node.attrs.latex || '',
+        inline: inlineMode(),
+        pos: typeof pos === 'number' ? pos : null,
+        fontSize: node.attrs.fontSize || '',
+        omml: node.attrs.omml || '',
+      })
+      setShowMathModal(true)
+    })
+    return {
+      dom,
+      // round24 字号修复：不再 stopEvent 全部事件 —— 旧版吞掉全部鼠标事件，
+      // 点击公式无法产生 NodeSelection，功能区"字号"永远写不进公式 attr。
+      // 仅拦 mousedown：选区由上面 dom 的 mousedown 监听显式建（PM 对无内容
+      // atom 的点击会把 pos 解析到相邻段落，且其默认处理会覆盖我们的
+      // NodeSelection —— 必须 stopEvent 阻断）；dblclick/键盘等仍交给 PM。
+      stopEvent: (e: Event) => e?.type === 'mousedown',
+      ignoreMutation: () => true,
+      selectNode() { dom.classList.add('sam-math-selected') },
+      deselectNode() { dom.classList.remove('sam-math-selected') },
+      // setFontSize 改 attrs.fontSize 时重渲染并应用新字号
+      update(newNode: any) {
+        if (newNode.type.name !== 'math' && newNode.type.name !== 'math_inline') return false
+        node = newNode
+        // ★ round23 性能修复（用户报告：25 公式文档打字 800ms/键）：
+        // PM 在【每次文档事务】后对所有 math NodeView 调 update()（节点类型
+        // 未变即视为可复用）。旧版无条件 katex.render —— 打 5 个字符实测
+        // 触发 168 次 KaTeX 重渲染（每键全量 25 公式 × ~1.3），每次几毫秒到
+        // 几十毫秒，直接把打字延迟推到 800ms、滚动打到 3 FPS。
+        // 修复：latex/inline/fontSize 签名未变则跳过渲染（公式内容没变，
+        // KaTeX DOM 完全无需重建）。
+        const sig = `${newNode.attrs.latex}|${inlineMode() ? 1 : 0}|${newNode.attrs.fontSize || ''}`
+        if (sig === lastSig) return true
+        lastSig = sig
+        render()
+        return true
+      },
+    }
+  }
+
   const exec = (cmd: string) => {
     const v = viewRef.current; if (!v) return; const sel = v.state.selection
     const selNode = sel instanceof NodeSelection ? sel.node : null
     switch (cmd) {
-      case 'bold': toggleMark(schema.marks.bold)(v.state, v.dispatch); break
-      case 'italic': toggleMark(schema.marks.italic)(v.state, v.dispatch); break
-      case 'underline': toggleMark(schema.marks.underline)(v.state, v.dispatch); break
-      case 'strikethrough': toggleMark(schema.marks.strikethrough)(v.state, v.dispatch); break
-      case 'superscript': toggleMark(schema.marks.superscript)(v.state, v.dispatch); break
-      case 'subscript': toggleMark(schema.marks.subscript)(v.state, v.dispatch); break
-      case 'code': toggleMark(schema.marks.code)(v.state, v.dispatch); break
+      case 'bold': toggleMarkRanges(v.state, v.dispatch, schema.marks.bold); break
+      case 'italic': toggleMarkRanges(v.state, v.dispatch, schema.marks.italic); break
+      case 'underline': toggleMarkRanges(v.state, v.dispatch, schema.marks.underline); break
+      case 'strikethrough': toggleMarkRanges(v.state, v.dispatch, schema.marks.strikethrough); break
+      case 'superscript': toggleMarkRanges(v.state, v.dispatch, schema.marks.superscript); break
+      case 'subscript': toggleMarkRanges(v.state, v.dispatch, schema.marks.subscript); break
+      case 'code': toggleMarkRanges(v.state, v.dispatch, schema.marks.code); break
       case 'h1': setBlockType(schema.nodes.heading, { level: 1 })(v.state, v.dispatch); break
       case 'h2': setBlockType(schema.nodes.heading, { level: 2 })(v.state, v.dispatch); break
       case 'h3': setBlockType(schema.nodes.heading, { level: 3 })(v.state, v.dispatch); break
@@ -2384,10 +2447,10 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       case 'codeBlock': setBlockType(schema.nodes.code_block)(v.state, v.dispatch); break
       case 'undo': undo(v.state, v.dispatch); break
       case 'redo': redo(v.state, v.dispatch); break
-      case 'copy': { v.focus(); serializeSelectionToClipboard(v, false); setShowContextMenu(false); break }
-      case 'cut': { v.focus(); serializeSelectionToClipboard(v, true); setShowContextMenu(false); break }
+      case 'copy': { focusNoJump(); serializeSelectionToClipboard(v, false); setShowContextMenu(false); break }
+      case 'cut': { focusNoJump(); serializeSelectionToClipboard(v, true); setShowContextMenu(false); break }
       case 'paste': {
-        v.focus()
+        focusNoJump()
         ;(async () => {
           try {
             const html = await (window as any).runtime.GetClipboardHtml()
@@ -2411,12 +2474,14 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       }
       case 'clearFormat': {
         const { state, dispatch } = v
-        const { from, to } = state.selection
         const tr = state.tr
         // 修复：schema 中的颜色 mark 名是 textColor（此前写成 fontColor，颜色永远清不掉）
+        // round46：表格多选（CellSelection）展开为逐格范围，全部格子清除
         const markNames = ['bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript', 'code', 'fontSize', 'fontFamily', 'textColor', 'highlight', 'charSpacing', 'link', 'wordArt']
-        markNames.forEach((n) => { const m = (state.schema.marks as any)[n]; if (m) tr.removeMark(from, to, m) })
-        dispatch(tr); v.focus(); break
+        for (const r of selectionMarkRanges(state)) {
+          markNames.forEach((n) => { const m = (state.schema.marks as any)[n]; if (m) tr.removeMark(r.from, r.to, m) })
+        }
+        dispatch(tr); focusNoJump(); break
       }
       case 'pageBreak': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create({ restart: false, startNumber: 1 }))); break
       case 'pageBreakRestart': v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.page_break.create({ restart: true, startNumber: 1 }))); break
@@ -2474,7 +2539,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           tr.insert(doc.content.size, section)
         }
         dispatch(tr)
-        v.focus()
+        focusNoJump()
         break
       }
       case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
@@ -2484,7 +2549,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           const id = Date.now().toString()
           const node = schema.nodes.comment_mark.create({ id, author: 'User', text })
           v.dispatch(v.state.tr.insert(sel.to, node))
-          v.focus()
+          focusNoJump()
           // 新建批注后自动打开对应批注卡片编辑框（对齐 MS Word 审阅窗格）
           try { setComments(extractComments(v.state.doc)) } catch (e) { /* ignore */ }
           setActiveComment(id)
@@ -2496,7 +2561,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       case 'dropCap': setParaAttr('dropCap', !activeAttrs.dropCap); break
       case 'toggleRTL': setParaAttr('rtl', !activeAttrs.rtl); break
     }
-    v.focus(); setShowMiniColorPopup(false); setShowContextMenu(false)
+    focusNoJump(); setShowMiniColorPopup(false); setShowContextMenu(false)
   }
 
   // === 修订：收集所有 insert_track / delete_track 变更区间 ===
@@ -2523,7 +2588,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     const tr = v.state.tr
     if (change.type === 'insert') tr.removeMark(change.from, change.to, v.state.schema.marks.insert_track)
     else { tr.delete(change.from, change.to) }
-    v.dispatch(tr); v.focus()
+    v.dispatch(tr); focusNoJump()
   }
   // 拒绝单条变更：插入→删除文字；删除→保留原字（去标记）
   const rejectChange = (change: { from: number; to: number; type: string }) => {
@@ -2531,7 +2596,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     const tr = v.state.tr
     if (change.type === 'insert') tr.delete(change.from, change.to)
     else tr.removeMark(change.from, change.to, v.state.schema.marks.delete_track)
-    v.dispatch(tr); v.focus()
+    v.dispatch(tr); focusNoJump()
   }
 
   const acceptAll = () => {
@@ -2541,7 +2606,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     // 从后往前处理，避免位置偏移：删除类先删，插入类去标记
     changes.filter(c => c.type === 'delete').reverse().forEach(c => { tr = tr.delete(c.from, c.to) })
     changes.filter(c => c.type === 'insert').forEach(c => { tr = tr.removeMark(c.from, c.to, v.state.schema.marks.insert_track) })
-    v.dispatch(tr); v.focus()
+    v.dispatch(tr); focusNoJump()
   }
   const rejectAll = () => {
     const v = viewRef.current; if (!v) return
@@ -2549,7 +2614,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     const changes = findChanges(v.state.doc)
     changes.filter(c => c.type === 'insert').reverse().forEach(c => { tr = tr.delete(c.from, c.to) })
     changes.filter(c => c.type === 'delete').forEach(c => { tr = tr.removeMark(c.from, c.to, v.state.schema.marks.delete_track) })
-    v.dispatch(tr); v.focus()
+    v.dispatch(tr); focusNoJump()
   }
 
   // 跳转到上/下一条变更
@@ -2563,7 +2628,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     else { for (let i = changes.length - 1; i >= 0; i--) { if (changes[i].from < pos) { target = changes[i]; break } } }
     if (!target) target = dir === 1 ? changes[0] : changes[changes.length - 1]
     v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, target.from, target.to)))
-    v.focus()
+    focusNoJump()
   }
   // 对当前光标处的变更进行接受/拒绝
   const acceptCurrent = () => {
@@ -2590,7 +2655,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         changed = true
       }
     })
-    if (changed) { v.dispatch(tr); if (focusAfter) v.focus() }
+    if (changed) { v.dispatch(tr); if (focusAfter) focusNoJump() }
   }
   // 段落边框辅助：border 为空格分隔的方向集合（'all' 为四边别名）
   const borderHas = (b: string, side: string) => {
@@ -2621,7 +2686,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         changed = true
       }
     })
-    if (changed) { v.dispatch(tr); v.focus() }
+    if (changed) { v.dispatch(tr); focusNoJump() }
   }
   // 打开"段落"对话框：读取当前段落/标题的格式属性作为初值
   const openParaDialog = () => {
@@ -2667,7 +2732,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         changed = true
       }
     })
-    if (changed) { v.dispatch(tr); v.focus() }
+    if (changed) { v.dispatch(tr); focusNoJump() }
   }
   // Align the entire table that contains the cursor
   const alignTable = (v: EditorView, align: 'left' | 'center' | 'right') => {
@@ -2682,7 +2747,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       const tr = v.state.tr
       // Set table alignment via attribute on the table node
       v.dispatch(tr.setNodeMarkup(tablePos, undefined, { ...tableNode.attrs, align }))
-      v.focus()
+      focusNoJump()
     }
   }
   const setFont = (font: string) => {
@@ -2691,14 +2756,16 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     const { from, to, empty } = state.selection
     const m = schema.marks.fontFamily
     if (!font) {
-      // 清除字体
+      // 清除字体（round46：表格多选逐格清除）
       if (empty) {
         const stored = state.storedMarks ? state.storedMarks.slice() : state.selection.$from.marks()
         dispatch(state.tr.setStoredMarks(stored.filter(mk => mk.type !== m)))
       } else {
-        dispatch(state.tr.removeMark(from, to, m))
+        const tr = state.tr
+        for (const r of selectionMarkRanges(state)) tr.removeMark(r.from, r.to, m)
+        dispatch(tr)
       }
-      v.focus(); return
+      focusNoJump(); return
     }
     // 关键：始终设置为目标字体（先移除旧 fontFamily 再添加新），不能用 toggleMark——
     // 否则选区已有任意字体时 toggleMark 会误判为"已存在"而移除，导致第一次点击跳回默认、需点两次。
@@ -2707,9 +2774,12 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       const stored = state.storedMarks ? state.storedMarks.slice() : state.selection.$from.marks()
       dispatch(state.tr.setStoredMarks([...stored.filter(mk => mk.type !== m), mark]))
     } else {
-      dispatch(state.tr.removeMark(from, to, m).addMark(from, to, mark))
+      // round46：表格多选逐格应用字体
+      const tr = state.tr
+      for (const r of selectionMarkRanges(state)) tr.removeMark(r.from, r.to, m).addMark(r.from, r.to, mark)
+      dispatch(tr)
     }
-    v.focus()
+    focusNoJump()
   }
   const setFontSize = (size: string) => {
     const v = viewRef.current; if (!v) return
@@ -2722,7 +2792,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       const tr2 = state.tr
       let touchedMath = 0
       state.doc.nodesBetween(from, to, (n: any, pos: number) => {
-        if (n.type.name === 'math') {
+        if (n.type.name === 'math' || n.type.name === 'math_inline') {
           const px = parseFloat(size)
           tr2.setNodeMarkup(pos, undefined, { ...n.attrs, fontSize: isNaN(px) ? '' : String(px) })
           touchedMath++
@@ -2731,7 +2801,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       })
       if (touchedMath > 0) {
         dispatch(tr2)
-        v.focus()
+        focusNoJump()
         return
       }
     }
@@ -2742,10 +2812,15 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       const filtered = stored.filter(m => m.type !== schema.marks.fontSize)
       dispatch(state.tr.setStoredMarks([...filtered, mark]))
     } else {
-      // 有选区：移除旧 fontSize 后再添加，避免使用 toggleMark 误删/不生效
-      dispatch(state.tr.removeMark(from, to, schema.marks.fontSize).addMark(from, to, mark))
+      // 有选区：移除旧 fontSize 后再添加，避免使用 toggleMark 误删/不生效。
+      // round46：表格多选（CellSelection）展开为逐格范围，全部格子生效。
+      const tr = state.tr
+      for (const r of selectionMarkRanges(state)) {
+        tr.removeMark(r.from, r.to, schema.marks.fontSize).addMark(r.from, r.to, mark)
+      }
+      dispatch(tr)
     }
-    // 注意：输入过程中不调用 v.focus()，否则焦点会被抢回编辑器，
+    // 注意：输入过程中不调用 focusNoJump()，否则焦点会被抢回编辑器，
     // 导致后续输入的数字被当作正文内容写入（艺术字内容变成输入数值的现象）。
   }
   // 字号加减：直接读取编辑器当前选区/光标处的真实有效字号作为基准（不依赖可能滞后的 activeFontSize 状态）
@@ -2763,7 +2838,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     // 公式节点：以选区/光标处的公式 fontSize attr 为基准（mark 不覆盖 atom 节点）
     let mathNode: any = null, mathPos = -1
     state.doc.nodesBetween(Math.max(0, from - 1), Math.min(state.doc.content.size, (state.selection as any).to + 1), (n: any, pos: number) => {
-      if (!mathNode && n.type.name === 'math') { mathNode = n; mathPos = pos }
+      if (!mathNode && (n.type.name === 'math' || n.type.name === 'math_inline')) { mathNode = n; mathPos = pos }
       return !mathNode
     })
     if (mathNode && mathNode.attrs.fontSize) cur = readSize(mathNode.attrs.fontSize)
@@ -2780,11 +2855,11 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     // 公式：直接写 attr（不经 mark）
     if (mathNode) {
       v.dispatch(state.tr.setNodeMarkup(mathPos, undefined, { ...mathNode.attrs, fontSize: String(next) }))
-      v.focus()
+      focusNoJump()
       return
     }
     setFontSize(`${next}px`)
-    v.focus()
+    focusNoJump()
   }
   // 字符间距（字间距）：与字号一样是字符级标记，作用于选区/后续输入
   const setCharSpacing = (val: string) => {
@@ -2804,22 +2879,30 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       const filtered = stored.filter(m => m.type !== schema.marks.charSpacing)
       dispatch(state.tr.setStoredMarks([...filtered, mark]))
     } else {
-      dispatch(state.tr.removeMark(from, to, schema.marks.charSpacing).addMark(from, to, mark))
+      // round46：表格多选逐格应用字间距
+      const tr = state.tr
+      for (const r of selectionMarkRanges(state)) {
+        tr.removeMark(r.from, r.to, schema.marks.charSpacing).addMark(r.from, r.to, mark)
+      }
+      dispatch(tr)
     }
   }
-  const setTextColor = (color: string) => { const v = viewRef.current; if (!v) return; toggleMark(schema.marks.textColor, { color })(v.state, v.dispatch); v.focus() }
+  const setTextColor = (color: string) => { const v = viewRef.current; if (!v) return; toggleMarkRanges(v.state, v.dispatch, schema.marks.textColor, { color }); focusNoJump() }
   // 「自动」= 移除字体颜色标记（对齐 MS Word 字体颜色面板的自动项）
   const clearTextColor = () => {
     const v = viewRef.current; if (!v) return
-    const { from, to } = v.state.selection
-    const tr = v.state.tr.removeMark(from, to, schema.marks.textColor)
-    v.dispatch(tr); v.focus()
+    const tr = v.state.tr
+    for (const r of selectionMarkRanges(v.state)) tr.removeMark(r.from, r.to, schema.marks.textColor)
+    v.dispatch(tr); focusNoJump()
   }
   const setHighlight = (color: string) => {
     const v = viewRef.current; if (!v) return
-    const { from, to } = v.state.selection
-    if (!color) { v.dispatch(v.state.tr.removeMark(from, to, schema.marks.highlight)); v.focus(); return }
-    toggleMark(schema.marks.highlight, { color })(v.state, v.dispatch); v.focus()
+    if (!color) {
+      const tr = v.state.tr
+      for (const r of selectionMarkRanges(v.state)) tr.removeMark(r.from, r.to, schema.marks.highlight)
+      v.dispatch(tr); focusNoJump(); return
+    }
+    toggleMarkRanges(v.state, v.dispatch, schema.marks.highlight, { color }); focusNoJump()
   }
   const handleSearch = () => { const v = viewRef.current; if (!v || !searchQuery) return; doSearch(v, searchQuery, false) }
   const handleReplace = () => { const v = viewRef.current; if (!v) return; doReplace(v, searchQuery, replaceQuery, false) }
@@ -2833,12 +2916,12 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
   const insertFormula = () => {
     // 打开独立公式编辑器弹窗（若有选中 math 节点则预填用于编辑）
     const v = viewRef.current
-    let init = { latex: '', inline: false, pos: null as number | null, fontSize: '' }
+    let init = { latex: '', inline: false, pos: null as number | null, fontSize: '', omml: '' }
     if (v) {
       const sel = v.state.selection
       const node = sel instanceof NodeSelection ? sel.node : null
-      if (node && node.type.name === 'math') {
-        init = { latex: node.attrs.latex || '', inline: !!node.attrs.inline, pos: sel.from, fontSize: node.attrs.fontSize || '' }
+      if (node && (node.type.name === 'math' || node.type.name === 'math_inline')) {
+        init = { latex: node.attrs.latex || '', inline: node.type.name === 'math_inline' || !!node.attrs.inline, pos: sel.from, fontSize: node.attrs.fontSize || '', omml: node.attrs.omml || '' }
       }
     }
     setMathEdit(init)
@@ -2847,7 +2930,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
   const insertSymbol = (sym: string) => {
     const v = viewRef.current; if (!v) return
     v.dispatch(v.state.tr.replaceSelectionWith(schema.text(sym)))
-    v.focus()
+    focusNoJump()
   }
   // 更新选中 text_box 节点的样式属性（边框宽度/线型/颜色/填充/圆角/形状）
   const updateTextBox = (attrs: Record<string, any>) => {
@@ -2858,7 +2941,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     const newNode = schema.nodes.text_box.create({ ...old.attrs, ...attrs }, old.content)
     const tr = v.state.tr.replaceWith(cur.pos, cur.pos + old.nodeSize, newNode)
     v.dispatch(tr)
-    v.focus()
+    focusNoJump()
     // 同步浮动面板状态
     setActiveTextBox({ node: newNode, pos: cur.pos })
   }
@@ -2877,21 +2960,35 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       if ($pos.node(d).type.name === 'text_box') {
         const pos = $pos.before(d)
         v.dispatch(v.state.tr.setSelection(NodeSelection.create(v.state.doc, pos)))
-        v.focus()
+        focusNoJump()
         return
       }
     }
   }
   // 公式弹窗插入/更新。fontSize 为弹窗字号选择（'' = 跟随正文默认）；
   // 编辑已有公式时若弹窗未改字号，保留原节点的 fontSize attr。
+  // round46 保真：latex 未改动时保留 OMML 原文（导出直写原文零损失）；
+  // latex 有改动则丢弃 omml（导出改走 LaTeX→OMML 转换）。
   const handleMathInsert = (latex: string, inline: boolean, fontSize?: string) => {
     const v = viewRef.current; if (!v) { setShowMathModal(false); return }
     let fs = fontSize || ''
+    let omml = ''
     if (mathEdit.pos != null && !fontSize) {
       const old = v.state.doc.nodeAt(mathEdit.pos)
-      if (old && old.type.name === 'math') fs = old.attrs.fontSize || ''
+      if (old && (old.type.name === 'math' || old.type.name === 'math_inline')) fs = old.attrs.fontSize || ''
     }
-    const mathNode = schema.nodes.math.create({ latex, inline, fontSize: fs })
+    if (mathEdit.pos != null) {
+      const old = v.state.doc.nodeAt(mathEdit.pos)
+      if (old && (old.type.name === 'math' || old.type.name === 'math_inline') && (old.attrs.latex || '') === latex) {
+        // 公式内容未变（只改字号/行内切换等）：保留 OMML 原文
+        omml = old.attrs.omml || ''
+      }
+    }
+    // 行内公式用独立的 math_inline 节点（PM 判定 inline 与否只认 NodeSpec 的
+    // inline 标志 —— 单节点双组会污染 'inline*' 内容表达式，round46 实证）
+    const mathNode = inline
+      ? schema.nodes.math_inline.create({ latex, fontSize: fs, omml })
+      : schema.nodes.math.create({ latex, inline: false, fontSize: fs, omml })
     const tr = v.state.tr
     if (mathEdit.pos != null) {
       // 编辑已有公式：替换原节点
@@ -2901,7 +2998,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       tr.replaceSelectionWith(mathNode)
     }
     v.dispatch(tr)
-    v.focus()
+    focusNoJump()
     setShowMathModal(false)
   }
 
@@ -3108,7 +3205,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     return () => { cleanup(); (window as any).__samStartRowDrag = undefined }
   }, [])
 
-  const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); v.focus() } }
+  const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); focusNoJump() } }
   const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
   const insertImage = () => {
     // 注意：组件作用域内 document 是 UDM Document prop，DOM 对象须用 window.document
@@ -3135,14 +3232,14 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           const height = Math.round((width * H) / W)
           if (v.state.doc) {
             v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src, width, height, float: '', wrap: true })))
-            v.focus()
+            focusNoJump()
           }
         }
         probe.onerror = () => {
           // 解码失败也至少给出默认尺寸，避免高度为 0
           if (v.state.doc) {
             v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.image.create({ src, width: 300, height: 200, float: '', wrap: true })))
-            v.focus()
+            focusNoJump()
           }
         }
         probe.src = src
@@ -3193,8 +3290,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       e.preventDefault()
-      if (k === 'z' && !e.shiftKey) { undo(v.state, v.dispatch); v.focus() }
-      else if (k === 'y' || (k === 'z' && e.shiftKey)) { redo(v.state, v.dispatch); v.focus() }
+      if (k === 'z' && !e.shiftKey) { undo(v.state, v.dispatch); focusNoJump() }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { redo(v.state, v.dispatch); focusNoJump() }
       else if (k === 'b') { toggleMark(schema.marks.bold)(v.state, v.dispatch, v) }
       else if (k === 'i') { toggleMark(schema.marks.italic)(v.state, v.dispatch, v) }
       else if (k === 'u') { toggleMark(schema.marks.underline)(v.state, v.dispatch, v) }
@@ -3309,7 +3406,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     const resolved = resolveFontSizeInput(v)
                     if (resolved) { setFontSize(resolved); return }
                   }}
-                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) focusNoJump() }}
                   value={activeFontSize}
                   onChange={(v) => setFontSize(v)}
                   options={FONT_SIZES.map(s => ({ label: s.name, value: s.value }))}
@@ -3329,7 +3426,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     const num = parseFloat(v)
                     if (!isNaN(num)) setCharSpacing(`${num}px`)
                   }}
-                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) focusNoJump() }}
                   value={activeCharSpacing}
                   onChange={(v) => setCharSpacing(v)}
                   options={['0px', '0.5px', '1px', '1.5px', '2px', '3px', '-1px', '-0.5px'].map(s => ({ label: s, value: s }))}
@@ -3410,7 +3507,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     const num = parseFloat(v)
                     if (!isNaN(num) && num > 0) setParaAttr('lineHeight', String(num))
                   }}
-                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) focusNoJump() }}
                   value={activeAttrs.lineHeight || ''}
                   onChange={v => setParaAttr('lineHeight', v)}
                   options={[{ label: t('doc.lineSpacing'), value: '' }, ...LINE_HEIGHTS.map(l => ({ label: l.name, value: l.value }))]}
@@ -3428,7 +3525,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     const num = parseFloat(v)
                     if (!isNaN(num)) setParaAttr('letterSpacing', `${num}px`, false)
                   }}
-                  onInputBlur={() => { const v = viewRef.current; if (v) v.focus() }}
+                  onInputBlur={() => { const v = viewRef.current; if (v) focusNoJump() }}
                   value={activeAttrs.letterSpacing || ''}
                   onChange={v => setParaAttr('letterSpacing', v)}
                   options={[
@@ -3515,7 +3612,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                         const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.wordArt.create({ style: p.style })]
                         if (p.style !== 'gradient' && p.style !== 'outline') marks.push(schema.marks.textColor.create({ color: p.color }))
                         v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, marks))))
-                        v.focus(); setShowArtPanel(false)
+                        focusNoJump(); setShowArtPanel(false)
                       }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 72 }}>
                         <span style={{ fontSize: '18px', fontWeight: 700, color: p.color, textShadow: p.style === 'shadow' ? '2px 2px 4px rgba(0,0,0,0.4)' : p.style === 'glow' ? '0 0 10px ' + p.color : p.style === '3d' ? '1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 6px rgba(0,0,0,0.3)' : 'none' }}>{p.name.charAt(0)}a</span>
                         <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{p.name}</span>
@@ -3540,7 +3637,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 row.map(cell => schema.nodes.table_cell.create({ isHeader: r === 0 }, schema.nodes.paragraph.create(null, schema.text(cell))))
               ))
               v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.table.create(null, tableRows)))
-              v.focus()
+              focusNoJump()
             }} />
           </RibbonGroup>
           <RibbonGroup label={t('doc.text')}>
@@ -3728,7 +3825,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     v.dispatch(v.state.tr
                       .setSelection(TextSelection.create(v.state.doc, h.from, h.to))
                       .scrollIntoView())
-                    v.focus()
+                    focusNoJump()
                     jumped = true
                     break
                   }
@@ -3912,7 +4009,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
             if (headings.length === 0) return <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.noHeadings') || '无标题'}</div>
             return headings.map((h, i) => (
               <div key={i} className="text-xs cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5" style={{ marginLeft: (h.level - 1) * 12, color: 'var(--color-text-secondary)' }}
-                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(h.pos)))); v.focus() } }}>
+                onClick={() => { const v = viewRef.current; if (v) { v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(h.pos)))); focusNoJump() } }}>
                 {h.text || `(H${h.level})`}
               </div>
             ))
@@ -4095,7 +4192,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
             const $pos = v.state.doc.resolve(below ? Math.max(0, endPos) : Math.min(1, endPos))
             const sel = TextSelection.near($pos, below ? -1 : 1)
             v.dispatch(v.state.tr.setSelection(sel).scrollIntoView())
-            v.focus()
+            focusNoJump()
             e.preventDefault()
           } catch { /* 位置无效时忽略 */ }
         }}
@@ -4448,7 +4545,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                   id={`comment-card-${c.id}`}
                   className={`comment-card ${isActive ? 'active' : ''}`}
                   style={{ position: 'absolute', left: 10, right: 10, top: layout ? layout.top : -9999, visibility: layout ? 'visible' : 'hidden', padding: '8px 10px', borderRadius: '6px', border: `1px solid ${isActive ? '#4f46e5' : 'var(--color-border)'}`, background: isActive ? 'var(--color-bg-alt)' : 'var(--color-surface)' }}
-                  onClick={() => { setActiveComment(c.id); const v = viewRef.current; if (v) { const node = v.state.doc.nodeAt(c.pos); if (node && node.type.name === 'comment_mark') { const from = c.pos, to = c.pos + node.nodeSize; v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to))); v.focus() } } }}
+                  onClick={() => { setActiveComment(c.id); const v = viewRef.current; if (v) { const node = v.state.doc.nodeAt(c.pos); if (node && node.type.name === 'comment_mark') { const from = c.pos, to = c.pos + node.nodeSize; v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, from, to))); focusNoJump() } } }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
                     <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-text-muted)' }}>{c.author}</span>

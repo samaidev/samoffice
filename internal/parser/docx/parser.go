@@ -875,7 +875,6 @@ func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string
         var inRun bool
         var curText core.Text
         hasMath := false
-        var mathXML strings.Builder
         leadingPageBreak := false  // pageBreakBefore：段前分页
         trailingPageBreak := false // w:br type="page"：段后分页
         inPPr := false // 当前是否处于 <w:pPr> 内（用于区分段落属性与 run 属性的同名元素，如 w:spacing）
@@ -1181,10 +1180,17 @@ func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string
                                                 }
                                         }
                                 }
-                        case "oMath", "oMathPara": // OMML 公式
+                        case "oMath", "oMathPara": // OMML 公式（round46）：逐个捕获原文片段，保持行内位置
                                 hasMath = true
-                                mathXML.WriteString(serializeStart(t))
-                                collectElement(dec, &mathXML, t.Name.Local)
+                                var frag strings.Builder
+                                writeOMMLStart(&frag, t)
+                                collectOMMLPrefixed(dec, &frag, t.Name.Local)
+                                ommlFrag := frag.String()
+                                para.Inline = append(para.Inline, &core.InlineMath{
+                                        Formula: ommlToLatex(ommlFrag),
+                                        OMML:    ommlFrag,
+                                        Display: t.Name.Local == "oMathPara",
+                                })
                         }
                 case xml.EndElement:
                         if t.Name.Local == "pPr" {
@@ -1207,19 +1213,27 @@ func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string
                         if leadingPageBreak {
                                 out = append(out, &core.PageBreak{})
                         }
-                        if hasMath {
-                                if latex := ommlToLatex(mathXML.String()); latex != "" {
-                                        // 段落同时含正文与公式：先输出正文段落，再输出公式块，
-                                        // 不再丢弃段落文本（对齐 MS Word 的显示顺序）。
-                                        if len(para.Inline) > 0 {
-                                                out = append(out, para)
-                                        }
-                                        out = append(out, &core.Math{Formula: latex})
-                                        if trailingPageBreak {
-                                                out = append(out, &core.PageBreak{})
-                                        }
-                                        return out
+                        // 段落仅由公式组成（无正文文本）：保持旧的块级公式行为
+                        // （前端 KaTeX display 模式渲染），OMML 原文随 Math 块直写回导出。
+                        allMath := hasMath && len(para.Inline) > 0
+                        for _, in := range para.Inline {
+                                if _, ok := in.(*core.InlineMath); !ok {
+                                        allMath = false
+                                        break
                                 }
+                        }
+                        if allMath {
+                                var latexAll, ommlAll strings.Builder
+                                for _, in := range para.Inline {
+                                        m := in.(*core.InlineMath)
+                                        latexAll.WriteString(m.Formula)
+                                        ommlAll.WriteString(m.OMML)
+                                }
+                                out = append(out, &core.Math{Formula: latexAll.String(), OMML: ommlAll.String()})
+                                if trailingPageBreak {
+                                        out = append(out, &core.PageBreak{})
+                                }
+                                return out
                         }
                 if lvl := headingLevel(para.Style); lvl > 0 {
                         out = append(out, &core.Heading{
@@ -2033,6 +2047,88 @@ func collectElement(dec *xml.Decoder, out *strings.Builder, name string) {
                         }
                 }
         }
+}
+
+// nsPrefixOf 将命名空间 URI 映射为 OOXML 惯用前缀。OMML 原文回写需要
+// m:/w: 前缀（document.xml 根节点已声明 xmlns:m / xmlns:w）。
+func nsPrefixOf(space string) string {
+        switch space {
+        case "http://schemas.openxmlformats.org/officeDocument/2006/math":
+                return "m"
+        case "http://schemas.openxmlformats.org/wordprocessingml/2006/main":
+                return "w"
+        case "http://www.w3.org/XML/1998/namespace":
+                return "xml"
+        }
+        return ""
+}
+
+// writeOMMLStart 输出带前缀的起始标签（属性同样按命名空间重建前缀，
+// 如 m:val / w:ascii —— serializeStart 只保留局部名，会丢命名空间）。
+func writeOMMLStart(sb *strings.Builder, t xml.StartElement) {
+        sb.WriteString("<")
+        if p := nsPrefixOf(t.Name.Space); p != "" {
+                sb.WriteString(p + ":")
+        }
+        sb.WriteString(t.Name.Local)
+        for _, a := range t.Attr {
+                sb.WriteString(" ")
+                if p := nsPrefixOf(a.Name.Space); p != "" {
+                        sb.WriteString(p + ":")
+                }
+                sb.WriteString(a.Name.Local + `="` + escapeXMLAttr(a.Value) + `"`)
+        }
+        sb.WriteString(">")
+}
+
+// writeOMMLEnd 输出带前缀的结束标签。
+func writeOMMLEnd(sb *strings.Builder, t xml.EndElement) {
+        sb.WriteString("</")
+        if p := nsPrefixOf(t.Name.Space); p != "" {
+                sb.WriteString(p + ":")
+        }
+        sb.WriteString(t.Name.Local + ">")
+}
+
+// collectOMMLPrefixed 从 dec 消费名为 name 的元素（含其全部子节点），
+// 以带命名空间前缀的形式写出到 out，供导出时原样回写 OMML 原文
+// （round46 公式保真：未编辑的公式不再经 LaTeX 往返）。
+func collectOMMLPrefixed(dec *xml.Decoder, out *strings.Builder, name string) {
+        depth := 1
+        for {
+                tok, err := dec.Token()
+                if err != nil {
+                        return
+                }
+                switch t := tok.(type) {
+                case xml.StartElement:
+                        depth++
+                        writeOMMLStart(out, t)
+                case xml.CharData:
+                        out.WriteString(escapeXMLText(string(t)))
+                case xml.EndElement:
+                        writeOMMLEnd(out, t)
+                        depth--
+                        if depth == 0 && t.Name.Local == name {
+                                return
+                        }
+                }
+        }
+}
+
+// escapeXMLText 转义文本节点内容（decoder 已把实体还原，回写前重新转义）。
+func escapeXMLText(s string) string {
+        s = strings.ReplaceAll(s, "&", "&amp;")
+        s = strings.ReplaceAll(s, "<", "&lt;")
+        s = strings.ReplaceAll(s, ">", "&gt;")
+        return s
+}
+
+// escapeXMLAttr 转义属性值（含引号）。
+func escapeXMLAttr(s string) string {
+        s = escapeXMLText(s)
+        s = strings.ReplaceAll(s, `"`, "&quot;")
+        return s
 }
 
 // ommlToLatex 将 OMML 片段转为 LaTeX。失败返回空字符串。

@@ -1284,6 +1284,15 @@ func renderHeading(sb *strings.Builder, h *core.Heading) {
 
 // renderMath 将公式块（LaTeX）导出为 OMML（m:oMath）。
 func renderMath(sb *strings.Builder, m *core.Math) {
+        // round46 公式保真：解析 docx 时捕获的 OMML 原文直接回写，
+        // 不再经 LaTeX 往返（结构/字体/特殊字符零损失）。原文可能是
+        // 多个 oMath/oMathPara 兄弟片段，均为 w:p 的合法子元素。
+        if m.OMML != "" {
+                sb.WriteString("<w:p>")
+                sb.WriteString(m.OMML)
+                sb.WriteString("</w:p>\n")
+                return
+        }
         omml, ok := latexToOMML(m.Formula)
         if !ok {
                 // 解析失败时退化为纯文本段落，避免丢公式
@@ -1623,6 +1632,33 @@ func renderInline(sb *strings.Builder, in core.Inline, runExtra string) {
                 renderFootnoteRef(sb, v.Num)
         case *core.InlineImage:
                 // 行内图片仅在段落上下文有 images 映射时渲染，此处跳过
+        case *core.InlineMath:
+                renderInlineMath(sb, v)
+        case core.InlineMath:
+                renderInlineMath(sb, &v)
+        }
+}
+
+// renderInlineMath 渲染段落文本流中的行内公式（round46）。
+// OOXML 中 m:oMath 是 w:p 的直接子元素（与 w:r 平级），不包进 w:r。
+// OMML 原文（解析捕获、未被前端编辑）优先直写；编辑过的公式走 LaTeX 转换。
+func renderInlineMath(sb *strings.Builder, m *core.InlineMath) {
+        if m.OMML != "" {
+                sb.WriteString(m.OMML)
+                return
+        }
+        omml, ok := latexToOMML(m.Formula)
+        if !ok {
+                // 转换失败退化为纯文本，避免静默丢公式
+                if m.Formula != "" {
+                        sb.WriteString(`<w:r><w:t xml:space="preserve">` + escapeXML(m.Formula) + `</w:t></w:r>`)
+                }
+                return
+        }
+        if m.Display {
+                sb.WriteString("<m:oMathPara><m:oMath>" + omml + "</m:oMath></m:oMathPara>")
+        } else {
+                sb.WriteString("<m:oMath>" + omml + "</m:oMath>")
         }
 }
 

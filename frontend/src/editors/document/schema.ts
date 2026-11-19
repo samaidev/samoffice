@@ -427,30 +427,39 @@ export const schema = new Schema({
       }],
     },
 
-    // === 数学公式 ===
+    // === 数学公式（块级，独立成行） ===
     math: {
+      // 注意：PM 判定 inline/block 只认 NodeSpec 的 inline 标志（isBlock =
+      // !(spec.inline || name=='text')），组名只是标签。同一个节点既当块又当
+      // 行内会污染所有 'inline*' 内容表达式（round46 E2E 实证）——行内公式
+      // 用独立的 math_inline 节点。
       group: 'block',
       atom: true,
       isolating: true,
       attrs: {
         latex: { default: '' },
+        // 旧版遗留：块级公式的显示模式（KaTeX displayMode），新行内公式走 math_inline
         inline: { default: false },
         // 公式字号（px 数值字符串，'' 跟随正文默认）：公式是 atom 节点，
         // 字符级 fontSize mark 无法作用 —— 单独 attr + NodeView 应用 font-size。
         fontSize: { default: '' },
+        // OMML 原文（docx 解析捕获）：未编辑的公式导出时直写原文（保真）；
+        // 用户编辑公式（latex 变更）后清空，导出走 LaTeX→OMML 转换。
+        omml: { default: '' },
       },
       toDOM: (node) => {
         const latex = node.attrs.latex || ''
         const wrap = node.attrs.inline ? 'span' : 'div'
         const style = node.attrs.fontSize ? `font-size:${node.attrs.fontSize}px` : ''
-        return [wrap, { class: 'sam-math', 'data-latex': latex, 'data-font-size': node.attrs.fontSize || '', ...(style ? { style } : {}) }, `⟨formula:${latex}⟩`]
+        return [wrap, { class: 'sam-math', 'data-latex': latex, 'data-font-size': node.attrs.fontSize || '', 'data-omml': node.attrs.omml || '', ...(style ? { style } : {}) }, `⟨formula:${latex}⟩`]
       },
       parseDOM: [{
-        tag: 'div.sam-math, span.sam-math',
+        tag: 'div.sam-math',
         getAttrs: (dom: any) => ({
           latex: dom.getAttribute('data-latex') || (dom.textContent || '').replace(/^⟨formula:/, '').replace(/⟩$/, ''),
-          inline: dom.tagName.toLowerCase() === 'span',
+          inline: false,
           fontSize: dom.getAttribute('data-font-size') || '',
+          omml: dom.getAttribute('data-omml') || '',
         }),
       }, {
         tag: 'p',
@@ -459,6 +468,33 @@ export const schema = new Schema({
           if (!text.startsWith('⟨formula:')) return false
           return { latex: text.replace(/^⟨formula:/, '').replace(/⟩$/, '') }
         },
+      }],
+    },
+
+    // === 数学公式（行内，段落文本流中，round46）===
+    math_inline: {
+      // inline: true 必须显式声明 —— PM 以此判定 isInline（见 math 节点注释）
+      inline: true,
+      group: 'inline',
+      atom: true,
+      isolating: true,
+      attrs: {
+        latex: { default: '' },
+        fontSize: { default: '' },
+        omml: { default: '' },
+      },
+      toDOM: (node) => {
+        const latex = node.attrs.latex || ''
+        const style = node.attrs.fontSize ? `font-size:${node.attrs.fontSize}px` : ''
+        return ['span', { class: 'sam-math sam-math-inline', 'data-latex': latex, 'data-font-size': node.attrs.fontSize || '', 'data-omml': node.attrs.omml || '', ...(style ? { style } : {}) }, `⟨formula:${latex}⟩`]
+      },
+      parseDOM: [{
+        tag: 'span.sam-math',
+        getAttrs: (dom: any) => ({
+          latex: dom.getAttribute('data-latex') || (dom.textContent || '').replace(/^⟨formula:/, '').replace(/⟩$/, ''),
+          fontSize: dom.getAttribute('data-font-size') || '',
+          omml: dom.getAttribute('data-omml') || '',
+        }),
       }],
     },
 

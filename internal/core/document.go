@@ -243,13 +243,31 @@ func (CodeBlock) isBlock()          {}
 func (CodeBlock) BlockType() string { return "codeBlock" }
 
 // Math 数学公式块（LaTeX）。导出 docx 时转为 OMML（m:oMath）。
+// OMML 非空时为解析 docx 时捕获的公式原文（m:/w: 前缀的 OMML 片段，可能为
+// 多个 oMath/oMathPara 兄弟节点），导出时直接回写原文 —— 结构/字体零损失。
+// 前端编辑公式后 omml 被清空，导出改走 LaTeX→OMML 转换。
 type Math struct {
-        Formula string `json:"formula"`
-        Inline  bool   `json:"inline,omitempty"`
+	Formula string `json:"formula"`
+	Inline  bool   `json:"inline,omitempty"`
+	OMML    string `json:"omml,omitempty"`
 }
 
 func (Math) isBlock()          {}
 func (Math) BlockType() string { return "math" }
+
+// InlineMath 段落文本流中的行内公式（round46）。
+// 旧实现把段落内全部公式合并成一个 Math 块并排在段文之后 —— 行内位置丢失、
+// 多公式合并、每次保存经 OMML→LaTeX→OMML 往返结构逐步劣化。
+// 现按出现顺序捕获进段落 inline 序列：Formula 为 LaTeX（前端显示/编辑），
+// OMML 为原文片段（未编辑时导出直接回写，保证保真）。
+type InlineMath struct {
+	Formula string `json:"formula"`
+	OMML    string `json:"omml,omitempty"`
+	Display bool   `json:"display,omitempty"` // 源为 m:oMathPara（独立成行的显示公式）
+}
+
+func (InlineMath) isInline()          {}
+func (InlineMath) InlineType() string { return "math" }
 
 // Textbox 文本框/形状块。包含内部块（标题、段落、图片等），以及几何与
 // 样式属性：边框宽度 borderW(pt)、线型 lineStyle(solid|dash|dot|dashDot)、

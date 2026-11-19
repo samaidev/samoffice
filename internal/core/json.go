@@ -401,6 +401,8 @@ func unmarshalInline(data []byte) (Inline, error) {
 		Src     string `json:"src"`     // InlineImage
 		Kind    string `json:"kind"`    // RawInline
 		Track   string `json:"track"`   // Track (修订追踪)
+		Formula string `json:"formula"` // InlineMath（公式）
+		OMML    string `json:"omml"`    // InlineMath（OMML 原文）
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, err
@@ -423,6 +425,11 @@ func unmarshalInline(data []byte) (Inline, error) {
 		var r RawInline
 		err := json.Unmarshal(data, &r)
 		return &r, err
+	case probe.Formula != "" || probe.OMML != "":
+		// 行内公式（round46）：Formula 为空时以 OMML 兜底（LaTeX 转换失败的原文公式）
+		var m InlineMath
+		err := json.Unmarshal(data, &m)
+		return &m, err
 	default:
 		// 默认作为 Text
 		var t Text

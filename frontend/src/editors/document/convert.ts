@@ -74,7 +74,7 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
     }
     case 'math': {
       const m = b as any
-      return schema.node('math', { latex: m.formula || m.latex || '', inline: !!m.inline })
+      return schema.node('math', { latex: m.formula || m.latex || '', inline: !!m.inline, omml: m.omml || '' })
     }
     case 'textbox': {
       const tb = b as any
@@ -94,7 +94,7 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
     }
     case 'formula' in (b as any) && (b as any).formula: {
       const m = b as any
-      return schema.node('math', { latex: m.formula || '', inline: !!m.inline })
+      return schema.node('math', { latex: m.formula || '', inline: !!m.inline, omml: m.omml || '' })
     }
     case 'pageBreak': {
       const pb = b as any
@@ -195,6 +195,12 @@ function inlineToPM(inlines: Inline[] | undefined, schema: Schema, comments?: Co
     if ((inline as any).type === 'footnote') {
       const fn = inline as any
       result.push(schema.node('footnote', { num: Number(fn.num) || 1, content: fn.content || '' }))
+    } else if ('formula' in inline || (inline as any).omml) {
+      // 行内公式（round46）：InlineMath {formula, omml} → math_inline 原子节点
+      // （PM 行内节点必须显式 inline:true —— 单独的节点类型，见 schema 注释）。
+      // OMML 原文存 attr 供保存回写。
+      const m = inline as any
+      result.push(schema.node('math_inline', { latex: m.formula || '', omml: m.omml || '' }))
     } else if ('src' in inline) {
       // 内联图片（如 OLE .doc 提取的 PICF 图片，base64 data URI）。
       // 必须用 inline 原子节点 inlineImage（schema.image 是 block 节点，
@@ -316,7 +322,8 @@ function pmToBlock(node: Node): Block | null {
     case 'page_break':
       return { restart: !!node.attrs.restart, startNumber: Number(node.attrs.startNumber) || 1 }
     case 'math':
-      return { formula: node.attrs.latex || '', inline: !!node.attrs.inline }
+      // round46：OMML 原文随公式透传（未编辑时导出直写原文，保真）
+      return { formula: node.attrs.latex || '', inline: !!node.attrs.inline, omml: node.attrs.omml || '' }
     case 'text_box': {
       const tb = node as any
       const inner = tb.children.map((ib: Node) => pmToBlock(ib)).filter(Boolean)
@@ -415,6 +422,10 @@ function pmToInline(node: Node): Inline[] {
       } else if (child.type.name === 'inlineImage') {
         // 内联图片：保留 src 与尺寸
         result.push({ src: child.attrs.src, width: Number(child.attrs.width) || 0, height: Number(child.attrs.height) || 0 } as any)
+      } else if (child.type.name === 'math' || child.type.name === 'math_inline') {
+        // 行内公式（round46）：按 InlineMath 序列化（Go 端按 formula/omml 字段识别），
+        // OMML 原文随行透传 —— 未编辑的公式导出时直写原文
+        result.push({ type: 'math', formula: child.attrs.latex || '', omml: child.attrs.omml || '' } as any)
       } else if (child.type.name === 'comment_mark') {
         // 批注标记：输出为带 commentId 的空文本；评论正文由 proseMirrorToUDM
         // 收集进 document.comments（docx 导出写 comments.xml）

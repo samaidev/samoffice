@@ -304,9 +304,12 @@ export class DocTableView {
           const lr: PMNode = lastRow
           lr.forEach((cell: PMNode, off: number) => { lastCellStart = Math.max(lastCellStart, lastRowStart + 1 + off) })
           try {
+            // round46：全选后不再 scrollIntoView —— 锚点是表格首格，长表格跨多页时
+            // 视口会跳到表格首页（用户报告"选择表格跳到很远的其他页面"）。
+            // Word 行为：点表格把手全选，视口保持原地。focus 同理禁止滚动。
             const tr = view.state.tr.setSelection(CellSelection.create(doc, startPos + 2, lastCellStart))
-            view.dispatch(tr.scrollIntoView())
-            view.focus()
+            view.dispatch(tr)
+            ;(view.dom as HTMLElement).focus({ preventScroll: true })
           } catch (err) {
             try { console.error('TABLE_HANDLE_SELECT_FAIL', err) } catch { /* ignore */ }
           }
@@ -349,7 +352,8 @@ export class DocTableView {
           const tr = view.state.tr.delete(startPos, tableEnd)
           tr.insert(insertPos, tableNode)
           view.dispatch(tr.scrollIntoView())
-          view.focus()
+          // round46：scrollIntoView 已定位移动后的表格；focus 禁止再滚到原生选区起点（双重滚动打架）
+          ;(view.dom as HTMLElement).focus({ preventScroll: true })
         } catch (err) {
           try { console.error('TABLE_HANDLE_MOVE_FAIL', err) } catch { /* ignore */ }
         }
@@ -585,7 +589,8 @@ export function startRowDragSession(view: EditorView, clientX: number, clientY: 
       const newRows = rest.slice(0, insertAt).concat(moved, rest.slice(insertAt))
       const tr = view.state.tr.replaceWith(tablePos, tablePos + t2.nodeSize, t2.copy(Fragment.fromArray(newRows)))
       view.dispatch(tr.scrollIntoView())
-      view.focus()
+      // round46：同上 —— focus 禁止再滚到原生选区起点
+      ;(view.dom as HTMLElement).focus({ preventScroll: true })
     } catch { /* 移动失败静默 */ }
   }
   window.addEventListener('mousemove', onMove)

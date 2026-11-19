@@ -1,6 +1,9 @@
 package docx
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // latexToOMML 将 LaTeX 数学公式转换为 OOXML Math (OMML) 内部 XML 片段。
 // 支持常见结构：上下标、分数、根式、求和/积分（带上下限）、
@@ -16,6 +19,11 @@ func latexToOMML(latex string) (string, bool) {
 		return "", false
 	}
 	return body, true
+}
+
+// LatexToOMMLForTest 导出测试入口（cmd/mathtest 等外部工具验证 LaTeX→OMML 转换）。
+func LatexToOMMLForTest(latex string) (string, bool) {
+	return latexToOMML(latex)
 }
 
 // extractFormulaOMML 识别形如 ⟨formula:...⟩ 的文本并将其转为 OMML。
@@ -36,19 +44,24 @@ type omathParser struct {
 	pos int
 }
 
+// peek/next 按 UTF-8 解码整字符（round46）：旧实现 rune(p.src[p.pos]) 取的是
+// 单个字节，多字节字符（省略号/中文/全角标点/U+2061 等）被逐字节拆开输出，
+// 公式保存后出现 Ã¢Â¦ 式乱码。
 func (p *omathParser) peek() rune {
 	if p.pos >= len(p.src) {
 		return 0
 	}
-	return rune(p.src[p.pos])
+	r, _ := utf8.DecodeRuneInString(p.src[p.pos:])
+	return r
 }
 
 func (p *omathParser) next() rune {
-	c := p.peek()
-	if c != 0 {
-		p.pos++
+	if p.pos >= len(p.src) {
+		return 0
 	}
-	return c
+	r, size := utf8.DecodeRuneInString(p.src[p.pos:])
+	p.pos += size
+	return r
 }
 
 func (p *omathParser) skipSpace() {
@@ -225,6 +238,9 @@ var opMap = map[string]string{
 	"times": "×", "div": "÷", "pm": "±", "mp": "∓", "cdot": "·", "ast": "∗",
 	"star": "⋆", "circ": "∘", "bullet": "∙", "oplus": "⊕", "otimes": "⊗",
 	"leq": "≤", "geq": "≥", "neq": "≠", "approx": "≈", "equiv": "≡",
+	// le/ge/ne 是解析器 ommlText 的输出形式（≤→\le 等），缺失会把关系符
+	// 退化为字面文本 "le"/"ge"/"ne"（round46 用户报告的公式错乱之一）
+	"le": "≤", "ge": "≥", "ne": "≠", "leqslant": "≤", "geqslant": "≥",
 	"propto": "∝", "sim": "∼", "cong": "≅", "in": "∈", "notin": "∉",
 	"subset": "⊂", "supset": "⊃", "subseteq": "⊆", "supseteq": "⊇",
 	"emptyset": "∅", "infty": "∞", "partial": "∂", "nabla": "∇",

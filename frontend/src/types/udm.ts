@@ -38,6 +38,15 @@ export interface PageBreak {
 export interface Math {
   formula: string
   inline?: boolean
+  // OMML 原文（docx 解析捕获）：未编辑的公式导出时直写原文（round46 保真）
+  omml?: string
+}
+
+// 行内公式（段落文本流中的 m:oMath，round46）：Go 端 core.InlineMath
+export interface InlineMath {
+  formula: string
+  omml?: string
+  display?: boolean
 }
 
 // 页码配置（页脚中的页码字段样式/格式）
@@ -118,7 +127,7 @@ export interface RawBlock {
   data: Record<string, unknown>
 }
 
-export type Inline = Text | Hyperlink | InlineImage | RawInline
+export type Inline = Text | Hyperlink | InlineImage | RawInline | InlineMath
 
 export interface Text {
   content: string
