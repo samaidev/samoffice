@@ -967,7 +967,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [zoomInternal, setZoomInternal] = useState<number>(() => {
     try { const z = parseInt(localStorage.getItem('samoffice_zoom') || '100', 10); return isNaN(z) ? 100 : Math.max(50, Math.min(300, z)) } catch { return 100 }
   })
-  const zoom = zoomProp ?? zoomInternal
+  // r44：外部 zoomProp 异常值（<50 或 >300，如历史快照的 1）兜底 100，避免 scale(0.01)=1% 视图
+  const zoomRaw = zoomProp ?? zoomInternal
+  const zoom = Number.isFinite(zoomRaw) && zoomRaw >= 50 && zoomRaw <= 300 ? zoomRaw : 100
   const setZoom = (z: number) => {
     const v = Math.max(50, Math.min(300, z))
     setZoomInternal(v)
@@ -2306,7 +2308,15 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     return parts.join(' · ')
   }
 
-  // 将页码模板中的占位符替换为真实页码：{n}/{N}→当前页，{total}/{NUMPAGES}/{TOTAL}→总页数
+  // r44：判定 footer.text 是否为页码模板的装饰文本（v0.7.25 误收的「第 页」等）。
+// 口径：模板去掉 {n}/{total} 占位符后的字面文本（去空白）== footer.text（去空白）。
+const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
+  const f = fmt || '第 {n} 页'
+  const literal = f.replace(/\{n\}|\{total\}|\{NUMPAGES\}/gi, '').replace(/\s+/g, '')
+  return literal.length > 0 && text.replace(/\s+/g, '') === literal
+}
+
+// 将页码模板中的占位符替换为真实页码：{n}/{N}→当前页，{total}/{NUMPAGES}/{TOTAL}→总页数
   const fillPageNumber = (fmt: string | undefined, n: number, total: number) => {
     const f = fmt || '第 {n} 页'
     return f
@@ -4181,7 +4191,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
               )}
               {/* 每页底部页脚（富文本，解析自 docx footerN.xml / 可编辑；点击弹页脚编辑对话框）
                   （收起页间空白时隐藏：页脚位于被折叠的下边距区内） */}
-              {docFooterHF.text && !whiteSpaceHidden && (
+              {/* r44：历史文件防御 —— v0.7.25 保存的文档页码域两侧文本被误收为
+                  footer.text（如「第 页」），与 pageNumber 并存导致双行页脚。
+                  判定同源（去 {n}/{total} 后与 footer.text 一致）则跳过文字行。 */}
+              {docFooterHF.text && !(pageNumber?.enabled && isFooterSameAsPageNumberTemplate(docFooterHF.text, pageNumber.format)) && !whiteSpaceHidden && (
                 <div
                   onClick={() => setShowHFDialog({ target: 'footer' })}
                   title={t('doc.footerTitle')}

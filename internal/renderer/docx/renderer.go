@@ -1959,21 +1959,29 @@ func renderFooterXML(pn *core.PageNumberConfig, firstPage bool, hf *core.HeaderF
         }
         sb.WriteString(`<w:pPr><w:jc w:val="` + align + `"/></w:pPr>`)
 
-        // 解析格式模板：前缀 {n} 前缀 {total} 后缀
+        // 解析格式模板：{n} 前缀 + PAGE 域 + 中缀 + {total} 占位（NUMPAGES 域）+ 后缀。
+        // r44：此前 {total} 被直接从模板中剔除、不输出任何域 —— 含总页数的模板
+        // （如「第 {n} / 共 {total} 页」）保存后重开变成「第 {n} / 共  页」。
         format := pn.Format
         if format == "" {
                 format = "第 {n} 页"
         }
+        hasTotal := strings.Contains(format, "{total}")
         beforeN := format
+        midN := ""
         afterN := ""
         if idx := strings.Index(format, "{n}"); idx >= 0 {
                 beforeN = format[:idx]
                 rest := format[idx+3:]
-                afterN = rest
-                if tidx := strings.Index(afterN, "{total}"); tidx >= 0 {
-                        afterN = afterN[:tidx] + afterN[tidx+7:]
+                if tidx := strings.Index(rest, "{total}"); tidx >= 0 {
+                        midN = rest[:tidx]
+                        afterN = rest[tidx+7:]
+                } else {
+                        afterN = rest
                 }
         } else if tidx := strings.Index(format, "{total}"); tidx >= 0 {
+                // {total} 在 {n} 之前（罕见）：前缀文字 + NUMPAGES + 其后整体作为后缀
+                //（此时无 {n}，PAGE 域仍输出以保持页码存在语义）
                 beforeN = format[:tidx]
                 afterN = format[tidx+7:]
         }
@@ -2002,6 +2010,13 @@ func renderFooterXML(pn *core.PageNumberConfig, firstPage bool, hf *core.HeaderF
         }
         // PAGE 字段
         sb.WriteString(`<w:r>` + rPr + `<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="end"/></w:r>`)
+        // {total} 中缀 + NUMPAGES 字段 + 后缀（r44：总页数域落地）
+        if hasTotal {
+                if midN != "" {
+                        sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(midN) + `</w:t></w:r>`)
+                }
+                sb.WriteString(`<w:r>` + rPr + `<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> NUMPAGES </w:instrText><w:fldChar w:fldCharType="end"/></w:r>`)
+        }
         if afterN != "" {
                 sb.WriteString(`<w:r>` + rPr + `<w:t xml:space="preserve">` + escapeXML(afterN) + `</w:t></w:r>`)
         }

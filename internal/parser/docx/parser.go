@@ -1333,6 +1333,11 @@ func parseHeaderFooterText(rc io.Reader) *core.HeaderFooter {
         inPPr := false
         inRPr := false
         styled := false
+        // r44：本段落是否含页码域（PAGE/NUMPAGES）。含域段落的字面文本
+        // （如「第 」+ PAGE 域 +「 页」两侧的装饰文字）属于页码模板，
+        // 由 PageNumberConfig 负责，整段不计入页脚正文 —— 否则重开后
+        // footer.text="第 页" 与 pageNumber 并存，编辑器画两行页脚。
+        sawPageField := false
         for {
                 t, err := dec.Token()
                 if err != nil {
@@ -1345,6 +1350,7 @@ func parseHeaderFooterText(rc io.Reader) *core.HeaderFooter {
                                 sb.Reset()
                                 hf = &core.HeaderFooter{}
                                 styled = false
+                                sawPageField = false
                         case "pPr":
                                 inPPr = true
                         case "jc":
@@ -1410,6 +1416,7 @@ func parseHeaderFooterText(rc io.Reader) *core.HeaderFooter {
                                         if a.Name.Local == "instr" {
                                                 if strings.Contains(strings.ToUpper(a.Value), "PAGE") {
                                                         fieldDepth++
+                                                        sawPageField = true
                                                 }
                                         }
                                 }
@@ -1422,8 +1429,16 @@ func parseHeaderFooterText(rc io.Reader) *core.HeaderFooter {
                                 }
                                 if ftype == "begin" {
                                         fieldDepth++
+                                        // 域起始无法预知 instr 内容，先记名；
+                                        // instrText 出现时标记（下个 case）
                                 } else if ftype == "end" && fieldDepth > 0 {
                                         fieldDepth--
+                                }
+                        case "instrText":
+                                // r44：域指令含 PAGE/NUMPAGES → 本段是页码段落
+                                up := strings.ToUpper(readCharData(dec))
+                                if strings.Contains(up, "PAGE") {
+                                        sawPageField = true
                                 }
                         case "t":
                                 if fieldDepth == 0 {
@@ -1435,15 +1450,18 @@ func parseHeaderFooterText(rc io.Reader) *core.HeaderFooter {
                         switch el.Name.Local {
                         case "p":
                                 text := strings.TrimSpace(sb.String())
-                                if text != "" {
+                                // r44：含页码域的段落整段跳过（域两侧字面文本
+                                // 属于页码模板，归 PageNumberConfig 管）
+                                if text != "" && !sawPageField {
                                         hf.Text = text
                                         if hf.Align == "" {
                                                 hf.Align = "center"
                                         }
                                         return hf
                                 }
-                                // 空段落继续找下一个
+                                // 空段落/页码段落继续找下一个
                                 styled = false
+                                sawPageField = false
                         case "pPr":
                                 inPPr = false
                         case "rPr":
@@ -1471,10 +1489,13 @@ func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
                 page  bool
                 total bool
         }
-        var toks []tok
+        var toks []tok        // 仅收集含页码域段落的 token（r44：页脚文字段落不混入页码模板）
         var align string
         inPPr := false
         fieldDepth := 0 // 进入域（fldSimple / fldChar begin）后跳过其内部的显示文本
+        inPara := false  // 当前是否在某 <w:p> 内
+        paraHasPage := false // 当前段落是否含页码域
+        var paraToks []tok    // 当前段落暂存 token
 
         for {
                 t, err := dec.Token()
@@ -1494,14 +1515,18 @@ func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
                                                 }
                                         }
                                 }
+                        case "p":
+                                inPara = true
+                                paraHasPage = false
+                                paraToks = paraToks[:0]
                         case "fldSimple":
                                 for _, a := range el.Attr {
                                         if a.Name.Local == "instr" {
                                                 up := strings.ToUpper(strings.TrimSpace(a.Value))
                                                 if strings.Contains(up, "NUMPAGES") {
-                                                        toks = append(toks, tok{total: true})
+                                                        paraToks = append(paraToks, tok{total: true})
                                                 } else if strings.Contains(up, "PAGE") {
-                                                        toks = append(toks, tok{page: true})
+                                                        paraToks = append(paraToks, tok{page: true})
                                                 }
                                         }
                                 }
@@ -1524,14 +1549,14 @@ func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
                                 if fieldDepth > 0 {
                                         up := strings.ToUpper(strings.TrimSpace(readCharData(dec)))
                                         if strings.Contains(up, "NUMPAGES") {
-                                                toks = append(toks, tok{total: true})
+                                                paraToks = append(paraToks, tok{total: true})
                                         } else if strings.Contains(up, "PAGE") {
-                                                toks = append(toks, tok{page: true})
+                                                paraToks = append(paraToks, tok{page: true})
                                         }
                                 }
                         case "t":
                                 if fieldDepth == 0 {
-                                        toks = append(toks, tok{text: readCharData(dec)})
+                                        paraToks = append(paraToks, tok{text: readCharData(dec)})
                                 }
                         }
                 case xml.EndElement:
@@ -1541,6 +1566,18 @@ func parseFooterPageNumber(rc io.Reader) *core.PageNumberConfig {
                                 if fieldDepth > 0 {
                                         fieldDepth--
                                 }
+                        } else if el.Name.Local == "p" && inPara {
+                                // r44：段落结束 —— 含页码域才并入（页脚文字段落如
+                                // "版权所有"归 HeaderFooter，不混入页码模板）
+                                for _, t2 := range paraToks {
+                                        if t2.page || t2.total {
+                                                paraHasPage = true
+                                        }
+                                }
+                                if paraHasPage {
+                                        toks = append(toks, paraToks...)
+                                }
+                                inPara = false
                         }
                 }
         }

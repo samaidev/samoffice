@@ -342,7 +342,9 @@ ${t('sample.md.more')}
     setPdfOpenSignal(w.pdf ?? null)
     setSheetEpoch(w.sheetEpoch)
     setSlideEpoch(w.slideEpoch)
-    setDocZoom(w.zoom)
+    // r44：clamp 50-300 —— 历史窗口快照若带异常 zoom（如 1），恢复时兜底到 100，
+    // 避免 transform scale(0.01) 的 1% 视图
+    setDocZoom(Number.isFinite(w.zoom) && w.zoom >= 50 && w.zoom <= 300 ? w.zoom : 100)
     setSpellErrors(w.spellErrors ?? [])
   }
 
@@ -473,7 +475,7 @@ ${t('sample.md.more')}
       id: targetId, type: targetTab, path, title: win.title || path.split(/[\\/]/).pop() || path,
       ...win,
       sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
-      zoom: win.zoom ?? 1, spellErrors: win.spellErrors ?? [],
+      zoom: win.zoom ?? 100, spellErrors: win.spellErrors ?? [],
       // 刚打开即为"已保存"基线
       savedFingerprint: fingerprintOf({ ...win, type: targetTab }),
     } as OpenWindow
@@ -486,7 +488,7 @@ ${t('sample.md.more')}
       id: targetId, type: targetTab, path, title: win.title || path.split(/[\\/]/).pop() || path,
       ...win,
       sheetEpoch: win.sheetEpoch ?? 0, slideEpoch: win.slideEpoch ?? 0,
-      zoom: win.zoom ?? 1, spellErrors: win.spellErrors ?? [],
+      zoom: win.zoom ?? 100, spellErrors: win.spellErrors ?? [],
     } as OpenWindow)
     showToast(t('app.opened', { name: path }))
   }
