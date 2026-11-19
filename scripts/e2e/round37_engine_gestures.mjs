@@ -6,7 +6,7 @@
 // ⑤ 行拖拽协同不回退（CellSelection 行选区内 mousedown → __samStartRowDrag）
 // ⑥ 表格外正常段落不受影响（点击/拖选）
 import { chromium } from 'playwright'
-const BASE = 'http://127.0.0.1:18400'
+const BASE = 'http://localhost:18400'
 const cellText = (t) => ({ inline: [{ type: 'text', content: t }] })
 const mkDoc = () => ({
   meta: { title: 'r37' },

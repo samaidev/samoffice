@@ -774,6 +774,20 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     // 滚动容器可视高（卡片 clamp 用）——面板 maxHeight 100%，可视高即容器高
     const nextLayout: Record<string, { top: number; height: number }> = {}
     const anchors: { id: string; ay: number; height: number }[] = []
+    // round39（用户反馈"批注内容也要自动跟随正文滚动，不能出现连线跨页"）：
+    // 卡片/连线都必须限制在「锚点所在纸页的垂直范围」内 —— 与 Word 审阅一致，
+    // 一张纸只显示属于本页的批注。锚点页 = 锚点 rect 落在哪张 .pg-paper 上。
+    // 页范围换算到面板 sticky 坐标系：pageTop - pr.top（与锚点同法）。
+    const pageBands: { top: number; bottom: number }[] = []
+    for (const paper of scroll.querySelectorAll('.pg-paper')) {
+      const rr = (paper as HTMLElement).getBoundingClientRect()
+      if (rr.height > 40) pageBands.push({ top: rr.top - pr.top, bottom: rr.bottom - pr.top })
+    }
+    pageBands.sort((a, b) => a.top - b.top)
+    const bandOf = (markTopInPane: number): { top: number; bottom: number } | null => {
+      for (const b of pageBands) if (markTopInPane >= b.top - 1 && markTopInPane <= b.bottom + 1) return b
+      return null
+    }
     // 阶段1：测量自然高度
     const heights: Record<string, number> = {}
     for (const c of comments) {
@@ -789,9 +803,13 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       // 面板是 sticky 的 —— 面板内容不随滚动平移，锚点随滚动平移。
       // 两者须在同一坐标系：把锚点换算到「面板 sticky 视口」= rect.top - pr.top + 当前堆叠游标基线。
       let top: number
+      let hidden = false
+      let markBand: { top: number; bottom: number } | null = null
       if (mark) {
         const mr = mark.getBoundingClientRect()
-        top = mr.top - pr.top + mr.height / 2 - h / 2
+        const markTopInPane = mr.top - pr.top
+        top = markTopInPane + mr.height / 2 - h / 2
+        markBand = bandOf(markTopInPane)
       } else {
         top = prevBottom === -Infinity ? 30 : prevBottom + 10
       }
@@ -802,24 +820,59 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       // 锚点滚出视口的卡片自然落在面板可视区外，由面板 overflow 剪切。
       top = Math.max(top, 30)
       if (top < prevBottom) top = prevBottom + 8
-      nextLayout[c.id] = { top, height: h }
-      anchors.push({ id: c.id, ay: top + h / 2, height: h })
-      prevBottom = top + h
+      // round39 同页约束：卡片必须完整落在锚点所在纸页的页带内。
+      // 页带放不下（页尾锚点 + 长卡片）或锚点不在任何纸页上 → 隐藏卡片
+      //（Word 同样不跨页显示批注）。防重叠下移也以页带底为界 ——
+      // 本页放不下时宁可隐藏，绝不溢出到下一页（用户反馈"连线跨页"）。
+      if (markBand) {
+        if (markBand.bottom - markBand.top < h + 8) {
+          hidden = true
+        } else {
+          top = Math.max(top, markBand.top + 4)
+          if (top + h > markBand.bottom - 4) {
+            // 优先向上收（贴页带底），仍放不下则隐藏
+            top = markBand.bottom - 4 - h
+            if (top < markBand.top + 4 || top < prevBottom) hidden = true
+          }
+          if (!hidden && top < prevBottom) top = prevBottom + 8
+          if (!hidden && top + h > markBand.bottom - 4) hidden = true
+        }
+      } else if (mark) {
+        // 有锚点但锚点不在任何纸页（极端：纸页层未渲染/折叠异常）→ 保持显示不隐藏
+      }
+      nextLayout[c.id] = { top: hidden ? -9999 : top, height: h }
+      anchors.push({ id: c.id, ay: (hidden ? -9999 : top) + h / 2, height: h })
+      if (!hidden) prevBottom = top + h
     }
     setCommentCardsLayout(nextLayout)
     // 阶段3：连线端点（锚点右缘 → 面板左缘，卡片中心 y）
+    // round39：连线 y 端点同样钳进锚点页带 —— 锚点本身贴近页边界时
+    // 连线不得伸出纸页外（视觉上"跨页"）。卡片隐藏的批注不画连线。
     const links: { id: string; x1: number; y1: number; x2: number; y2: number; cx: number }[] = []
     for (const c of comments) {
       const mark = scroll.querySelector(`.comment-mark[data-comment-id="${CSS.escape(c.id)}"]`) as HTMLElement | null
       const lay = nextLayout[c.id]
-      if (!mark || !lay) continue
+      if (!mark || !lay || lay.top <= -9999) continue
       const mr = mark.getBoundingClientRect()
+      const markTopInPane = mr.top - pr.top
+      const band = bandOf(markTopInPane)
+      let y1 = mr.top + mr.height / 2 - sr.top
+      let y2 = paneOffset + lay.top + lay.height / 2
+      if (band) {
+        // band 坐标系 = 面板顶基（top/bottom 均相对 pr.top）；
+        // y1/y2 为「相对滚动容器内容顶」坐标（sr.top 基）。
+        // 同基换算：band 顶/底加 paneOffset 即得 sr 基坐标，两端口都钳进页带。
+        const bTopSr = band.top + paneOffset
+        const bBotSr = band.bottom + paneOffset
+        y1 = Math.min(Math.max(y1, bTopSr + 2), bBotSr - 2)
+        y2 = Math.min(Math.max(y2, bTopSr + 2), bBotSr - 2)
+      }
       links.push({
         id: c.id,
         x1: mr.right - sr.left,
-        y1: mr.top + mr.height / 2 - sr.top,
+        y1,
         x2: pr.left - sr.left - 5,
-        y2: paneOffset + lay.top + lay.height / 2,
+        y2,
         cx: pr.left - sr.left,
       })
     }

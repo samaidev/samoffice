@@ -6,7 +6,7 @@
 // ⑤ 悬停无污染：松开后纯移动鼠标，选区不变
 // ⑥ 单击/双击/三击回归（r34 行为不回退）
 import { chromium } from 'playwright'
-const BASE = 'http://127.0.0.1:18400'
+const BASE = 'http://localhost:18400'
 const cellText = (t) => ({ inline: [{ type: 'text', content: t }] })
 const mkDoc = () => ({
   meta: { title: 'r36' },

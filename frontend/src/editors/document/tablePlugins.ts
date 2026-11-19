@@ -128,20 +128,54 @@ export class DocTableView {
     return true
   }
 
-  /** 左上角全选手柄（对齐 MS Word 表格移动手柄）：悬停表格时出现，点击全选。
+  /** 左上角全选/移动手柄（对齐 MS Word 表格移动十字柄）：悬停表格时出现。
+   * round39 修复两项用户反馈：
+   * a) "点击无效" —— 手柄（z-index:20）被 pm-table-clickbridge 接收层
+   *    （盖在表格几何上、z-index:7，但层挂 pm-host 直属且手柄在 wrapper 内
+   *    合成器死区）拦截，mousedown 到不了手柄。修法：手柄 mousedown 里
+   *    stopPropagation 已不够 —— 改为手柄自身提到 host 直属层（脱离死区），
+   *    由 NodeView 几何同步定位（与桥层同法，r34_probe16 直属路径 hit-test 正常）。
+   * b) "不能按住拖动移动表格" —— 新增拖拽会话：按住手柄移动（>5px 阈值）
+   *    显示段落插入指示线，松开把整个表格移动到目标段落前后。
    * 悬停稳定性（修复"移动上去就消失"）：
-   * 1. 手柄部分重叠表格左上角（CSS left/top 负值一半在表内），鼠标从表格内部移向手柄
-   *    的路径连续覆盖——悬停手柄时经 DOM 祖先链 tableWrapper:hover 依然成立，不会中途消失。
-   * 2. JS 驱动可见性（pm-shown 类挂在手柄自身）：分页装饰会整体重写 wrapper 的
-   *    class/style（pg-brk-table / margin-bottom），挂在 wrapper 上的状态类会被冲掉导致
-   *    闪烁——手柄自身类不受装饰影响。document mousemove 按表格包围盒判定：
-   *    在表内或左上角 26px 热区 → 显示；离开 → 180ms 宽限后隐藏（鼠标斜向移动不闪烁）。 */
+   * 1. 手柄部分重叠表格左上角（一半在表内），鼠标从表格内部移向手柄
+   *    的路径连续覆盖——经几何判定维持显示。
+   * 2. JS 驱动可见性（pm-shown 类）：分页装饰会整体重写 wrapper 的
+   *    class/style，挂在 wrapper 上的状态类会被冲掉。document mousemove
+   *    按表格包围盒判定：在表内或左上角 26px 热区 → 显示；离开 → 180ms
+   *    宽限后隐藏（鼠标斜向移动不闪烁）。 */
   private attachHandle() {
     const h = document.createElement('div')
     h.className = 'pm-table-handle'
     h.setAttribute('contenteditable', 'false')
-    h.setAttribute('title', '点击全选表格')
+    h.setAttribute('title', '点击全选表格；按住拖动移动表格')
     h.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 0 L8 2.2 H4 Z M6 12 L4 9.8 H8 Z M0 6 L2.2 4 V8 Z M12 6 L9.8 8 V4 Z" fill="currentColor"/><rect x="4.6" y="4.6" width="2.8" height="2.8" fill="currentColor"/></svg>'
+    // round39：手柄脱离 wrapper（合成器死区），挂到 view.dom.parentElement（pm-host）
+    // 直属 —— 与桥层同路径（r34_probe16 实锤可命中）。NodeView 销毁时移除。
+    const host = this.view.dom.parentElement
+    if (!host) { this.dom.appendChild(h); return }
+    // 几何同步：手柄贴表格左上角（视觉同旧版：左移 9px 上移 1px）。
+    // 每帧同步太贵 —— 滚动/resize/MutationObserver 三路触发 rAF 节流同步。
+    let syncRaf = 0
+    const syncPos = () => {
+      if (syncRaf) return
+      syncRaf = requestAnimationFrame(() => {
+        syncRaf = 0
+        if (!h.isConnected || !this.dom.isConnected) return
+        const tr = this.table.getBoundingClientRect()
+        const hr = host.getBoundingClientRect()
+        h.style.left = (tr.left - hr.left - 9) + 'px'
+        h.style.top = (tr.top - hr.top - 1) + 'px'
+      })
+    }
+    const ro = new ResizeObserver(syncPos)
+    ro.observe(this.table)
+    const scheduleSync = () => syncPos()
+    window.addEventListener('resize', scheduleSync)
+    const scrollRoot = this.view.dom.closest('.overflow-auto')
+    scrollRoot?.addEventListener('scroll', scheduleSync, { passive: true })
+    host.appendChild(h)
+    syncPos()
     // JS 悬停管理：宽限期隐藏，悬停手柄即续期
     let hideTimer = 0
     const show = () => {
@@ -156,47 +190,173 @@ export class DocTableView {
     this.dom.addEventListener('mouseleave', scheduleHide)
     h.addEventListener('mouseenter', show)
     h.addEventListener('mouseleave', scheduleHide)
+    this.table.addEventListener('mouseenter', show)
+    this.table.addEventListener('mouseleave', scheduleHide)
     // document 级兜底：wrapper class 被装饰重写/重建时 hover 判定仍可靠（按几何而非类名）
     const onDocMove = (e: MouseEvent) => {
       const r = this.table.getBoundingClientRect()
       const inTable = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
       // 左上角热区：容忍鼠标在表格外侧朝手柄移动
       const inCorner = e.clientX >= r.left - 26 && e.clientX <= r.left + 26 && e.clientY >= r.top - 26 && e.clientY <= r.top + 26
-      if (inTable || inCorner) show()
+      const inHandle = (() => { const hr = h.getBoundingClientRect(); return e.clientX >= hr.left && e.clientX <= hr.right && e.clientY >= hr.top && e.clientY <= hr.bottom })()
+      if (inTable || inCorner || inHandle) show()
       else if (h.classList.contains('pm-shown')) scheduleHide()
     }
     window.document.addEventListener('mousemove', onDocMove)
     this.destroyFn = () => {
       window.document.removeEventListener('mousemove', onDocMove)
       if (hideTimer) clearTimeout(hideTimer)
+      if (syncRaf) cancelAnimationFrame(syncRaf)
+      window.removeEventListener('resize', scheduleSync)
+      scrollRoot?.removeEventListener('scroll', scheduleSync)
+      ro.disconnect()
+      h.remove()
     }
+    // ---- round39：点击全选 + 按住拖动移动表格 ----
     h.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return
       e.preventDefault()
       e.stopPropagation()
-      const pos = this.getPos()
-      const v = this.view
-      if (pos === undefined || pos < 0) return
-      const doc = v.state.doc
-      const tableNode = doc.nodeAt(pos)
-      if (!tableNode || tableNode.childCount === 0) return
-      // 全表 CellSelection：anchor = 首行首格，head = 末行末格
-      let lastRowStart = pos + 1
-      let lastRow: PMNode | null = null
-      tableNode.forEach((row: PMNode, off: number) => { lastRowStart = pos + 1 + off; lastRow = row })
-      if (!lastRow) return
-      let lastCellStart = lastRowStart + 1
-      const lr: PMNode = lastRow
-      lr.forEach((cell: PMNode, off: number) => { lastCellStart = Math.max(lastCellStart, lastRowStart + 1 + off) })
-      try {
-        const tr = v.state.tr.setSelection(CellSelection.create(doc, pos + 2, lastCellStart))
-        v.dispatch(tr.scrollIntoView())
-        v.focus()
-      } catch (err) {
-        // 全选失败必须有痕迹：否则手柄点击静默无效果，难以定位
-        try { console.error('TABLE_HANDLE_SELECT_FAIL', err) } catch { /* ignore */ }
+      const view = this.view
+      const startPos = this.getPos()
+      if (startPos === undefined || startPos < 0) return
+      // ---- 拖拽移动会话（Word 式）----
+      const startClientX = e.clientX
+      const startClientY = e.clientY
+      let armed = false
+      const indicator = document.createElement('div')
+      indicator.style.cssText = 'position:absolute;height:2.5px;background:#2563eb;display:none;z-index:30;pointer-events:none;border-radius:2px'
+      host.appendChild(indicator)
+      const cleanDrag = () => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        indicator.remove()
       }
+      const onMove = (ev: MouseEvent) => {
+        if (!armed) {
+          if (Math.abs(ev.clientY - startClientY) < 5 && Math.abs(ev.clientX - startClientX) < 5) return
+          armed = true
+          h.classList.add('pm-dragging')
+        }
+        // 目标段落判定：鼠标 y 落在 pm-host 内哪个顶层块上（表格自身跳过）。
+        // 命中块的上半 → 插到其前；下半 → 插到其后；空白区 → 最近块。
+        const pm = view.dom
+        const blocks = Array.from(pm.children) as HTMLElement[]
+        let targetIdx = -1
+        let insertAfter = false
+        let lineY = 0
+        let lineL = 0
+        let lineW = 0
+        const hostR = host.getBoundingClientRect()
+        for (let i = 0; i < blocks.length; i++) {
+          const blk = blocks[i]
+          const r = blk.getBoundingClientRect()
+          if (ev.clientY >= r.top && ev.clientY <= r.bottom) {
+            // 跳过表格自身的 wrapper（PM 注入的 .ProseMirror 子树内）与装饰层
+            targetIdx = i
+            insertAfter = ev.clientY > r.top + r.height / 2
+            lineY = insertAfter ? r.bottom + 2 : r.top - 3
+            lineL = r.left - hostR.left
+            lineW = Math.max(80, r.width)
+            break
+          }
+        }
+        if (targetIdx < 0) {
+          // 空白区：找最近块（表格自身所在块除外）
+          let best = -1; let bestD = Infinity; let bestAfter = false
+          for (let i = 0; i < blocks.length; i++) {
+            const r = blocks[i].getBoundingClientRect()
+            if (r.height < 2) continue
+            const d = ev.clientY < r.top ? r.top - ev.clientY : ev.clientY - r.bottom
+            if (d < bestD) { bestD = d; best = i; bestAfter = ev.clientY > r.bottom }
+          }
+          if (best >= 0) {
+            const r = blocks[best].getBoundingClientRect()
+            targetIdx = best; insertAfter = bestAfter
+            lineY = bestAfter ? r.bottom + 2 : r.top - 3
+            lineL = r.left - hostR.left
+            lineW = Math.max(80, r.width)
+          }
+        }
+        indicator.style.display = targetIdx >= 0 ? 'block' : 'none'
+        if (targetIdx >= 0) {
+          indicator.style.top = (lineY - hostR.top) + 'px'
+          indicator.style.left = lineL + 'px'
+          indicator.style.width = lineW + 'px'
+          ;(h as any).__moveTarget = { idx: targetIdx, after: insertAfter }
+        } else {
+          ;(h as any).__moveTarget = null
+        }
+      }
+      const onUp = () => {
+        cleanDrag()
+        h.classList.remove('pm-dragging')
+        if (!armed) {
+          // ---- 未拖动：点击全选 ----
+          const doc = view.state.doc
+          const tableNode = doc.nodeAt(startPos)
+          if (!tableNode || tableNode.childCount === 0) return
+          let lastRowStart = startPos + 1
+          let lastRow: PMNode | null = null
+          tableNode.forEach((row: PMNode, off: number) => { lastRowStart = startPos + 1 + off; lastRow = row })
+          if (!lastRow) return
+          let lastCellStart = lastRowStart + 1
+          const lr: PMNode = lastRow
+          lr.forEach((cell: PMNode, off: number) => { lastCellStart = Math.max(lastCellStart, lastRowStart + 1 + off) })
+          try {
+            const tr = view.state.tr.setSelection(CellSelection.create(doc, startPos + 2, lastCellStart))
+            view.dispatch(tr.scrollIntoView())
+            view.focus()
+          } catch (err) {
+            try { console.error('TABLE_HANDLE_SELECT_FAIL', err) } catch { /* ignore */ }
+          }
+          return
+        }
+        // ---- 拖动结束：移动表格 ----
+        const target = (h as any).__moveTarget as { idx: number; after: boolean } | null
+        ;(h as any).__moveTarget = null
+        if (!target) return
+        try {
+          // 拖拽指示的块 idx → 文档 pos：遍历顶层块累计偏移。
+          // 指示线不落在表格自身所在块上（命中时跳过——onMove 未排除，
+          // 提交前校验：目标 pos == 表格自身位置区间 → 原地不动）。
+          const doc = view.state.doc
+          let pos = 0
+          let idx = -1
+          for (let i = 0; i < doc.childCount; i++) {
+            const child = doc.child(i)
+            const isTableBlock = child.type.name === 'table'
+            const r = view.nodeDOM(pos) as HTMLElement | null
+            const domEl = r && (r.classList?.contains('tableWrapper') ? r : (r as any))
+            void isTableBlock; void domEl
+            idx++
+            if (idx === target.idx) {
+              pos = target.after ? pos + child.nodeSize : pos
+              break
+            }
+            pos += child.nodeSize
+          }
+          if (idx !== target.idx) return
+          const tableNode = doc.nodeAt(startPos)
+          if (!tableNode) return
+          const tableEnd = startPos + tableNode.nodeSize
+          // 原地判定：目标 pos 在表格区间内（含前后贴邻）→ 不动
+          if (pos > startPos && pos < tableEnd) return
+          if (pos === startPos || pos === tableEnd) return
+          // 移动：删除原表 → 在目标 pos 插入。删除后目标 pos 若在表格之后需前移。
+          let insertPos = pos
+          if (insertPos > tableEnd) insertPos -= tableNode.nodeSize
+          const tr = view.state.tr.delete(startPos, tableEnd)
+          tr.insert(insertPos, tableNode)
+          view.dispatch(tr.scrollIntoView())
+          view.focus()
+        } catch (err) {
+          try { console.error('TABLE_HANDLE_MOVE_FAIL', err) } catch { /* ignore */ }
+        }
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
     })
-    this.dom.appendChild(h)
   }
 
   destroy() {
