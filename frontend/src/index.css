@@ -1155,7 +1155,10 @@ table td, table th {
 .pg-linebreak {
   /* 块级零高：margin-top 精确推移断点之后的内容，自身不占任何高度。
      line-height / font-size 归零防止产生额外行盒高度；
-     不能用 position:absolute（会脱离流、margin 失效）。 */
+     不能用 position:absolute（会脱离流、margin 失效）。
+     round42 注：曾尝试 border-top:0.02px 做 anti-collapse barrier ——
+     无效（子盒自身的 border 不阻断“首子 margin 与父段折叠”）且引入
+     1px 渲染取整噪声；首行断点已在 pagination.ts 改发块级断根治。 */
   display: block;
   width: auto;
   height: 0;

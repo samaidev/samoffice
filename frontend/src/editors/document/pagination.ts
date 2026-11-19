@@ -579,7 +579,8 @@ export function createPaginationPlugin(
                                         // （SUPervisor PATCH 2026-10-07：修复多断块残留溢出）
           let firstBreakShift = 0       // 首个断点造成的块整体推下量（视觉顶偏移，诊断用）
           let renderedBottom = blockTop // 最后一行渲染后的底边（含 cumShift）
-          for (const ln of lineTops[k]) {
+          for (let li = 0; li < lineTops[k].length; li++) {
+            const ln = lineTops[k][li]
             const lineTop = blockTop + ln.top + cumShift // 行“渲染顶”（含更早断点推下）
             const lineBottom = lineTop + ln.height       // 行渲染底
             // 本行落在哪一页：从上一行所在页继续，渲染行底超出当前页底则向后找
@@ -592,13 +593,33 @@ export function createPaginationPlugin(
               // margin 只需补“页顶 - 当前渲染顶”的增量差；
               // 若按自然坐标算，块内第二个及以后的断点会把内容
               // 多推 cumShift，整段滑出页底下直角（多断块溢出根因）。
-              const pos = froms[k] + 1 + ln.offset
               const mt = Math.max(0, pageTopOf(pg) - lineTop)
-              if (mt > 0) {
-                breakMargin.set(pos, mt)
-                lineBreaks.add(pos)
+              // round42（用户报告：图片悬在页间空白带越过分页线、且每 800ms
+              // 跳动）：断点 widget 是零高 span，作为段落【首子元素】时其
+              // margin-top 会按 CSS 折叠规则逃逸出段落、与前块的 margin
+              // 折叠合并 —— 推下量被吞（图片段实测被吞 24~108px），图片悬在
+              // 页间空白带；自愈定时器用同样手段修、同样被吞 → 无限空转重排。
+              // 首行断（本块第一行就放不下当前页）在视觉上等价于“整块推到
+              // 下一页”，根本不该用段内 widget —— 改发块级断：
+              // Decoration.node 的 margin-top 挂在段落盒自身，不经过
+              // “首子 margin 逃逸”路径，全额生效；且块级断会替换段落自然
+              // 上边距，需按块级断惯例补 natGap（见上方块级断代码注释）。
+              if (li === 0) {
+                const prevNatBottom = k > 0 ? cumTop[k - 1] + children[k - 1].offsetHeight : 0
+                const natGap = Math.max(0, cumTop[k] - prevNatBottom)
+                if (mt > 0) {
+                  breakMargin.set(froms[k], mt + natGap)
+                  blockBreaks.add(froms[k])
+                }
+                breakDetails.set(froms[k], { mt: mt + natGap, landY: lineTop + mt, pg })
+              } else {
+                const pos = froms[k] + 1 + ln.offset
+                if (mt > 0) {
+                  breakMargin.set(pos, mt)
+                  lineBreaks.add(pos)
+                }
+                breakDetails.set(pos, { mt, landY: lineTop + mt, pg })
               }
-              breakDetails.set(pos, { mt, landY: lineTop + mt, pg })
               if (firstBreakShift === 0) firstBreakShift = mt
               cumShift += mt
               renderedBottom = pageTopOf(pg) + ln.height
@@ -1129,6 +1150,12 @@ export function createPaginationPlugin(
           let needFix = false
           const kids = Array.from(dom2.children) as HTMLElement[]
           for (const el of kids) {
+            // round42：跳过带 .pg-brk（块级断）的块 —— 它们已被块级断
+            // 正确放置到页顶，但段落块盒的行盒 leading（半行距，实测 ~6px）
+            // 会自然探入页间空白带上缘。旧判定把这种正常形态当漏断 →
+            // heal 每 800ms 触发重算+校验轮空转（布局反复扰动，用户看到
+            // 图片/文字在分页附近"跳动"）。文字首行顶已精确落在页内容区顶。
+            if (el.classList.contains('pg-brk')) continue
             const bt = (el.getBoundingClientRect().top - domTop2) / z2
             const r = bt % step2
             if (r > per2 + 0.5 && r < step2 - 0.5) { needFix = true; break }
