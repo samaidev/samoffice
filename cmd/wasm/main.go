@@ -12,6 +12,8 @@
 //	samoffice.xlsxOpen(base64)                → {ok, workbook?, error?}  工作簿 JSON（sheets/cells）
 //	samoffice.saveDocx(docJSON)               → {ok, data?, error?}      docx 字节（base64）
 //	samoffice.saveXlsx(workbookJSON)          → {ok, data?, error?}      xlsx 字节（base64）
+//	samoffice.savePptx(slidesJSON)            → {ok, data?, error?}      pptx 字节（base64）
+//	                                            slidesJSON 与桌面 WritePPTX binding / /api/pptx/save 同一契约
 //
 // md/csv 的保存是纯文本，无需引擎参与，直接由前端写回。
 package main
@@ -26,6 +28,7 @@ import (
 
 	"github.com/zai/samoffice/internal/core"
 	"github.com/zai/samoffice/internal/parser"
+	"github.com/zai/samoffice/internal/parser/pptx"
 	"github.com/zai/samoffice/internal/parser/xlsx"
 	"github.com/zai/samoffice/internal/renderer/docx"
 )
@@ -41,6 +44,7 @@ func main() {
 		"xlsxOpen": js.FuncOf(xlsxOpenFn),
 		"saveDocx": js.FuncOf(saveDocxFn),
 		"saveXlsx": js.FuncOf(saveXlsxFn),
+		"savePptx": js.FuncOf(savePptxFn),
 	}))
 	select {} // 常驻，等待 JS 调用
 }
@@ -156,6 +160,20 @@ func saveXlsxFn(this js.Value, args []js.Value) any {
 		return errResult(fmt.Errorf("缺少 workbookJSON 参数"))
 	}
 	data, err := xlsx.WriteXLSXBytes(wbJSON)
+	if err != nil {
+		return errResult(err)
+	}
+	return okResult(map[string]any{"data": base64.StdEncoding.EncodeToString(data)})
+}
+
+// savePptxFn(slidesJSON) — 幻灯片 JSON → pptx 字节（base64）。
+// 契约与桌面 WritePPTX binding / HTTP /api/pptx/save 完全一致（round53）。
+func savePptxFn(this js.Value, args []js.Value) any {
+	slidesJSON, ok := argStr(args, 0)
+	if !ok {
+		return errResult(fmt.Errorf("缺少 slidesJSON 参数"))
+	}
+	data, err := pptx.WritePPTXBytes(slidesJSON)
 	if err != nil {
 		return errResult(err)
 	}
