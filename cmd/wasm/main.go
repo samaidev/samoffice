@@ -6,9 +6,10 @@
 //	    全局对象 window.samoffice 提供：
 //
 //	samoffice.version()                       → string
-//	samoffice.parse(ext, base64)              → {ok, doc?, warnings?, error?}
-//	                                            ext 如 ".md"/".docx"/".xlsx"/".pptx"/".doc"/".xls"/".ppt"/".csv"
-//	                                            doc 为 UDM（统一文档模型）JSON 字符串
+//	samoffice.parse(ext, base64)              → {ok, doc?, rawContent?, warnings?, error?}
+//	                                            ext 如 ".md"/".mdx"/".txt"/".html"/".docx"/".xlsx"/".pptx"/".doc"/".xls"/".ppt"/".csv"
+//	                                            doc 为 UDM（统一文档模型）JSON 字符串；文本类格式额外回传
+//	                                            rawContent（原文 base64，与 cmd/samoffice-wasm、/api/doc/open 对齐）
 //	samoffice.xlsxOpen(base64)                → {ok, workbook?, error?}  工作簿 JSON（sheets/cells）
 //	samoffice.saveDocx(docJSON)               → {ok, data?, error?}      docx 字节（base64）
 //	samoffice.saveXlsx(workbookJSON)          → {ok, data?, error?}      xlsx 字节（base64）
@@ -28,12 +29,13 @@ import (
 
 	"github.com/zai/samoffice/internal/core"
 	"github.com/zai/samoffice/internal/parser"
+	"github.com/zai/samoffice/internal/parser/markdown"
 	"github.com/zai/samoffice/internal/parser/pptx"
 	"github.com/zai/samoffice/internal/parser/xlsx"
 	"github.com/zai/samoffice/internal/renderer/docx"
 )
 
-const version = "0.1.0-wasm"
+const version = "1.0.0-wasm"
 
 var reg = parser.NewRegistry()
 
@@ -45,6 +47,11 @@ func main() {
 		"saveDocx": js.FuncOf(saveDocxFn),
 		"saveXlsx": js.FuncOf(saveXlsxFn),
 		"savePptx": js.FuncOf(savePptxFn),
+		// 与 cmd/samoffice-wasm（应用后端）同名的别名——两个引擎共享一套调用面
+		"readXLSXBytes": js.FuncOf(xlsxOpenFn),
+		"renderDocx":    js.FuncOf(saveDocxFn),
+		"writeXLSX":     js.FuncOf(saveXlsxFn),
+		"writePPTX":     js.FuncOf(savePptxFn),
 	}))
 	select {} // 常驻，等待 JS 调用
 }
@@ -77,7 +84,33 @@ func versionFn(this js.Value, args []js.Value) any {
 	return version
 }
 
-// parseFn(ext, base64) — 按扩展名路由到对应解析器，产出 UDM JSON
+// rawTextExts 原样回传原文（rawContent）的文本类扩展名，
+// 与 cmd/samoffice-wasm、服务端 /api/doc/open 对齐。
+var rawTextExts = map[string]bool{
+	".md": true, ".markdown": true, ".mdx": true,
+	".txt": true, ".text": true,
+	".html": true, ".htm": true,
+	".csv": true,
+}
+
+// synthTextDoc 无解析器的纯文本（txt/text）合成 UDM：每行一段，保留空行结构
+func synthTextDoc(raw []byte) *core.Document {
+	doc := &core.Document{Meta: core.Meta{Title: "text"}}
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
+		doc.Blocks = append(doc.Blocks, core.Paragraph{Inline: []core.Inline{core.Text{Content: line}}})
+	}
+	return doc
+}
+
+// synthHTMLDoc 无解析器的 html/htm 合成 UDM：整页入 RawBlock{kind:"html"}，前端自行预览
+func synthHTMLDoc(raw []byte) *core.Document {
+	return &core.Document{Meta: core.Meta{Title: "html"}, Blocks: []core.Block{
+		core.RawBlock{Kind: "html", Data: map[string]any{"html": string(raw)}},
+	}}
+}
+
+// parseFn(ext, base64) — 按扩展名路由到对应解析器，产出 UDM JSON；
+// 文本类格式额外回传 rawContent（base64）；warnings 为 /api/doc/open 同构的 JSON 字符串
 func parseFn(this js.Value, args []js.Value) any {
 	ext, ok := argStr(args, 0)
 	if !ok {
@@ -94,11 +127,20 @@ func parseFn(this js.Value, args []js.Value) any {
 	if !strings.HasPrefix(ext, ".") {
 		ext = "." + ext
 	}
-	p := reg.PickByPath("file" + strings.ToLower(ext))
-	if p == nil {
+	ext = strings.ToLower(ext)
+	var doc *core.Document
+	var warns []core.Warning
+	if p := reg.PickByPath("file" + ext); p != nil {
+		doc, warns, err = p.Parse(bytes.NewReader(raw))
+	} else if ext == ".txt" || ext == ".text" {
+		doc = synthTextDoc(raw)
+	} else if ext == ".html" || ext == ".htm" {
+		doc = synthHTMLDoc(raw)
+	} else if ext == ".mdx" {
+		doc, warns, err = markdown.New().Parse(bytes.NewReader(raw))
+	} else {
 		return errResult(fmt.Errorf("不支持的格式: " + ext))
 	}
-	doc, warns, err := p.Parse(bytes.NewReader(raw))
 	if err != nil {
 		return errResult(err)
 	}
@@ -109,14 +151,23 @@ func parseFn(this js.Value, args []js.Value) any {
 	if err != nil {
 		return errResult(err)
 	}
-	warnList := make([]any, 0, len(warns))
-	for _, w := range warns {
-		warnList = append(warnList, w.Message)
+	// syscall/js 的 ValueOf 不支持结构体切片——warnings 以 JSON 字符串中转
+	//（Warning 对象数组，与 /api/doc/open 响应同构；nil 切片序列化为 "null"，归一为 []）
+	if warns == nil {
+		warns = []core.Warning{}
 	}
-	return okResult(map[string]any{
+	warnJSON, err := json.Marshal(warns)
+	if err != nil {
+		return errResult(err)
+	}
+	res := map[string]any{
 		"doc":      string(docJSON),
-		"warnings": warnList,
-	})
+		"warnings": string(warnJSON),
+	}
+	if rawTextExts[ext] {
+		res["rawContent"] = base64.StdEncoding.EncodeToString(raw)
+	}
+	return okResult(res)
 }
 
 // xlsxOpenFn(base64) — 工作簿级打开（保留样式/合并/列宽），供表格编辑器使用
