@@ -14,6 +14,7 @@
 //	samoffice.saveDocx(docJSON)               → {ok, data?, error?}      docx 字节（base64）
 //	samoffice.saveXlsx(workbookJSON)          → {ok, data?, error?}      xlsx 字节（base64）
 //	samoffice.savePptx(slidesJSON)            → {ok, data?, error?}      pptx 字节（base64）
+//	samoffice.renderHTML(docJSON)             → {ok, html?, error?}      UDM → 富文本 HTML（rich-text 兼容）
 //	                                            slidesJSON 与桌面 WritePPTX binding / /api/pptx/save 同一契约
 //
 // md/csv 的保存是纯文本，无需引擎参与，直接由前端写回。
@@ -35,7 +36,7 @@ import (
 	"github.com/zai/samoffice/internal/renderer/docx"
 )
 
-const version = "1.0.0-wasm"
+const version = "1.1.0-wasm"
 
 var reg = parser.NewRegistry()
 
@@ -48,6 +49,7 @@ func main() {
 		"saveXlsx": js.FuncOf(saveXlsxFn),
 		"savePptx": js.FuncOf(savePptxFn),
 		// 与 cmd/samoffice-wasm（应用后端）同名的别名——两个引擎共享一套调用面
+		"renderHTML":    js.FuncOf(renderHTMLFn),
 		"readXLSXBytes": js.FuncOf(xlsxOpenFn),
 		"renderDocx":    js.FuncOf(saveDocxFn),
 		"writeXLSX":     js.FuncOf(saveXlsxFn),
