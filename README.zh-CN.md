@@ -86,6 +86,25 @@ go build -ldflags="-s -w" -o samoffice-server.exe ./cmd/samoffice-server
 ./samoffice        # 自动启动窗口，并打印内嵌 HTTP 端口
 ```
 
+### 2.4 Web-only 构建（形态3：全浏览器内运行，无服务端）
+
+文档引擎编译为 WASM 后，整个套件可作为纯静态站点运行 —— 解析与 docx/xlsx/pptx
+生成全部发生在浏览器标签页内；"保存"即浏览器下载；PDF 导出走独立子模块懒加载
+（内嵌 15MB 中文字体，点导出时才拉取）。拼写检查在设计上不可用（wasm 构建不带
+词典，审阅页按钮按 mode 隐藏）。桌面构建不受影响 —— WASM 二进制只落 `dist-web/`。
+
+```bash
+./scripts/build-web.sh          # 或：cd frontend && npm run build:web
+npx serve frontend/dist-web     # 任意静态服务器即可
+```
+
+产物：应用外壳（约 0.3MB gz）+ `samoffice.wasm` 主模块（约 5.8MB gz，首次使用时
+加载）+ `samoffice-pdf.wasm` PDF 子模块（约 10MB gz，导出时懒加载）+ `wasm_exec.js`。
+此构建运行时状态徽标显示"浏览器内"。端到端验证：`node scripts/e2e-web/e2e_web_only.mjs`
+（7 项检查，fixture 随仓库附带）。说明：独立网页内嵌引擎在 `cmd/wasm`；本构建的
+应用后端是 `cmd/samoffice-wasm`（+ `cmd/samoffice-wasm-pdf`）—— 共享同一套 internal
+内核，定位不同。
+
 ---
 
 ## 3. 源码结构（**实际已实现**，非规划）

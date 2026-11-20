@@ -63,3 +63,11 @@ _verify_tmp/
 /llm_dataset/  
 cmd/mathdebug/
 .vite/
+
+# 形态3：浏览器纯静态构建产物（wasm 只落这里，不进桌面 dist）
+frontend/dist-web/
+
+# 形态3 e2e 运行产物
+scripts/e2e-web/out/
+scripts/e2e-web/results.json
+scripts/e2e-web/fail-shot.png

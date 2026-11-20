@@ -86,6 +86,27 @@ go build -ldflags="-s -w" -o samoffice-server.exe ./cmd/samoffice-server
 ./samoffice        # auto-launches window and prints the embedded HTTP port
 ```
 
+### 2.4 Web-only Build (Form 3: fully in-browser, no server)
+
+The document engine compiles to WASM, so the whole suite runs as a static site — parsing
+and docx/xlsx/pptx generation happen inside the browser tab; "save" becomes a browser
+download; PDF export lazy-loads a dedicated submodule (embedded 15 MB CJK font, fetched
+only when you click export). Spell check is intentionally unavailable (no dictionary in
+the WASM build; the review-tab button is hidden). Desktop builds are unaffected — WASM
+binaries only land in `dist-web/`.
+
+```bash
+./scripts/build-web.sh          # or: cd frontend && npm run build:web
+npx serve frontend/dist-web     # any static server works
+```
+
+Artifacts: app shell (~0.3 MB gz) + `samoffice.wasm` main module (~5.8 MB gz, loaded on
+first use) + `samoffice-pdf.wasm` PDF submodule (~10 MB gz, lazy on export) +
+`wasm_exec.js`. The status badge shows "In-browser" when running this build. E2E:
+`node scripts/e2e-web/e2e_web_only.mjs` (7 checks, fixtures included). Note: the
+standalone embedding engine lives in `cmd/wasm`; the app backend used here is
+`cmd/samoffice-wasm` (+ `cmd/samoffice-wasm-pdf`) — same internal kernels, different roles.
+
 ---
 
 ## 3. Source Structure (**actually implemented**, not planned)

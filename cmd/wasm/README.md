@@ -2,6 +2,13 @@
 
 把 SamOffice 的文档引擎（解析 + 写回）编译成浏览器可用的 WASM，供网页内直接打开/编辑 md 与 Office 文件，无需服务端。
 
+> **定位说明**：本包是给**外部网页内嵌**用的轻量引擎入口（5 个方法的小 API）。
+> SamOffice 应用自身的浏览器形态（完整打开/保存链路、pptx 写回、PDF 懒加载导出、
+> mode 徽标、dist-web 构建）请用 **`cmd/samoffice-wasm`**（+ `cmd/samoffice-wasm-pdf`
+> PDF 子模块），前端入口见 `frontend/src/services/wasmBackend.ts` 与
+> `scripts/build-web.sh`。两者共享同一套 internal 内核（解析器/渲染器/xlsx 字节级
+> 读写），`window.samoffice` 同名但分属不同页面，切勿在同一页面同时加载两个模块。
+
 ## 构建
 
 ```bash

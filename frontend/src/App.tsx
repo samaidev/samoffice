@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createBackend } from './services/backend'
+import { downloadBlob } from './services/wasmBackend'
 import { loadRecentFiles, recordRecentFile } from './services/recentFiles'
 import type { Backend, Document, SpellError } from './types/udm'
 import type { SlideData } from './lib/openroute'
@@ -572,10 +573,24 @@ ${t('sample.md.more')}
       }
       input.click()
     }
+    // 形态3（wasm）：e2e 直传 File 走真实 uploadFile→openResult 链路（含 xlsx 字节缓存）
+    ;(window as any).__setFileForTest = async (file: File) => {
+      // backend 在 mount effect 里异步注入（wasm 判定同样异步）—— 轮询等待就绪
+      for (let i = 0; i < 100 && !backend; i++) await new Promise(r => setTimeout(r, 100))
+      if (!backend) throw new Error('backend 未就绪（e2e）')
+      const result = await backend.uploadFile(file)
+      await openResult({ ...result, path: file.name })
+    }
+    // 形态3（wasm）：e2e 触发导出（走 handleDownload 真实链路，含 PDF 懒加载）
+    ;(window as any).__exportForTest = async (fmt: 'docx' | 'pdf' | 'pptx') => {
+      await handleDownload(fmt)
+    }
     return () => {
       ;(window as any).__setDocForTest = undefined
       ;(window as any).__setPdfForTest = undefined
       ;(window as any).__setSheetForTest = undefined
+      ;(window as any).__setFileForTest = undefined
+      ;(window as any).__exportForTest = undefined
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   })
@@ -888,6 +903,8 @@ ${t('sample.md.more')}
   // 不再有 500ms 防抖自动检查：打开文件/编辑文档都不触发（用户明确要求默认不检查）。
   const runManualSpellCheck = useCallback(async (text: string) => {
     if (!backend || !text.trim() || spellChecking) return
+    // 形态3（wasm）：免字库设计，无内置词典 —— 兜底拦截（按钮已按 mode 隐藏）
+    if (backend.mode === 'wasm') return
     setSpellChecking(true)
     lastSpellTextRef.current = text
     try {
@@ -971,6 +988,14 @@ ${t('sample.md.more')}
       setLoading(true)
       showToast(t('app.opening', { name: file.name }))
       try {
+        // 形态3（wasm）：File 字节直通 wasm 解析（无服务器）；原始字节已由
+        // WasmBackend 缓存，xlsx 打开时 readXLSX 按文件名回取（完整格式）
+        if (backend.mode === 'wasm') {
+          const result = await backend.uploadFile(file)
+          await openResult({ ...result, path: file.name })
+          showToast(t('app.opened', { name: file.name }))
+          return
+        }
         // Use HTTP API directly (works in both local and remote mode)
         const base = await getApiBase()
         const form = new FormData()
@@ -1039,6 +1064,13 @@ ${t('sample.md.more')}
       setLoading(true)
       showToast(t('app.opening', { name }))
       try {
+        // 形态3（wasm）：File 字节直通 wasm 解析（同 handleOpenFile 上传分支）
+        if (backend.mode === 'wasm') {
+          const result = await backend.uploadFile(file)
+          await openResult({ ...result, path: name })
+          showToast(t('app.opened', { name }))
+          continue
+        }
         const base = await getApiBase()
         const form = new FormData()
         form.append('file', file)
@@ -1115,6 +1147,14 @@ ${t('sample.md.more')}
         const snap0 = snaps[0] as any
         const pageW = snap0?.pageW && snap0.pageW > 0 ? Number(snap0.pageW) : 12192000
         const pageH = snap0?.pageH && snap0.pageH > 0 ? Number(snap0.pageH) : 6858000
+        // 形态3（wasm）：主模块内存生成 pptx 字节后浏览器下载（无服务端）。
+        // 与桌面版 WritePPTX binding / HTTP /api/pptx/save 同一 JSON 契约。
+        if (backend.mode === 'wasm') {
+          const title = (activeWindow?.title || 'untitled').replace(/\.(pptx?|ppsx?)$/i, '')
+          await (backend as any).writePPTX(`${title}.pptx`, JSON.stringify({ pageW, pageH, slides: snaps }))
+          showToast(t('app.exported', { format: 'PPTX' }))
+          return
+        }
         const base = await getApiBase()
         const resp = await fetch(`${base}/api/pptx/save`, {
           method: 'POST',
@@ -1162,6 +1202,21 @@ ${t('sample.md.more')}
           if (b && typeof b.src === 'string') return { inline: [{ content: '[图片]' }] }
           return { inline: [{ content: '' }] }
         })
+      }
+      // 形态3（wasm）：docx 用主模块；PDF 用懒加载子模块（内嵌 15MB 字体，
+      // 首次点导出才拉取 samoffice-pdf.wasm）
+      if (backend.mode === 'wasm') {
+        if (format === 'pdf') {
+          const bytes: Uint8Array = await (backend as any).exportPdf(safeDoc)
+          if (!bytes || !bytes.length) throw new Error('pdf bytes empty')
+          const pdfName = `${(doc.meta?.title || 'untitled').replace(/[\\/:*?"<>|]/g, '_')}.pdf`
+          downloadBlob(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }), pdfName)
+          showToast(t('app.exported', { format: 'PDF' }))
+          return
+        }
+        await (backend as any).writeDocument('', 'docx', safeDoc)
+        showToast(t('app.exported', { format: 'DOCX' }))
+        return
       }
       const base = await getApiBase()
       const resp = await fetch(`${base}${endpoint}`, {
@@ -1226,6 +1281,40 @@ ${t('sample.md.more')}
       // 不出现在 Files 菜单的最近列表 —— 旧实现只在打开时记录，保存从不记录）。
       // 记录逻辑与 openResult 完全一致（去重/排序/上限），收敛到公共模块。
       recordRecentFile(target)
+    }
+
+    // 形态3（wasm）：无磁盘路径概念，“保存”即按当前选项卡生成字节并浏览器下载
+    if (backend.mode === 'wasm') {
+      if (tab === 'slide') return handleDownload('pptx')
+      if (tab === 'markdown' || tab === 'html') {
+        const text = tab === 'markdown' ? mdContent : htmlContent
+        const ext = tab === 'markdown' ? 'md' : 'html'
+        setLoading(true)
+        try {
+          await backend.writeTextFile(filePath, text ?? '')
+          showToast(t('app.saved', { name: filePath.split(/[\\/]/).pop() || `untitled.${ext}` }))
+        } catch (e: any) {
+          showToast(t('app.saveFailed', { msg: e.message }))
+        } finally {
+          setLoading(false)
+        }
+        return
+      }
+      if (tab === 'spreadsheet') {
+        setLoading(true)
+        try {
+          await backend.writeXLSX(filePath, JSON.stringify({ sheets: sheetSnapshot || [] }))
+          showToast(t('app.saved', { name: filePath.split(/[\\/]/).pop() || 'untitled.xlsx' }))
+        } catch (e: any) {
+          showToast(t('app.saveFailed', { msg: e.message }))
+        } finally {
+          setLoading(false)
+        }
+        return
+      }
+      // 文档选项卡：pdf 走导出链路（懒加载 PDF 子模块）；docx 由主模块生成后下载
+      if (format === 'pdf') return handleDownload('pdf')
+      return handleDownload('docx')
     }
 
     const isLocal = backend.mode === 'local'
@@ -1848,8 +1937,8 @@ ${t('sample.md.more')}
           data-testid="mode-badge"
           data-mode={backend?.mode || 'remote'}
         >
-          <span className={`w-1.5 h-1.5 rounded-full ${backend?.mode === 'local' ? 'bg-green-300' : 'bg-blue-300'} animate-pulse`}></span>
-          {backend?.mode === 'local' ? t('app.local') : t('app.remote')}
+          <span className={`w-1.5 h-1.5 rounded-full ${backend?.mode === 'local' ? 'bg-green-300' : backend?.mode === 'wasm' ? 'bg-violet-300' : 'bg-blue-300'} animate-pulse`}></span>
+          {backend?.mode === 'local' ? t('app.local') : backend?.mode === 'wasm' ? t('app.wasm') : t('app.remote')}
         </div>
 
         {/* API 按钮：打开并自动复制 SamOffice 全量 API 接口文档（MD），粘贴给智能体即可直创/编辑/保存/打开文档 */}

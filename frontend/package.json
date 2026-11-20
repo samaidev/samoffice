@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:web": "bash ../scripts/build-web.sh",
     "preview": "vite preview"
   },
   "dependencies": {

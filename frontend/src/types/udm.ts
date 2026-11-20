@@ -229,8 +229,12 @@ export interface Candidate {
 
 // === Backend 接口 ===
 
+// 后端形态：local = Wails 桌面绑定；remote = HTTP 服务；
+// wasm = 形态3 浏览器纯静态构建（VITE_WEB_ONLY=1，无服务端）
+export type BackendMode = 'local' | 'remote' | 'wasm'
+
 export interface Backend {
-  mode: 'local' | 'remote'
+  mode: BackendMode
 
   openFile(path: string): Promise<{ document: Document; warnings: Warning[]; path: string }>
   uploadFile(file: File): Promise<{ document: Document; warnings: Warning[] }>

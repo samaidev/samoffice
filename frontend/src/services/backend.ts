@@ -1,4 +1,5 @@
-import type { Backend, Document, SpellError, Candidate, Warning } from '../types/udm'
+import type { Backend, BackendMode, Document, SpellError, Candidate, Warning } from '../types/udm'
+import { WasmBackend } from './wasmBackend'
 
 // 检测是否在 Wails 本地环境
 declare global {
@@ -28,7 +29,7 @@ declare global {
 
 // RemoteBackend 通过 HTTP API 与服务端通信
 export class RemoteBackend implements Backend {
-  mode: 'local' | 'remote' = 'remote'
+  mode: BackendMode = 'remote'
   baseUrl: string
 
   constructor(baseUrl: string = '') {
@@ -103,7 +104,7 @@ export class RemoteBackend implements Backend {
 
 // LocalBackend 通过 Wails Binding 与本地 Go 进程通信
 export class LocalBackend implements Backend {
-  mode: 'local' | 'remote' = 'local'
+  mode: BackendMode = 'local'
 
   private get app() {
     return window.go?.main?.App
@@ -188,11 +189,19 @@ export class LocalBackend implements Backend {
   }
 }
 
-// 自动选择 backend
+// 自动选择 backend：三级判定 ——
+//   1. Wails 绑定存在 → LocalBackend（桌面）
+//   2. build:web 产物（VITE_WEB_ONLY=1）→ WasmBackend（形态3，浏览器内，无服务端）
+//   3. 其余 → RemoteBackend（HTTP 服务）
+// 普通构建（不带 VITE_WEB_ONLY）行为完全不变。
 export function createBackend(): Backend {
   if (LocalBackend.isAvailable()) {
     console.log('[SamOffice] Using LocalBackend (Wails)')
     return new LocalBackend()
+  }
+  if (WasmBackend.isWebOnly()) {
+    console.log('[SamOffice] Using WasmBackend (in-browser, 形态3)')
+    return new WasmBackend()
   }
   console.log('[SamOffice] Using RemoteBackend (HTTP)')
   return new RemoteBackend()

@@ -108,6 +108,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'app.closeTab': { en: 'Close Tab', zh: '关闭' },
   'app.local': { en: 'Local', zh: '本地' },
   'app.remote': { en: 'Remote', zh: '远程' },
+  'app.wasm': { en: 'In-browser', zh: '浏览器内' },
   'app.api': { en: 'API', zh: 'API' },
   'app.apiDoc': { en: 'SamOffice API Reference', zh: 'SamOffice API 接口文档' },
   'app.apiCopied': { en: 'API reference copied to clipboard', zh: 'API 接口文档已复制到剪贴板' },

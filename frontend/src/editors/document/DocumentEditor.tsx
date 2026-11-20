@@ -4198,7 +4198,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         {ribbonTab === 'review' && (<>
           <RibbonGroup label={t('doc.proofing')}>
             <RibbonButton icon="🔍" label={t('doc.findReplace')} onClick={() => setSearchOpen(!searchOpen)} />
-            <RibbonButton icon={spellChecking ? '⏳' : spellErrors.length > 0 ? '❗' : '✓'} label={spellChecking ? (t('doc.spellChecking') || 'Checking…') : spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {
+            {/* 形态3（wasm）：免字库设计 —— 拼写按钮隐藏（词典为 sqlite，wasm 构建不加载） */}
+            {backend?.mode !== 'wasm' && (<RibbonButton icon={spellChecking ? '⏳' : spellErrors.length > 0 ? '❗' : '✓'} label={spellChecking ? (t('doc.spellChecking') || 'Checking…') : spellErrors.length > 0 ? `${t('doc.spell')}(${spellErrors.length})` : t('doc.spell')} onClick={() => {
               if (spellChecking) return
               if (spellErrors.length > 0) {
                 // 跳到下一个拼写错误：优先用文档中带 spell-error 装饰的词，
@@ -4246,6 +4247,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 if (onManualSpellCheckRef.current) onManualSpellCheckRef.current(v.state.doc.textContent)
               }
             }} title={spellChecking ? (t('doc.spellChecking') || 'Checking…') : spellErrors.length > 0 ? (t('doc.spellJumpTitle') || 'Jump to next spelling error') : (t('doc.spellRunTitle') || 'Run spell check')} />
+            )}
             <RibbonButton icon="🌐" label={t('doc.translate')} onClick={() => {
               const text = viewRef.current?.state.doc.textContent || ''
               if (text) window.open(`https://translate.google.com/?text=${encodeURIComponent(text.slice(0, 500))}`, '_blank')
