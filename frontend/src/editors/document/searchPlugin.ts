@@ -69,7 +69,16 @@ export function setSearch(tr: any, state: Partial<SearchState>) {
 }
 
 // 便捷方法
+// round49：全部函数防御性校验 view —— 调用方误把事件对象/null 当 view 传入时
+// （v0.7.29 查找栏 ↑/↓ 按钮 onClick={nextMatch} 把 MouseEvent 当 view），
+// searchKey.getState(undefined) 会抛 "Cannot read properties of undefined
+// (reading 'search$')" 整页崩掉。这里静默返回，坏调用只无效不致命。
+function validView(view: any): boolean {
+  return !!(view && view.state && view.state.doc && view.dispatch)
+}
+
 export function doSearch(view: any, query: string, caseSensitive: boolean = false) {
+  if (!validView(view)) return
   const matches = findMatches(view.state.doc, query, caseSensitive)
   const tr = view.state.tr.setMeta(searchKey, {
     query, replace: '', caseSensitive, matches, activeIndex: matches.length > 0 ? 0 : -1
@@ -81,6 +90,7 @@ export function doSearch(view: any, query: string, caseSensitive: boolean = fals
 }
 
 export function doReplace(view: any, query: string, replace: string, caseSensitive: boolean = false) {
+  if (!validView(view)) return
   const ss: SearchState = searchKey.getState(view.state)
   if (!ss || ss.matches.length === 0) return
   const m = ss.matches[ss.activeIndex >= 0 ? ss.activeIndex : 0]
@@ -97,6 +107,7 @@ export function doReplace(view: any, query: string, replace: string, caseSensiti
 }
 
 export function doReplaceAll(view: any, query: string, replace: string, caseSensitive: boolean = false): number {
+  if (!validView(view)) return 0
   const matches = findMatches(view.state.doc, query, caseSensitive)
   if (matches.length === 0) return 0
   // 从后往前替换，避免位置偏移
@@ -113,6 +124,7 @@ export function doReplaceAll(view: any, query: string, replace: string, caseSens
 }
 
 export function nextMatch(view: any) {
+  if (!validView(view)) return
   const ss: SearchState = searchKey.getState(view.state)
   if (!ss || ss.matches.length === 0) return
   const next = (ss.activeIndex + 1) % ss.matches.length
@@ -122,6 +134,7 @@ export function nextMatch(view: any) {
 }
 
 export function prevMatch(view: any) {
+  if (!validView(view)) return
   const ss: SearchState = searchKey.getState(view.state)
   if (!ss || ss.matches.length === 0) return
   const prev = (ss.activeIndex - 1 + ss.matches.length) % ss.matches.length
@@ -130,5 +143,6 @@ export function prevMatch(view: any) {
 }
 
 export function getSearchState(view: any): SearchState {
+  if (!validView(view)) return { query: '', replace: '', caseSensitive: false, matches: [], activeIndex: -1 }
   return searchKey.getState(view.state)
 }

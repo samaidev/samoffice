@@ -3703,15 +3703,19 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap animate-fade-in" style={{ background: 'var(--color-bg-alt)', borderBottom: '1px solid var(--color-border)' }}>
           <input type="text" placeholder={t('doc.findPlaceholder')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="text-sm" style={{ width: 160 }} />
           <button onClick={handleSearch} className="btn btn-outline btn-sm">{t('doc.find')}</button>
-          <button onClick={prevMatch} className="btn btn-ghost btn-sm" disabled={matchCount === 0}>↑</button>
-          <button onClick={nextMatch} className="btn btn-ghost btn-sm" disabled={matchCount === 0}>↓</button>
+          {/* round49：↑/↓ 上一处/下一处 —— prevMatch/nextMatch 的参数是 editor view，
+              之前直接 onClick={prevMatch} 把 MouseEvent 当 view 传进去，view.state
+              为 undefined → searchKey.getState 抛 "reading 'search$'"（用户 v0.7.29
+              实测报错）。改为显式取 viewRef 调用。 */}
+          <button onClick={() => { const v = viewRef.current; if (v) prevMatch(v) }} className="btn btn-ghost btn-sm" disabled={matchCount === 0}>↑</button>
+          <button onClick={() => { const v = viewRef.current; if (v) nextMatch(v) }} className="btn btn-ghost btn-sm" disabled={matchCount === 0}>↓</button>
           <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{matchCount > 0 ? `${activeMatch + 1}/${matchCount}` : t('doc.noMatch')}</span>
           <div className="toolbar-divider" />
           <input type="text" placeholder={t('doc.replacePlaceholder')} value={replaceQuery} onChange={e => setReplaceQuery(e.target.value)} className="text-sm" style={{ width: 160 }} />
           <button onClick={handleReplace} className="btn btn-outline btn-sm" disabled={matchCount === 0}>{t('doc.replace')}</button>
           <button onClick={handleReplaceAll} className="btn btn-primary btn-sm" disabled={matchCount === 0}>{t('doc.replaceAll')}</button>
           <div className="flex-1" />
-          <button onClick={() => { setSearchOpen(false); setSearchQuery(''); doSearch(viewRef.current!, '', false) }} className="btn btn-ghost btn-sm">✕</button>
+          <button onClick={() => { setSearchOpen(false); setSearchQuery(''); const v = viewRef.current; if (v) doSearch(v, '', false) }} className="btn btn-ghost btn-sm">✕</button>
         </div>
       )}
 
