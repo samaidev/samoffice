@@ -67,12 +67,18 @@ func (b *BulletList) UnmarshalJSON(data []byte) error {
 	type alias struct {
 		Items   []json.RawMessage `json:"items"`
 		Ordered bool              `json:"ordered"`
+		Start   int               `json:"start"`
+		Style   string            `json:"style"`
 	}
 	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
 	b.Ordered = a.Ordered
+	b.Start = a.Start
+	// round47：序号样式（[n]/(n)/circle-num/"numFmt|lvlText" 等）此前被 alias
+	// 静默丢弃 —— 保存往返后所有列表退回缺省 1. 2. 3.（E2E 实证）
+	b.Style = a.Style
 	b.Items = make([][]Block, 0, len(a.Items))
 	for _, raw := range a.Items {
 		var blocks []Block

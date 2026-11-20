@@ -1,6 +1,30 @@
 import { Schema } from 'prosemirror-model'
 
 /**
+ * Word numFmt → num-list 的计数器风格 class（round47）。
+ * num-tmpl 模板序号（"decimal|第%1条" 等）的数字形态由此映射；
+ * 未识别的 numFmt 走十进制。计数器名统一为 numitem。
+ */
+const NUM_FMT_CLASS: Record<string, string> = {
+  decimal: 'num-fmt-decimal',
+  lowerRoman: 'num-fmt-lower-roman',
+  upperRoman: 'num-fmt-upper-roman',
+  lowerLetter: 'num-fmt-lower-alpha',
+  upperLetter: 'num-fmt-upper-alpha',
+  lowerGreek: 'num-fmt-lower-greek',
+  chineseCounting: 'num-fmt-cjk',
+  chineseCountingThousand: 'num-fmt-cjk',
+  chosung: 'num-fmt-cjk',
+  decimalZero: 'num-fmt-decimal',
+  japaneseCounting: 'num-fmt-cjk',
+}
+
+/** CSS 字符串字面量转义（内容进 style 属性的 --pre/--post 变量值） */
+function cssStr(s: string): string {
+  return '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
+}
+
+/**
  * 单元格节点的内联样式（与 table_cell.toDOM 完全同源的唯一真相源）。
  * 分页引擎（pagination.ts）为跨页表格生成逐格边框装饰时也用它重建基础样式：
  * 装饰样式绝不能读 DOM（DOM 已含上一轮装饰 → 旧值被永久烘焙、无法撤销），
@@ -364,6 +388,27 @@ export const schema = new Schema({
         if (node.attrs.style === 'cjk-ideographic') {
           const s = Number(node.attrs.start) || 1
           return ['ol', { class: 'cn-list', style: 'counter-reset: cn ' + (s - 1) }, 0]
+        }
+        // round47：MS Word 序号样式族 —— [n]/(n)/n)/n-/circle-num/circle-alpha。
+        // 全部走 num-list 计数器 + data-num-style，CSS ::before 按 data 属性
+        // 选择模板（括号包 counter / 圈号字符由 JS 查表补 data-glyph）。
+        const NUM_STYLES = ['[n]', '(n)', 'n)', 'n-', 'circle-num', 'circle-alpha']
+        if (NUM_STYLES.includes(node.attrs.style)) {
+          const s = Number(node.attrs.start) || 1
+          return ['ol', { class: 'num-list', 'data-num-style': node.attrs.style, style: 'counter-reset: numitem ' + (s - 1) }, 0]
+        }
+        // 透传形式 "numFmt|lvlText"（如 decimal|第%1条）：lvlText 拆为前后缀
+        // 存 CSS 变量（--pre/--post）到 ol 上，li::before 用
+        // content: var(--pre) counter(numitem) var(--post) 拼接（CSS content
+        // 支持 var() 与 counter() 混排；attr() 反而不行 —— attr 只能读伪元素
+        // 所属元素自身的属性）。数字形态由 fmt class 决定。
+        if (node.attrs.style && node.attrs.style.includes('|')) {
+          const [fmt, tmpl] = node.attrs.style.split('|', 2)
+          const i = tmpl.indexOf('%1')
+          const pre = i >= 0 ? tmpl.slice(0, i) : tmpl
+          const post = i >= 0 ? tmpl.slice(i + 2) : ''
+          const fmtClass = NUM_FMT_CLASS[fmt] || 'num-fmt-decimal'
+          return ['ol', { class: 'num-list num-tmpl ' + fmtClass, style: `counter-reset: numitem ${(Number(node.attrs.start) || 1) - 1}; --pre: ${cssStr(pre)}; --post: ${cssStr(post)}` }, 0]
         }
         const attrs: any = {}
         if (node.attrs.start && node.attrs.start !== 1) attrs.start = String(node.attrs.start)

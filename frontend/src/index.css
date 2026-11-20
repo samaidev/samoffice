@@ -1550,6 +1550,70 @@ ol.ref-list > li::before {
   color: inherit;
 }
 
+/* === Word 序号样式族（round47）：[n] / (n) / n) / n- / ①圈号 / fmt|模板 === */
+.ProseMirror ol.num-list {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 2.8em;
+}
+.ProseMirror ol.num-list > li {
+  position: relative;
+  margin: 2px 0;
+  counter-increment: numitem;
+}
+.ProseMirror ol.num-list > li::before {
+  position: absolute;
+  left: -2.8em;
+  width: 2.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font: inherit;
+  color: inherit;
+  white-space: pre;
+}
+/* [1] [2] …（MS Word“编号样式：[无]→[1]”，学术引用惯例）。
+   注意：属性值含 [ ] ( ) 等字符时 CSS 属性选择器必须转义（\[ \]），
+   否则选择器解析失败整条规则被丢弃 —— E2E 实测 content 未求值。 */
+.ProseMirror ol.num-list[data-num-style='\[n\]'] > li::before {
+  content: '[' counter(numitem) ']';
+}
+/* (1) (2) … */
+.ProseMirror ol.num-list[data-num-style='\(n\)'] > li::before {
+  content: '(' counter(numitem) ')';
+}
+/* 1) 2) … */
+.ProseMirror ol.num-list[data-num-style='n\)'] > li::before {
+  content: counter(numitem) ')';
+}
+/* 1－ 2－ …（Word 全角破折号样式） */
+.ProseMirror ol.num-list[data-num-style='n-'] > li::before {
+  content: counter(numitem) '－';
+}
+/* ① ② … ⑳ 圈号数字 与 ⓐ ⓑ … ⓩ 圈号字母：CSS 计数器无圈号样式 ——
+   li[data-glyph] 由 JS 查表补字符（与 Word decimalEnclosedCircle / 带圈字符
+   一致）；无 JS 增强时退回 (1) (2) 括号保证可读 */
+.ProseMirror ol.num-list[data-num-style='circle-num'] > li[data-glyph]::before,
+.ProseMirror ol.num-list[data-num-style='circle-alpha'] > li[data-glyph]::before {
+  content: attr(data-glyph);
+}
+.ProseMirror ol.num-list[data-num-style='circle-num'] > li::before,
+.ProseMirror ol.num-list[data-num-style='circle-alpha'] > li::before {
+  content: '(' counter(numitem) ')';
+}
+
+/* fmt|lvlText 模板序号（"decimal|第%1条" 等）：前后缀存 ol 的 CSS 变量，
+   content 里 var() 与 counter() 混排（attr() 只能读伪元素所属元素自身属性，
+   不能用于从 ol 继承，故走变量）；数字形态由 fmt class 决定 */
+.ProseMirror ol.num-list.num-tmpl > li::before {
+  content: var(--pre) counter(numitem) var(--post);
+}
+.ProseMirror ol.num-list.num-fmt-lower-roman > li::before { content: var(--pre) counter(numitem, lower-roman) var(--post); }
+.ProseMirror ol.num-list.num-fmt-upper-roman > li::before { content: var(--pre) counter(numitem, upper-roman) var(--post); }
+.ProseMirror ol.num-list.num-fmt-lower-alpha > li::before { content: var(--pre) counter(numitem, lower-alpha) var(--post); }
+.ProseMirror ol.num-list.num-fmt-upper-alpha > li::before { content: var(--pre) counter(numitem, upper-alpha) var(--post); }
+.ProseMirror ol.num-list.num-fmt-lower-greek > li::before { content: var(--pre) counter(numitem, lower-greek) var(--post); }
+.ProseMirror ol.num-list.num-fmt-cjk > li::before { content: var(--pre) counter(numitem, cjk-ideographic) var(--post); }
+
 /* === 数学公式节点 === */
 /* display:block 在含大量公式块的长文档中触发 Chromium 合成层 hit-test 失效
    （表格区域点击/选区全部落空，E2E round20 二分定位：block 版死区、

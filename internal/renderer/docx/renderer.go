@@ -25,7 +25,11 @@ import (
         "github.com/zai/samoffice/internal/core"
 )
 
-type Renderer struct{}
+type Renderer struct {
+        // listStyleNumIDs round47：渲染期间的 有序列表样式→numId 映射。
+        // Render 开始时由 buildNumberingXML 语义一致地初始化，renderBlock 分发时查询。
+        listStyleNumIDs map[string]int
+}
 
 func New() *Renderer { return &Renderer{} }
 
@@ -94,8 +98,10 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
         if err := writeZip(w, "word/_rels/document.xml.rels", renderDocRels(images, footerRels, linkRels, hasComments, hasHeader)); err != nil {
                 return nil, err
         }
-        // word/numbering.xml（bullet=1 / ordered=2 两个编号定义）
-        if err := writeZip(w, "word/numbering.xml", numberingXML); err != nil {
+        // word/numbering.xml（bullet=1 / ordered=2 + 按样式动态分配的编号定义，round47）
+        r.listStyleNumIDs = buildStyleNumIDs(doc)
+        curStyleNumIDs = r.listStyleNumIDs
+        if err := writeZip(w, "word/numbering.xml", buildNumberingXML(doc)); err != nil {
                 return nil, err
         }
         // word/footnotes.xml（分隔符脚注 + 正文脚注内容；renderFootnoteRef 输出 w:footnoteReference）
@@ -605,7 +611,7 @@ func renderBlock(sb *strings.Builder, b core.Block, images map[string]*embedImag
         case *core.Table:
                 renderTable(sb, v, images, contentW)
         case *core.BulletList:
-                renderBulletList(sb, v)
+                renderBulletList(sb, v, numIdForStyle(v))
         case *core.CodeBlock:
                 renderCodeBlock(sb, v)
         case *core.Image:
@@ -1428,15 +1434,11 @@ func renderTextbox(sb *strings.Builder, tb *core.Textbox, images map[string]*emb
         sb.WriteString(`</w:pict></w:r></w:p>` + "\n")
 }
 
-func renderBulletList(sb *strings.Builder, l *core.BulletList) {
+func renderBulletList(sb *strings.Builder, l *core.BulletList, numID int) {
         for _, item := range l.Items {
                 sb.WriteString("<w:p>")
                 sb.WriteString(`<w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="`)
-                if l.Ordered {
-                        sb.WriteString("2")
-                } else {
-                        sb.WriteString("1")
-                }
+                sb.WriteString(fmt.Sprintf("%d", numID))
                 sb.WriteString(`"/></w:numPr></w:pPr>`)
                 for _, b := range item {
                         if p, ok := b.(*core.Paragraph); ok {
@@ -2157,13 +2159,20 @@ const rootRelsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
 </Relationships>`
 
-// numberingXML 定义 renderBulletList 引用的两个编号：
+// buildNumberingXML 生成 word/numbering.xml（round47 列表序号对齐 MS Word）。
 //
-//      abstractNumId 0 → numId 1：项目符号（•，Symbol 字体，缩进 720/360）
-//      abstractNumId 1 → numId 2：有序编号（%1. 十进制，缩进 720/360）
+// 固定编号：
 //
-// 单级即可覆盖前端 bullet_list / ordered_list 的导出需求。
-const numberingXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+//      numId 1：项目符号（•，Symbol 字体，缩进 720/360）
+//      numId 2：缺省有序编号（%1. 十进制）
+//
+// 动态编号 numId 10..：文档中出现的每种有序列表样式（BulletList.Style）各分配一个
+// abstractNum，按样式的 numFmt/lvlText 生成（[1]/(3)/①/ⓐ 等形式），保证
+// 保存往返后 Word/WPS 中的序号外观一致。
+func buildNumberingXML(doc *core.Document) string {
+        styles := collectListStyles(doc)
+        var sb strings.Builder
+        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:abstractNum w:abstractNumId="0">
     <w:multiLevelType w:val="hybridMultilevel"/>
@@ -2186,6 +2195,152 @@ const numberingXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
     </w:lvl>
   </w:abstractNum>
-  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
-  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
-</w:numbering>`
+`)
+        // 动态样式：abstractNumId 2.. 与 numId 10.. 一一对应
+        idx := 2
+        for _, st := range styles {
+                fmtName, lvlText := numFmtOfStyle(st)
+                sb.WriteString(fmt.Sprintf("  <w:abstractNum w:abstractNumId=\"%d\">\n", idx))
+                sb.WriteString("    <w:multiLevelType w:val=\"hybridMultilevel\"/>\n")
+                sb.WriteString("    <w:lvl w:ilvl=\"0\">\n")
+                sb.WriteString("      <w:start w:val=\"1\"/>\n")
+                sb.WriteString(fmt.Sprintf("      <w:numFmt w:val=\"%s\"/>\n", fmtName))
+                sb.WriteString(fmt.Sprintf("      <w:lvlText w:val=\"%s\"/>\n", escapeXMLAttr(lvlText)))
+                sb.WriteString("      <w:lvlJc w:val=\"left\"/>\n")
+                sb.WriteString("      <w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr>\n")
+                // 圈号字符依赖 Unicode 字体，指定 MS Gothic 兜底保证 Word 显示
+                if fmtName == "decimalEnclosedCircle" || fmtName == "decimalEnclosedCircleChinese" {
+                        sb.WriteString("      <w:rPr><w:rFonts w:ascii=\"MS Gothic\" w:hAnsi=\"MS Gothic\" w:hint=\"default\"/></w:rPr>\n")
+                }
+                sb.WriteString("    </w:lvl>\n")
+                sb.WriteString("  </w:abstractNum>\n")
+                idx++
+        }
+        sb.WriteString("  <w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>\n")
+        sb.WriteString("  <w:num w:numId=\"2\"><w:abstractNumId w:val=\"1\"/></w:num>\n")
+        idx = 2
+        for range styles {
+                sb.WriteString(fmt.Sprintf("  <w:num w:numId=\"%d\"><w:abstractNumId w:val=\"%d\"/></w:num>\n", numIdBase+idx-2, idx))
+                idx++
+        }
+        sb.WriteString("</w:numbering>")
+        return sb.String()
+}
+
+// numIdBase 动态样式 numId 起始值（1/2 为固定 bullet/decimal 保留）
+const numIdBase = 10
+
+// curStyleNumIDs 渲染期间的有序列表样式→numId 映射（Render 单线程使用）。
+var curStyleNumIDs map[string]int
+
+// collectListStyles 收集文档中有序列表的去重样式（保持出现顺序）。
+func collectListStyles(doc *core.Document) []string {
+        seen := map[string]bool{}
+        out := []string{}
+        var walk func(blocks []core.Block)
+        walk = func(blocks []core.Block) {
+                for _, b := range blocks {
+                        if l, ok := b.(*core.BulletList); ok && l.Ordered && l.Style != "" {
+                                if !seen[l.Style] {
+                                        seen[l.Style] = true
+                                        out = append(out, l.Style)
+                                }
+                                continue
+                        }
+                        if t, ok := b.(*core.Table); ok {
+                                for _, row := range t.Rows {
+                                        for _, cell := range row {
+                                                walk(cell.Blocks)
+                                        }
+                                }
+                        }
+                }
+        }
+        walk(doc.Blocks)
+        return out
+}
+
+// buildStyleNumIDs 建立样式 → numId 映射（与 buildNumberingXML 的分配一致）。
+func buildStyleNumIDs(doc *core.Document) map[string]int {
+        m := map[string]int{}
+        for i, st := range collectListStyles(doc) {
+                m[st] = numIdBase + i
+        }
+        return m
+}
+
+// numIdForStyle 计算列表的 numId：bullet=1、缺省有序=2、样式有序=curStyleNumIDs。
+func numIdForStyle(l *core.BulletList) int {
+        if !l.Ordered {
+                return 1
+        }
+        if l.Style == "" {
+                return 2
+        }
+        if id, ok := curStyleNumIDs[l.Style]; ok {
+                return id
+        }
+        return 2
+}
+
+// numFmtOfStyle 把 UDM 样式串还原为 Word 的 (numFmt, lvlText)。
+// 与 parser.listStyleOf 的映射互逆；未知样式按十进制 %1. 兜底。
+// 圈字母（circle-alpha）在 ST_NumberFormat 无对应值（只有圈数字
+// decimalEnclosedCircle / 圈表意 ideographEnclosedCircle）—— 导出为
+// lowerLetter，samoffice 重新打开时按 circle-alpha 还原（往返自洽）。
+func numFmtOfStyle(style string) (fmtName, lvlText string) {
+        switch style {
+        case "[n]":
+                return "decimal", "[%1]"
+        case "(n)":
+                return "decimalEnclosedParen", "%1"
+        case "n)":
+                return "decimal", "%1)"
+        case "n-":
+                return "decimal", "%1－"
+        case "circle-num":
+                return "decimalEnclosedCircle", "%1"
+        case "circle-alpha":
+                return "lowerLetter", "%1."
+        case "cjk-ideographic":
+                return "chineseCounting", "%1、"
+        case "references":
+                return "decimal", "[%1]"
+        }
+        // 透传形式 "numFmt|lvlText"
+        if i := strings.Index(style, "|"); i > 0 {
+                f, t := style[:i], style[i+1:]
+                if f != "" && t != "" {
+                        return f, t
+                }
+        }
+        // CSS list-style-type 兼容（lower-roman 等）
+        if cssToWord, ok := cssNumFmt[style]; ok {
+                return cssToWord, "%1."
+        }
+        return "decimal", "%1."
+}
+
+// cssNumFmt CSS list-style-type → Word numFmt（旧版前端样式的导出兼容）
+var cssNumFmt = map[string]string{
+        "lower-roman":   "lowerRoman",
+        "upper-roman":   "upperRoman",
+        "lower-alpha":   "lowerLetter",
+        "upper-alpha":   "upperLetter",
+        "lower-latin":   "lowerLetter",
+        "upper-latin":   "upperLetter",
+        "lower-greek":   "lowerGreek",
+        "armenian":      "armenian",
+        "georgian":      "georgian",
+        "decimal":       "decimal",
+        "decimal-leading-zero": "decimalZero",
+}
+
+// escapeXMLAttr 转义 XML 属性值（numbering.xml 的 lvlText 可能含 <>&" ）
+func escapeXMLAttr(s string) string {
+        s = strings.ReplaceAll(s, "&", "&amp;")
+        s = strings.ReplaceAll(s, "<", "&lt;")
+        s = strings.ReplaceAll(s, ">", "&gt;")
+        s = strings.ReplaceAll(s, `"`, "&quot;")
+        return s
+}

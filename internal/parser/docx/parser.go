@@ -103,14 +103,22 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 
                 // 预载 document.xml 的图片资源（rels + media）与列表编号格式
                 media := loadDocMedia(files, docFile.Name)
-                numFmt := parseNumbering(files)
+                numLevels := parseNumberingLevels(files)
+                numFmt := map[int]map[int]string{}
+                for nid, lvls := range numLevels {
+                        m := map[int]string{}
+                        for ilvl, l := range lvls {
+                                m[ilvl] = l.Fmt
+                        }
+                        numFmt[nid] = m
+                }
 
                 // 解析 document.xml
                 if rc, err := docFile.Open(); err != nil {
                         return nil, warnings, fmt.Errorf("open document.xml: %w", err)
                 } else {
                         defer rc.Close()
-                        blocks, warns, fn, ntf := parseDocumentXMLCtx(rc, footnotes, media, numFmt)
+                        blocks, warns, fn, ntf := parseDocumentXMLCtxLevels(rc, footnotes, media, numLevels)
                         doc.Blocks = blocks
                         warnings = append(warnings, warns...)
                         // 文档含脚注引用时，在正文末尾追加脚注区
@@ -245,6 +253,20 @@ func parseDocumentXML(r io.Reader, footnotes map[string]string) ([]core.Block, [
 // parseDocumentXMLCtx 同上，另带图片资源（media）与列表编号格式（numFmt）上下文：
 // media 供 run 内 w:drawing 读取嵌入图片；numFmt 供连续段落聚合为 Word 列表。
 func parseDocumentXMLCtx(r io.Reader, footnotes map[string]string, media *docMedia, numFmt map[int]map[int]string) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
+        levels := map[int]map[int]numLevel{}
+        for nid, m := range numFmt {
+                lm := map[int]numLevel{}
+                for ilvl, f := range m {
+                        lm[ilvl] = numLevel{Fmt: f}
+                }
+                levels[nid] = lm
+        }
+        return parseDocumentXMLCtxLevels(r, footnotes, media, levels)
+}
+
+// parseDocumentXMLCtxLevels round47：带完整编号级别（numFmt + lvlText 模板）的入口。
+// lvlText 是 Word 序号的真实外观（[%1]/(%1)/%1）等括号模板与圈号样式的来源。
+func parseDocumentXMLCtxLevels(r io.Reader, footnotes map[string]string, media *docMedia, numLevels map[int]map[int]numLevel) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
         dec := xml.NewDecoder(r)
         dec.Strict = false
         dec.AutoClose = xml.HTMLAutoClose
@@ -290,9 +312,11 @@ func parseDocumentXMLCtx(r io.Reader, footnotes map[string]string, media *docMed
                                         }
                                         // numId>0 的段落聚合进列表；其余块先冲刷当前列表再追加
                                         if p, ok := b.(*core.Paragraph); ok && np.NumID > 0 {
-                                                fmtName := ""
-                                                if lvls, ok2 := numFmt[np.NumID]; ok2 {
-                                                        fmtName = lvls[np.Ilvl]
+                                                fmtName, lvlText := "", ""
+                                                if lvls, ok2 := numLevels[np.NumID]; ok2 {
+                                                        if l, ok3 := lvls[np.Ilvl]; ok3 {
+                                                                fmtName, lvlText = l.Fmt, l.LvlText
+                                                        }
                                                 }
                                                 if fmtName == "" {
                                                         fmtName = "bullet" // numbering.xml 缺失时按项目符号兜底
@@ -301,6 +325,9 @@ func parseDocumentXMLCtx(r io.Reader, footnotes map[string]string, media *docMed
                                                 if curList == nil || curNumID != np.NumID || curIlvl != np.Ilvl || curList.Ordered != ordered {
                                                         flushList()
                                                         curList = &core.BulletList{Items: [][]core.Block{}, Ordered: ordered}
+                                                        // round47：完整序号样式 —— "numFmt|lvlText"（如 "decimal|[%1]"）。
+                                                        // 前端按模板渲染 [1]/(3) 等括号形式；缺省保持旧 CSS 样式兼容。
+                                                        curList.Style = listStyleOf(fmtName, lvlText)
                                                         curNumID, curIlvl = np.NumID, np.Ilvl
                                                 }
                                                 curList.Items = append(curList.Items, []core.Block{p})
@@ -492,6 +519,84 @@ type numPrInfo struct {
 // w:abstractNum w:abstractNumId → w:lvl w:ilvl → w:numFmt w:val。
 func parseNumbering(files map[string]*zip.File) map[int]map[int]string {
         out := map[int]map[int]string{}
+        levels := parseNumberingLevels(files)
+        for numID, lvls := range levels {
+                m := map[int]string{}
+                for ilvl, l := range lvls {
+                        m[ilvl] = l.Fmt
+                }
+                out[numID] = m
+        }
+        return out
+}
+
+// numLevel 描述一个编号级别的完整定义（round47 列表序号对齐 MS Word）。
+type numLevel struct {
+        Fmt      string // w:numFmt（decimal/decimalEnclosedCircle/chineseCounting/bullet/…）
+        LvlText  string // w:lvlText 模板（"%1."、"%1)"、"[%1]"、"(%1)"、"第%1章"…）
+}
+
+// listStyleOf 把 Word 的 (numFmt, lvlText) 组合映射为 UDM BulletList.Style。
+// 规范形式 "numFmt|lvlText"（如 "decimal|[%1]"），前端按 lvlText 模板渲染序号。
+// 映射策略（对齐 MS Word 行为）：
+//   - bullet/none → ""（项目符号，无序号样式）
+//   - 纯数字样式 + 缺省模板（"%1."）→ ""（旧默认 1. 2. 3.，保持向后兼容）
+//   - 其余 → 常见括号/圈号模板归一为简写（[n]/(n)/n)/n-）+ numFmt，
+//     便于前端识别与 UI 展示；非常规模板原样透传 "fmt|text"
+func listStyleOf(fmtName, lvlText string) string {
+        if fmtName == "" || fmtName == "bullet" || fmtName == "none" {
+                return ""
+        }
+        // 圈号数字/字母：外观由 numFmt 决定，模板就是 %1 本身
+        switch fmtName {
+        case "decimalEnclosedCircle", "decimalEnclosedCircleChinese":
+                if lvlText == "%1" || lvlText == "" {
+                        return "circle-num"
+                }
+        case "decimalEnclosedParen": // (1) (2) …
+                if lvlText == "%1" || lvlText == "" {
+                        return "(n)"
+                }
+        case "decimalEnclosedFullstop": // 1. 2. …（Word 带圈句点，视觉同缺省）
+                if lvlText == "%1" || lvlText == "" {
+                        return ""
+                }
+        case "aiueo", "iroha":
+                return "enclosed-jp|" + lvlText
+        }
+        // Word 的 "decimalEnclosedFullstop"（1.）等带装饰格式：模板可透传
+        t := strings.TrimSpace(lvlText)
+        if t == "" {
+                t = "%1."
+        }
+        // 常见括号模板归一（只含一个 %1 占位符时）
+        if strings.Count(t, "%1") == 1 && !strings.Contains(t, "%2") {
+                switch t {
+                case "[%1]", "[%1 ]", "[ %1]":
+                        return "[n]"
+                case "(%1)", "(%1 )", "( %1)":
+                        return "(n)"
+                case "%1)":
+                        return "n)"
+                case "%1－", "%1-", "%1—":
+                        return "n-"
+                case "%1.":
+                        return "" // 缺省样式
+                case "%1、":
+                        return "cjk-ideographic" // 中文顿号（一、二、）
+                }
+                // 常规模板：带 numFmt 前缀透传（前端按模板渲染）
+                return fmtName + "|" + lvlText
+        }
+        // 多级模板（含 %2/%3…）：单级列表用不到，透传首级
+        return fmtName + "|" + lvlText
+}
+
+// parseNumberingLevels 解析 word/numbering.xml 的完整级别定义：
+// numId → ilvl → {numFmt, lvlText}。lvlText 是 Word 序号的真实外观模板，
+// [%1]/(%1)/%1－等括号样式全在这里；此前只取 numFmt，丢失了所有括号形式。
+func parseNumberingLevels(files map[string]*zip.File) map[int]map[int]numLevel {
+        out := map[int]map[int]numLevel{}
         f, ok := files["word/numbering.xml"]
         if !ok {
                 return out
@@ -505,8 +610,9 @@ func parseNumbering(files map[string]*zip.File) map[int]map[int]string {
         dec.Strict = false
         dec.AutoClose = xml.HTMLAutoClose
         dec.Entity = xml.HTMLEntity
-        abstractFmt := map[int]map[int]string{} // abstractNumId → ilvl → numFmt
-        numToAbstract := map[int]int{}          // numId → abstractNumId
+        type lvlDef struct{ fmtName, lvlText string }
+        abstractFmt := map[int]map[int]*lvlDef{} // abstractNumId → ilvl → def
+        numToAbstract := map[int]int{}           // numId → abstractNumId
         curAbstract, curNum, curLvl := -1, -1, -1
         for {
                 tok, err := dec.Token()
@@ -534,10 +640,30 @@ func parseNumbering(files map[string]*zip.File) map[int]map[int]string {
                                 if curAbstract >= 0 && curLvl >= 0 {
                                         m := abstractFmt[curAbstract]
                                         if m == nil {
-                                                m = map[int]string{}
+                                                m = map[int]*lvlDef{}
                                                 abstractFmt[curAbstract] = m
                                         }
-                                        m[curLvl] = v
+                                        d := m[curLvl]
+                                        if d == nil {
+                                                d = &lvlDef{}
+                                                m[curLvl] = d
+                                        }
+                                        d.fmtName = v
+                                }
+                        case "lvlText":
+                                v := attrOf(t, "val")
+                                if curAbstract >= 0 && curLvl >= 0 {
+                                        m := abstractFmt[curAbstract]
+                                        if m == nil {
+                                                m = map[int]*lvlDef{}
+                                                abstractFmt[curAbstract] = m
+                                        }
+                                        d := m[curLvl]
+                                        if d == nil {
+                                                d = &lvlDef{}
+                                                m[curLvl] = d
+                                        }
+                                        d.lvlText = v
                                 }
                         case "abstractNumId": // <w:num><w:abstractNumId w:val="0"/>（值在 w:val 属性）
                                 if curNum >= 0 {
@@ -557,7 +683,11 @@ func parseNumbering(files map[string]*zip.File) map[int]map[int]string {
         }
         for numID, absID := range numToAbstract {
                 if m, ok := abstractFmt[absID]; ok {
-                        out[numID] = m
+                        lm := map[int]numLevel{}
+                        for ilvl, d := range m {
+                                lm[ilvl] = numLevel{Fmt: d.fmtName, LvlText: d.lvlText}
+                        }
+                        out[numID] = lm
                 }
         }
         return out

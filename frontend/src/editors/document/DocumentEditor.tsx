@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
-import { EditorState, NodeSelection, TextSelection, Plugin } from 'prosemirror-state'
+import { EditorState, NodeSelection, TextSelection, Plugin, PluginKey } from 'prosemirror-state'
 import { DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view'
 import { schema } from './schema'
@@ -61,6 +61,87 @@ const HL_COLORS = ['#fef08a','#fed7aa','#fca5a5','#bbf7d0','#bfdbfe','#fbcfe8','
 
 function readBool(key: string): boolean {
   try { return localStorage.getItem(key) === '1' } catch { return false }
+}
+
+// === round47：Word 序号样式（编号格式库，对齐 MS Word"定义新编号格式"） ===
+// value 直接写入 ordered_list.attrs.style / UDM BulletList.Style，
+// Go 端 numFmtOfStyle 据此生成 numbering.xml 的 numFmt/lvlText。
+export const NUMBERING_STYLES: Array<{ value: string; label: string; sample: string }> = [
+  { value: '', label: '1. 2. 3.', sample: '1.' },
+  { value: '[n]', label: '[1] [2] [3]', sample: '[1]' },
+  { value: '(n)', label: '(1) (2) (3)', sample: '(1)' },
+  { value: 'n)', label: '1) 2) 3)', sample: '1)' },
+  { value: 'n-', label: '1－ 2－ 3－', sample: '1－' },
+  { value: 'circle-num', label: '① ② ③', sample: '①' },
+  { value: 'circle-alpha', label: 'ⓐ ⓑ ⓒ', sample: 'ⓐ' },
+  { value: 'cjk-ideographic', label: '一、二、三、', sample: '一、' },
+  { value: 'references', label: '[1] 参考文献', sample: '[文]' },
+  { value: 'lower-roman', label: 'i. ii. iii.', sample: 'i.' },
+  { value: 'upper-roman', label: 'I. II. III.', sample: 'I.' },
+  { value: 'lower-alpha', label: 'a. b. c.', sample: 'a.' },
+  { value: 'upper-alpha', label: 'A. B. C.', sample: 'A.' },
+]
+
+const listGlyphKey = new PluginKey('listCircleGlyph')
+
+// 圈号数字字符表（U+2460..，与 Word decimalEnclosedCircle 一致，仅到 20）
+const CIRCLE_GLYPHS = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'
+// 圈号字母（Word 无此 numFmt，用带圈字符实现"圈a"）：a-z
+const CIRCLE_ALPHA_GLYPHS = 'ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ'
+
+/** round47：圈号列表的 li 位置 → 圈号字符 映射（circle-num ①… / circle-alpha ⓐ…）。
+ * 用 attribute Decoration 写 data-glyph（绝不能直接改 PM 管理的 DOM ——
+ * DOMObserver 会把未知属性变更当作外部干扰回滚，E2E 实证 setAttribute 后
+ * 立即被清掉）。CSS ::before content: attr(data-glyph) 渲染。 */
+function circleGlyphDecos(doc: any): Array<{ from: number; to: number; glyph: string }> {
+  const out: Array<{ from: number; to: number; glyph: string }> = []
+  const walk = (node: any, pos: number) => {
+    if (node.type.name === 'ordered_list') {
+      const style = node.attrs.style || ''
+      const glyphs = style === 'circle-num' ? CIRCLE_GLYPHS : style === 'circle-alpha' ? CIRCLE_ALPHA_GLYPHS : ''
+      if (glyphs) {
+        let i = 0
+        node.forEach((child: any, off: number) => {
+          if (i < glyphs.length) out.push({ from: pos + 1 + off, to: pos + 1 + off + child.nodeSize, glyph: glyphs[i] })
+          i++
+        })
+      }
+    }
+    return true
+  }
+  doc.descendants(walk)
+  return out
+}
+
+/** 把选区所在有序列表（可多选）的序号样式改为 style。
+ * 逻辑：选区覆盖的 ordered_list 节点 setNodeMarkup 改 attrs.style；
+ * 光标在列表内时改光标所在列表（对齐 Word：光标在列表中即作用于整个列表）。 */
+function setListNumberingStyle(v: any, style: string) {
+  const { state } = v
+  const tr = state.tr
+  let touched = 0
+  const { from, to } = state.selection
+  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+    if (node.type.name === 'ordered_list') {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, style })
+      touched++
+    }
+    return true
+  })
+  if (!touched) {
+    // 空选区：向上找光标所在的 ordered_list
+    const $pos = state.doc.resolve(from)
+    for (let d = $pos.depth; d > 0; d--) {
+      const n = $pos.node(d)
+      if (n.type.name === 'ordered_list') {
+        tr.setNodeMarkup($pos.before(d), undefined, { ...n.attrs, style })
+        touched++
+        break
+      }
+    }
+  }
+  if (touched) v.dispatch(tr)
+  return touched
 }
 
 // === round46：表格多选下的字符样式范围 ===
@@ -1000,6 +1081,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [activeMarks, setActiveMarks] = useState<Set<string>>(new Set())
   const [activeAttrs, setActiveAttrs] = useState<any>({})
   const [cellVAlign, setCellVAlignState] = useState('')  // 当前单元格垂直对齐（表格工具栏高亮用）
+  // round47：光标所在有序列表的序号样式（编号格式下拉高亮用）
+  const [activeNumStyle, setActiveNumStyle] = useState('')
   const [activeFont, setActiveFont] = useState('')
   const [activeFontSize, setActiveFontSize] = useState('')
   const [activeColor, setActiveColor] = useState('')
@@ -1431,7 +1514,30 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         // 直接闭包捕获 zoom 会在缩放后读到旧值）。
         createTableDragResizePlugin(() => (window as any).__docZoom || 1),
         createTableRowColSelectPlugin(), createTrailingParagraphPlugin(),
-        createPaginationPlugin(() => metricsRef.current, setPageCount, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, (pages: number[]) => { blockPagesRef.current = pages; setBlockPages(pages) }),
+        createPaginationPlugin(() => metricsRef.current, (n: number) => {
+          setPageCount(n)
+        }, (rects: { top: number; height: number }[], maxY: number) => { setPageRects(rects); setContentMaxY(maxY) }, (pages: number[]) => { blockPagesRef.current = pages; setBlockPages(pages) }),
+        // round47：圈号字符插件 —— 补 circle-num/circle-alpha 的 data-glyph
+        // （CSS 计数器无圈号样式，必须 JS 查表写 attr）。
+        // view() 在 EditorView 构造时调用 = 初始挂载（文档已在 state）；
+        // update 只认 docChanged（glyph 按值缓写幂等，选区事务不重跑）。
+        // round47：圈号序号（circle-num ① / circle-alpha ⓐ）—— attribute
+        // Decoration 写 data-glyph，随 state 变化自动重算（不改 DOM、无回滚问题）
+        new Plugin({
+          key: listGlyphKey,
+          state: {
+            init: () => DecorationSet.empty,
+            apply: (tr: any) => {
+              const decos = circleGlyphDecos(tr.doc).map((g: any) =>
+                Decoration.node(g.from, g.to, { 'data-glyph': g.glyph }, {})
+              )
+              return DecorationSet.create(tr.doc, decos)
+            },
+          },
+          props: {
+            decorations: (state: any) => listGlyphKey.getState(state),
+          },
+        }),
         // 差异对比高亮（左侧：被删除段落标红），仅在并排对比时生效
         diffDecorationPlugin(diffDelRef),
         // 格式刷：暂存源格式后，下一次在目标选区上直接套用源 marks。
@@ -1930,13 +2036,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     if ($from.parent.type.name === 'heading') marks.add(`heading-${$from.parent.attrs.level}`)
     let isInTable = false
     let cellVa = ''
+    let numStyle = ''
     for (let d = $from.depth; d > 0; d--) {
       const n = $from.node(d)
       if (n.type.name === 'table_cell' && !cellVa) cellVa = n.attrs.vAlign || ''
+      if (n.type.name === 'ordered_list' && !numStyle) numStyle = n.attrs.style || ''
       if (n.type.name === 'table') { isInTable = true; break }
     }
     setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c); setActiveCharSpacing(cs)
     setCellVAlignState(cellVa)
+    setActiveNumStyle(numStyle)
     // Track if cursor is on an image or shape node (for float/wrap buttons)
     const sel = state.selection
     const selNode = sel instanceof NodeSelection ? sel.node : null
@@ -3482,6 +3591,17 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 <div className="toolbar-divider" />
                 <button onClick={() => exec('bulletList')} className="toolbar-btn" title={t('doc.bulletList')} type="button" style={{ width: 28, height: 26 }}><IconBulletList /></button>
                 <button onClick={() => exec('orderedList')} className="toolbar-btn" title={t('doc.orderedList')} type="button" style={{ width: 28, height: 26 }}><IconNumberList /></button>
+                {/* round47：序号样式（编号格式）—— 对齐 MS Word"开始→编号库"。
+                    作用于光标所在/选区覆盖的有序列表：[1]、(1)、①、一、罗马数字等 */}
+                <Dropdown
+                  className="text-xs rounded-md px-2 py-1 ribbon-input"
+                  style={{ width: 84, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  value={activeNumStyle}
+                  onChange={(val) => { const v = viewRef.current; if (!v) return; if (setListNumberingStyle(v, val)) focusNoJump() }}
+                  options={NUMBERING_STYLES.map(s => ({ label: s.label, value: s.value }))}
+                  title={t('doc.numberingStyle')}
+                  testId="numbering-style"
+                />
                 <button onClick={() => setParaAttr('indent', Math.min(8, (activeAttrs.indent || 0) + 1))} className="toolbar-btn" title={t('doc.indentMore')} type="button" style={{ width: 28, height: 26 }}><IconIndentInc /></button>
                 <button onClick={() => setParaAttr('indent', Math.max(0, (activeAttrs.indent || 0) - 1))} className="toolbar-btn" title={t('doc.indentLess')} type="button" style={{ width: 28, height: 26 }}><IconIndentDec /></button>
               </div>

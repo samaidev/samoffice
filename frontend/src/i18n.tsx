@@ -234,6 +234,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'doc.alignJustify': { en: 'Justify', zh: '两端对齐' },
   'doc.bulletList': { en: 'Bullet List', zh: '无序列表' },
   'doc.orderedList': { en: 'Numbered List', zh: '有序列表' },
+  'doc.numberingStyle': { en: 'Numbering Style', zh: '序号样式' },
   'doc.indentMore': { en: 'Increase Indent', zh: '增加缩进' },
   'doc.indentLess': { en: 'Decrease Indent', zh: '减少缩进' },
   'doc.styles': { en: 'Styles', zh: '样式' },
