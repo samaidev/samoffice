@@ -3,26 +3,131 @@
   <head>
     <script>
       (function(){
-        function report(text){
-          try{
-            var pre=document.createElement('pre');
-            pre.style.cssText='position:fixed;inset:0;z-index:99999;color:#f44;background:#111;padding:16px;white-space:pre-wrap;font-family:monospace;margin:0;overflow:auto';
-            pre.textContent='前端错误：\n'+text;
-            (document.body||document.documentElement).appendChild(pre);
-          }catch(e){}
-          var tries=0;
+        // [err-report-v2] 崩溃覆盖层升级：保留原有 <pre> 堆栈展示 + Wails 日志上报，
+        // 新增「📤 报送错误」「✕ 关闭页面」两个按钮:
+        //   - 报送: POST https://samai.cc/admin168/api/err-reports（匿名、每 IP
+        //     10 条/分钟限流、服务端只读展示在后台「错误上报」分类卡）
+        //   - 关闭: 移除覆盖层让程序可以正常退出/继续使用（之前报错后覆盖层
+        //     挡死整个界面无法关闭程序 —— v0.7.29 用户反馈）
+        var REPORT_URL = 'https://samai.cc/admin168/api/err-reports';
+        var lastErrorText = '';
+        var lastErrorKind = '';
+        var reported = false; // 同一错误只自动报一次；手动按钮可再次报送
+
+        function appVersion() {
+          try {
+            var m = /v?(\d+\.\d+\.\d+)/.exec(navigator.userAgent || '');
+            // Wails 桌面端把版本放在 window.samofficeVersion（App.tsx 注入），
+            // web 预览时无 —— 回退从 title / 无
+            if (window.samofficeVersion) return window.samofficeVersion;
+            return m ? m[1] : 'unknown';
+          } catch (e) { return 'unknown'; }
+        }
+        function platform() {
+          try {
+            if (window.go && window.go.main && window.go.main.App) {
+              var ua = navigator.userAgent.toLowerCase();
+              if (ua.indexOf('windows') >= 0) return 'windows';
+              if (ua.indexOf('mac') >= 0) return 'darwin';
+              if (ua.indexOf('linux') >= 0) return 'linux';
+            }
+            return 'web';
+          } catch (e) { return 'unknown'; }
+        }
+
+        function sendReport(kind, text) {
+          try {
+            fetch(REPORT_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                app: 'samoffice',
+                version: appVersion(),
+                platform: platform(),
+                kind: kind,
+                message: String(text).split('\n')[0].substring(0, 2000),
+                stack: String(text).substring(0, 12000),
+                url: location.href,
+                client_ts: new Date().toISOString()
+              })
+            }).then(function (r) {
+              var btn = document.getElementById('err-report-btn');
+              if (btn && r.ok) {
+                reported = true;
+                btn.textContent = '✓ 已报送';
+                btn.disabled = true;
+              } else if (btn) {
+                btn.textContent = '⚠ 报送失败，点击重试';
+                btn.disabled = false;
+              }
+            }).catch(function () {
+              var btn = document.getElementById('err-report-btn');
+              if (btn) { btn.textContent = '⚠ 报送失败（离线？），点击重试'; btn.disabled = false; }
+            });
+          } catch (e) { /* 上报本身不能再次抛错 */ }
+        }
+
+        function buildOverlay(text) {
+          var overlay = document.createElement('div');
+          overlay.id = 'err-overlay';
+          overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#1a1a1af2;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px';
+          var pre = document.createElement('pre');
+          pre.style.cssText = 'color:#f66;background:#111;padding:16px;white-space:pre-wrap;font-family:monospace;font-size:12px;margin:0;flex:1;overflow:auto;border:1px solid #333;border-radius:8px';
+          pre.textContent = '前端错误：\n' + text;
+          var bar = document.createElement('div');
+          bar.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;flex-shrink:0';
+
+          var reportBtn = document.createElement('button');
+          reportBtn.id = 'err-report-btn';
+          reportBtn.textContent = reported ? '✓ 已报送' : '📤 报送错误';
+          reportBtn.style.cssText = 'background:#d97706;color:#fff;border:none;border-radius:6px;padding:9px 18px;font-size:14px;cursor:pointer';
+          reportBtn.onclick = function () { if (!reported) sendReport(lastErrorKind, lastErrorText); };
+
+          var closeBtn = document.createElement('button');
+          closeBtn.textContent = '✕ 关闭页面（退出程序）';
+          closeBtn.style.cssText = 'background:#374151;color:#fff;border:none;border-radius:6px;padding:9px 18px;font-size:14px;cursor:pointer';
+          closeBtn.onclick = function () {
+            overlay.remove();
+            // 桌面端走 Wails 绑定退出整个应用（与 App.tsx requestCloseApp 同一通道）；
+            // web 预览时绑定不存在，静默忽略（覆盖层已移除，界面恢复可用）
+            try { window.go && window.go.main && window.go.main.App && window.go.main.App.WindowClose && window.go.main.App.WindowClose(); } catch (e) {}
+          };
+
+          var tip = document.createElement('span');
+          tip.style.cssText = 'color:#9ca3af;font-size:12px';
+          tip.textContent = '报送后可在 samai.cc/admin168「错误上报」分类查看';
+
+          bar.appendChild(reportBtn);
+          bar.appendChild(closeBtn);
+          bar.appendChild(tip);
+          overlay.appendChild(pre);
+          overlay.appendChild(bar);
+          (document.body || document.documentElement).appendChild(overlay);
+          return overlay;
+        }
+
+        function report(text, kind) {
+          lastErrorText = text;
+          lastErrorKind = kind || 'window.error';
+          try {
+            var old = document.getElementById('err-overlay');
+            if (old) old.remove();
+            buildOverlay(text);
+          } catch (e) {}
+          var tries = 0;
           function t(){
             try{ if(window.go&&window.go.main&&window.go.main.App&&window.go.main.App.LogError){ window.go.main.App.LogError(text); return; } }catch(e){}
             if(tries++<80){ setTimeout(t,250); }
           }
           t();
         }
+
         window.addEventListener('error', function(e){
           var msg = e.error && e.error.stack ? e.error.stack : (e.message || String(e));
-          report('window.error: '+msg);
+          report('window.error: '+msg, 'window.error');
         });
         window.addEventListener('unhandledrejection', function(e){
-          var r=e.reason; report('unhandledrejection: '+(r&&r.stack?r.stack:String(r)));
+          var r=e.reason; report('unhandledrejection: '+(r&&r.stack?r.stack:String(r)), 'unhandledrejection');
         });
       })();
     </script>
