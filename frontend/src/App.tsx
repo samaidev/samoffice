@@ -1098,12 +1098,46 @@ ${t('sample.md.more')}
   }, [backend])
 
   // 远程模式：沿用原下载逻辑（浏览器下载，带文件名）
-  const handleDownload = async (format: 'docx' | 'pdf') => {
+  const handleDownload = async (format: 'docx' | 'pdf' | 'pptx') => {
     if (!backend) return
     setMenuOpen(false)
     setLoading(true)
     showToast(t('app.exporting', { format: format.toUpperCase() }))
     try {
+      // pptx：幻灯片选项卡导出（远程/浏览器模式）。与桌面版 WritePPTX binding 同一
+      // JSON 契约，POST /api/pptx/save 由 Go 内存生成完整 .pptx 字节后浏览器下载。
+      if (format === 'pptx') {
+        const snaps = slideSnapshot || []
+        if (!snaps.length) {
+          showToast(t('app.noSlides'))
+          return
+        }
+        const snap0 = snaps[0] as any
+        const pageW = snap0?.pageW && snap0.pageW > 0 ? Number(snap0.pageW) : 12192000
+        const pageH = snap0?.pageH && snap0.pageH > 0 ? Number(snap0.pageH) : 6858000
+        const base = await getApiBase()
+        const resp = await fetch(`${base}/api/pptx/save`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pageW, pageH, slides: snaps }),
+        })
+        if (!resp.ok) {
+          showToast(t('app.exportFailed', { msg: (await resp.text()).slice(0, 150) }))
+          return
+        }
+        const blob = await resp.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        const title = (activeWindow?.title || 'untitled').replace(/\.(pptx?|ppsx?)$/i, '')
+        a.href = url
+        a.download = `${title}.pptx`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        showToast(t('app.exported', { format: 'PPTX' }))
+        return
+      }
       const endpointMap: Record<string, string> = {
         docx: '/api/doc/save',
         pdf: '/api/doc/export-pdf',
@@ -1196,6 +1230,9 @@ ${t('sample.md.more')}
 
     const isLocal = backend.mode === 'local'
     if (!isLocal) {
+      // 远程/浏览器模式：演示文稿选项卡导出真 .pptx（旧版会退化成 docx 下载，
+      // 即用户报告的“pptx 没有导出器”）；文档选项卡保持 docx/pdf 下载
+      if (tab === 'slide') return handleDownload('pptx')
       return handleDownload((format || 'docx') as 'docx' | 'pdf')
     }
 

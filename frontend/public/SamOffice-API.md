@@ -307,7 +307,18 @@ Content-Type: application/json
 
 请求体：UDM JSON。响应：`application/pdf` 字节流。
 
+### 5.3 幻灯片 JSON → PPTX
+
+```http
+POST {BASE}/api/pptx/save?name=演示文稿
+Content-Type: application/json
+```
+
+请求体：幻灯片 JSON（与桌面版 Wails 绑定 `WritePPTX(path, jsonStr)` 同一契约，结构见 3.3 节的 slides 快照：`{pageW, pageH, slides: [{bg, notes, shapes: [...]}], masterShapes?}`）。
+响应：`application/vnd.openxmlformats-officedocument.presentationml.presentation` 字节流（`.pptx`，可直接写入文件）。
+
 > **编辑已有文档的标准流程**：`/api/doc/open`（或 `/api/doc/local`）拿到 UDM → 程序化修改 `blocks` → `/api/doc/save` 导出 docx（或 `/api/doc/export-pdf` 导出 PDF）→ 把响应字节写入目标路径。
+> 幻灯片：打开 pptx 得到 slides → 修改 shapes/文本 → `/api/pptx/save` 导出 `.pptx`。
 
 ## 6. Excel 原生读写（完整格式）
 

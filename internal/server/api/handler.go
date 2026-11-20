@@ -14,6 +14,7 @@ import (
         "github.com/zai/samoffice/internal/core"
         "github.com/zai/samoffice/internal/dict"
         "github.com/zai/samoffice/internal/parser"
+        "github.com/zai/samoffice/internal/parser/pptx"
         "github.com/zai/samoffice/internal/parser/xlsx"
         "github.com/zai/samoffice/internal/renderer/docx"
         "github.com/zai/samoffice/internal/renderer/pdf"
@@ -40,6 +41,9 @@ func (h *Handler) Register(r *gin.Engine) {
         r.GET("/api/xlsx/read", h.readXLSXFile)
         r.POST("/api/doc/save", h.saveDocument)
         r.POST("/api/doc/export-pdf", h.exportPDF)
+        // pptx 导出：接收幻灯片 JSON（与桌面版 WritePPTX binding 同一契约），
+        // 内存生成 .pptx 字节返回（远程/浏览器模式下载）
+        r.POST("/api/pptx/save", h.savePPTX)
         r.GET("/api/dict/check", h.spellCheck)
         r.POST("/api/dict/learn", h.learnWord)
         r.GET("/api/dict/suggest", h.suggest)
@@ -270,8 +274,7 @@ func generateRTF(doc *core.Document) string {
 }
 
 // exportPDF 接收 UDM JSON 导出为 PDF 文件
-func (h *Handler) exportPDF(c *gin.Context) {
-        var doc core.Document
+func (h *Handler) exportPDF(c *gin.Context) {        var doc core.Document
         if err := c.ShouldBindJSON(&doc); err != nil {
                 c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
                 return
@@ -289,6 +292,27 @@ func (h *Handler) exportPDF(c *gin.Context) {
         }
         c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pdf"`, filename))
         c.Data(http.StatusOK, "application/pdf", data)
+}
+
+// savePPTX 接收幻灯片 JSON（pageW/pageH/slides/masterShapes，与桌面版
+// WritePPTX binding 同一契约），内存生成 .pptx 并返回（远程/浏览器模式导出）。
+func (h *Handler) savePPTX(c *gin.Context) {
+        body, err := io.ReadAll(c.Request.Body)
+        if err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+        }
+        data, err := pptx.WritePPTXBytes(string(body))
+        if err != nil {
+                c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+                return
+        }
+        filename := c.Query("name")
+        if filename == "" {
+                filename = "untitled"
+        }
+        c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pptx"`, filename))
+        c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.presentationml.presentation", data)
 }
 
 // spellCheck GET /api/dict/check?text=xxx&lang=en

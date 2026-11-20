@@ -7,6 +7,7 @@ package pptx
 
 import (
         "archive/zip"
+        "bytes"
         "encoding/base64"
         "encoding/json"
         "fmt"
@@ -87,26 +88,45 @@ type runWrite struct {
 
 // WritePPTX 把前端 slides JSON 写成 PPTX 文件
 func WritePPTX(p string, jsonStr string) error {
-        var data writePPTX
-        if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
-                return fmt.Errorf("parse pptx json: %w", err)
-        }
-        if len(data.Slides) == 0 {
-                return fmt.Errorf("no slides to write")
-        }
-        pageW, pageH := data.PageW, data.PageH
-        if pageW <= 0 {
-                pageW = 12192000
-        }
-        if pageH <= 0 {
-                pageH = 6858000
-        }
+	data, err := pptxBytesFromJSON(jsonStr)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, 0o644)
+}
 
-        builder := &pptxWriter{pageW: pageW, pageH: pageH}
-        if err := builder.build(data.Slides, data.MasterShapes); err != nil {
-                return err
-        }
-        return builder.save(p)
+// WritePPTXBytes 把前端 slides JSON 在内存中生成完整 PPTX 字节并返回。
+// 供 HTTP 导出（远程/浏览器模式下载）复用同一套写入器，不落盘。
+func WritePPTXBytes(jsonStr string) ([]byte, error) {
+	return pptxBytesFromJSON(jsonStr)
+}
+
+// pptxBytesFromJSON 解析前端 JSON 并构建 PPTX ZIP 字节
+func pptxBytesFromJSON(jsonStr string) ([]byte, error) {
+	var data writePPTX
+	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		return nil, fmt.Errorf("parse pptx json: %w", err)
+	}
+	if len(data.Slides) == 0 {
+		return nil, fmt.Errorf("no slides to write")
+	}
+	pageW, pageH := data.PageW, data.PageH
+	if pageW <= 0 {
+		pageW = 12192000
+	}
+	if pageH <= 0 {
+		pageH = 6858000
+	}
+
+	builder := &pptxWriter{pageW: pageW, pageH: pageH}
+	if err := builder.build(data.Slides, data.MasterShapes); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := builder.writeTo(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // ---------- 写入器 ----------
@@ -763,20 +783,24 @@ func vanchorToPptx(v string) string {
 }
 
 // save 打包为 zip
+// save 保留写盘入口（旧签名兼容）；内部统一走 writeTo
 func (w *pptxWriter) save(p string) error {
-        f, err := os.Create(p)
-        if err != nil {
-                return err
-        }
-        defer f.Close()
-        zw := zip.NewWriter(f)
-        defer zw.Close()
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return w.writeTo(f)
+}
 
-        // Content Types
-        ct := w.contentTypes()
-        if err := writeZip(zw, "[Content_Types].xml", ct); err != nil {
-                return err
-        }
+// writeTo 把整个 PPTX ZIP 写入任意 io.Writer（内存 buffer / 磁盘文件 / HTTP 响应体）
+func (w *pptxWriter) writeTo(dst io.Writer) error {
+	zw := zip.NewWriter(dst)
+	// Content Types
+	ct := w.contentTypes()
+	if err := writeZip(zw, "[Content_Types].xml", ct); err != nil {
+		return err
+	}
         // root rels
         if err := writeZip(zw, "_rels/.rels", rootRels); err != nil {
                 return err
@@ -875,7 +899,8 @@ func (w *pptxWriter) save(p string) error {
                 }
         }
 
-        return nil
+        // 关闭 zip（写入中央目录）——不关闭则 ZIP 不完整，PPT 打不开
+        return zw.Close()
 }
 
 // presentation 生成 presentation.xml 与 rels（rId1=master, rId2=layout, rId3=theme, rId4..N+3=slides）
