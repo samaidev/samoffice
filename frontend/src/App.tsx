@@ -19,7 +19,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.7.32'
+const APP_VERSION = 'v0.7.33'
 // [err-report-v2] 暴露版本给 window —— index.html 的崩溃覆盖层报送时读取
 ;(window as any).samofficeVersion = APP_VERSION
 
@@ -1588,10 +1588,30 @@ ${t('sample.md.more')}
           '--wails-draggable': 'drag' as any, // Wails frameless 窗口 CSS 拖动 (官方方案, WebkitAppRegion 仅 Electron 有效)
         } as any}
         onMouseDown={(e) => {
-          // Only start drag if clicking on the header itself (not buttons/inputs)
+          // round50（问题2）：标题栏空白处拖动移动窗口。
+          // 旧实现调 WindowStartDrag() —— Go 侧是 no-op（v2.12 注释称交给
+          // CSS --wails-draggable），但 header 内 flex 布局（tab 容器
+          // flex-1 占满 + no-drag 覆盖）使得点击很难命中 header 元素本身，
+          // CSS 方案实际失效，用户反馈"点空白处无法移动窗口"。
+          // 改为直接走 Wails runtime 的原生拖动通道（与 CSS 方案最终汇合
+          // 到同一条消息：WailsInvoke("drag") → Go startDrag() →
+          // WM_NCLBUTTONDOWN HTCAPTION 系统拖动）。仅对交互元素豁免。
           const target = e.target as HTMLElement
-          if (target.tagName === 'BUTTON' || target.tagName === 'SELECT' || target.tagName === 'INPUT' || target.closest('button') || target.closest('select')) return
-          try { (window as any).go?.main?.App?.WindowStartDrag() } catch {}
+          if (target.tagName === 'BUTTON' || target.tagName === 'SELECT' || target.tagName === 'INPUT'
+            || target.closest('button') || target.closest('select') || target.closest('input')
+            || target.closest('[data-testid^="tab-"]') /* tab 标签本身有切换/关闭语义，不拖 */) return
+          try {
+            // 双击标题栏 = 最大化/还原（系统语义），不进入拖动
+            if (e.detail !== 1) return
+            const w = window as any
+            if (w.WailsInvoke) { w.WailsInvoke('drag'); e.preventDefault() }
+          } catch {}
+        }}
+        onDoubleClick={(e) => {
+          // 双击标题栏空白处最大化/还原（对齐系统标题栏行为）
+          const target = e.target as HTMLElement
+          if (target.closest('button') || target.closest('select') || target.closest('input') || target.closest('[data-testid^="tab-"]')) return
+          try { (window as any).go.main.App.WindowMaximize() } catch {}
         }}
       >
         {/* LOGO + 名称 */}
@@ -1731,6 +1751,7 @@ ${t('sample.md.more')}
                 )}
                 <span
                   className="opacity-50 hover:opacity-100 hover:text-red-300 transition-colors flex-shrink-0"
+                  style={{ cursor: 'default' }}
                   title={t('app.closeTab') || '关闭'}
                   onClick={(e) => {
                     e.stopPropagation()

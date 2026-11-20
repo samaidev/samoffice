@@ -1,5 +1,5 @@
 // 查找替换插件：Ctrl+F 弹出查找栏，高亮所有匹配，支持替换
-import { Plugin, PluginKey } from 'prosemirror-state'
+import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 
 const searchKey = new PluginKey('search')
@@ -85,7 +85,8 @@ export function doSearch(view: any, query: string, caseSensitive: boolean = fals
   })
   view.dispatch(tr)
   if (matches.length > 0) {
-    view.dispatch(view.state.tr.scrollIntoView())
+    // round50：初始搜索也定位到第一个匹配（同 ↑/↓ 导航语义）
+    gotoMatch(view, 0)
   }
 }
 
@@ -123,23 +124,55 @@ export function doReplaceAll(view: any, query: string, replace: string, caseSens
   return matches.length
 }
 
+// round50（问题1）：↑/↓ 导航后正文滚动到匹配处。
+// 之前 scrollIntoView() 挂在空 tr 上 —— 没有 selection 变化，
+// ProseMirror 只会滚到当前光标/视口，选中的匹配高亮可能还在屏幕外。
+// 正确做法：把 selection 设到匹配区间（同一 tr 带 scrollIntoView），视图
+// 随之滚动到匹配位置；同时 Replace 直接作用于选中的匹配（语义对齐 Word
+// 查找栏导航）。
+function gotoMatch(view: any, index: number) {
+  const ss: SearchState = searchKey.getState(view.state)
+  if (!ss || !ss.matches.length) return
+  const m = ss.matches[index]
+  if (!m) return
+  view.dispatch(view.state.tr
+    .setMeta(searchKey, { ...ss, activeIndex: index })
+    .setSelection(TextSelection.create(view.state.doc, m.from, m.to))
+    .scrollIntoView())
+  // round50 根因修复：PM 的 scrollToSelection 在编辑器失焦时（焦点在查找
+  // 输入框 —— domSelectionRange().focusNode 不在 PM dom 内）是空操作
+  // （prosemirror-view updateStateInner → scrollToSelection 开头的
+  // if (!startDOM || !contains) ; 空语句直接返回）。因此查找导航的
+  // scrollIntoView 从未生效 —— ↑/↓ 只改高亮不滚动，用户看不到定位。
+  // 这里 dispatch 后手动滚动：coordsAtPos 拿匹配坐标，找最近滚动祖先滚入
+  // 视口（60px 边距，与 scrollMargin 语义一致）。不 view.focus() ——
+  // 那会抢走查找框焦点（Word 的查找框保持焦点，Enter 继续下一处）。
+  try {
+    const coords = view.coordsAtPos(m.from, 1)
+    let el: HTMLElement | null = view.dom as HTMLElement
+    while (el && el.scrollHeight <= el.clientHeight + 2) el = el.parentElement
+    if (el && coords) {
+      const scTop = el.getBoundingClientRect().top
+      const target = coords.top - scTop - Math.max(60, el.clientHeight / 4)
+      if (coords.top < scTop + 60 || coords.top > el.getBoundingClientRect().bottom - 60) {
+        el.scrollTop = Math.max(0, el.scrollTop + target)
+      }
+    }
+  } catch { /* coordsAtPos 对空文档/异常位置可能抛错，导航不因此中断 */ }
+}
+
 export function nextMatch(view: any) {
   if (!validView(view)) return
   const ss: SearchState = searchKey.getState(view.state)
   if (!ss || ss.matches.length === 0) return
-  const next = (ss.activeIndex + 1) % ss.matches.length
-  const m = ss.matches[next]
-  view.dispatch(view.state.tr.setMeta(searchKey, { ...ss, activeIndex: next }))
-  view.dispatch(view.state.tr.scrollIntoView())
+  gotoMatch(view, (ss.activeIndex + 1) % ss.matches.length)
 }
 
 export function prevMatch(view: any) {
   if (!validView(view)) return
   const ss: SearchState = searchKey.getState(view.state)
   if (!ss || ss.matches.length === 0) return
-  const prev = (ss.activeIndex - 1 + ss.matches.length) % ss.matches.length
-  view.dispatch(view.state.tr.setMeta(searchKey, { ...ss, activeIndex: prev }))
-  view.dispatch(view.state.tr.scrollIntoView())
+  gotoMatch(view, (ss.activeIndex - 1 + ss.matches.length) % ss.matches.length)
 }
 
 export function getSearchState(view: any): SearchState {

@@ -1826,6 +1826,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     })
     const view = new EditorView(editorRef.current, {
       state,
+      // round50（问题1）：查找栏 ↑/↓ 导航的 scrollIntoView 默认把匹配滚到
+      // 滚动容器"刚好可见"的位置（贴底/贴顶边缘）。scrollMargin 60px 让
+      // 匹配落在离边缘至少 60px 处，定位观感对齐 Word。
+      scrollMargin: 60,
+      scrollThreshold: 60,
       nodeViews: {
         image: (node: any, view: any, getPos: any) => {
           const dom = window.document.createElement('div')
