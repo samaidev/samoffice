@@ -304,7 +304,11 @@ function pmToBlock(node: Node): Block | null {
         })
         items.push(itemBlocks)
       })
-      return { items, ordered: node.type.name === 'ordered_list', style: node.attrs.style || '' }
+      // round48：start（起始编号）随样式一起入 UDM，保存到 numbering.xml
+      // 的 w:start / lvlOverride，重新打开时还原（自定义"起始编号"往返保真）
+      const ordered = node.type.name === 'ordered_list'
+      const start = ordered ? (Number(node.attrs.start) || 1) : 1
+      return { items, ordered, style: node.attrs.style || '', ...(ordered && start !== 1 ? { start } : {}) }
     }
     case 'code_block':
       return { code: node.textContent, language: '' }

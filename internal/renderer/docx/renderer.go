@@ -100,7 +100,7 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
         }
         // word/numbering.xml（bullet=1 / ordered=2 + 按样式动态分配的编号定义，round47）
         r.listStyleNumIDs = buildStyleNumIDs(doc)
-        curStyleNumIDs = r.listStyleNumIDs
+        curKeyNumIDs = buildKeyNumIDs(doc)
         if err := writeZip(w, "word/numbering.xml", buildNumberingXML(doc)); err != nil {
                 return nil, err
         }
@@ -2166,11 +2166,12 @@ const rootRelsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 //      numId 1：项目符号（•，Symbol 字体，缩进 720/360）
 //      numId 2：缺省有序编号（%1. 十进制）
 //
-// 动态编号 numId 10..：文档中出现的每种有序列表样式（BulletList.Style）各分配一个
-// abstractNum，按样式的 numFmt/lvlText 生成（[1]/(3)/①/ⓐ 等形式），保证
-// 保存往返后 Word/WPS 中的序号外观一致。
+// 动态编号 numId 10..：文档中出现的每种 (样式, 起始号) 组合各分配一个
+// abstractNum + num，按样式的 numFmt/lvlText 生成（[1]/(3)/①/ⓐ 等形式），
+// 起始号经 w:lvlOverride/w:startOverride 指定（round48 自定义起始编号），
+// 保证保存往返后 Word/WPS 中的序号外观与起始值一致。
 func buildNumberingXML(doc *core.Document) string {
-        styles := collectListStyles(doc)
+        keys := collectListKeys(doc)
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -2196,10 +2197,10 @@ func buildNumberingXML(doc *core.Document) string {
     </w:lvl>
   </w:abstractNum>
 `)
-        // 动态样式：abstractNumId 2.. 与 numId 10.. 一一对应
-        idx := 2
-        for _, st := range styles {
-                fmtName, lvlText := numFmtOfStyle(st)
+        // 动态样式：abstractNumId 2.. 与 numId 10.. 按 (样式, 起始号) 一一对应
+        for i, k := range keys {
+                fmtName, lvlText := numFmtOfStyle(k.style)
+                idx := 2 + i
                 sb.WriteString(fmt.Sprintf("  <w:abstractNum w:abstractNumId=\"%d\">\n", idx))
                 sb.WriteString("    <w:multiLevelType w:val=\"hybridMultilevel\"/>\n")
                 sb.WriteString("    <w:lvl w:ilvl=\"0\">\n")
@@ -2214,14 +2215,18 @@ func buildNumberingXML(doc *core.Document) string {
                 }
                 sb.WriteString("    </w:lvl>\n")
                 sb.WriteString("  </w:abstractNum>\n")
-                idx++
         }
         sb.WriteString("  <w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>\n")
         sb.WriteString("  <w:num w:numId=\"2\"><w:abstractNumId w:val=\"1\"/></w:num>\n")
-        idx = 2
-        for range styles {
-                sb.WriteString(fmt.Sprintf("  <w:num w:numId=\"%d\"><w:abstractNumId w:val=\"%d\"/></w:num>\n", numIdBase+idx-2, idx))
-                idx++
+        for i, k := range keys {
+                numID := numIdBase + i
+                absID := 2 + i
+                if k.start > 1 {
+                        // 起始号非 1：Word 标准做法 num/lvlOverride/startOverride
+                        sb.WriteString(fmt.Sprintf("  <w:num w:numId=\"%d\"><w:abstractNumId w:val=\"%d\"/><w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"%d\"/></w:lvlOverride></w:num>\n", numID, absID, k.start))
+                } else {
+                        sb.WriteString(fmt.Sprintf("  <w:num w:numId=\"%d\"><w:abstractNumId w:val=\"%d\"/></w:num>\n", numID, absID))
+                }
         }
         sb.WriteString("</w:numbering>")
         return sb.String()
@@ -2230,20 +2235,48 @@ func buildNumberingXML(doc *core.Document) string {
 // numIdBase 动态样式 numId 起始值（1/2 为固定 bullet/decimal 保留）
 const numIdBase = 10
 
-// curStyleNumIDs 渲染期间的有序列表样式→numId 映射（Render 单线程使用）。
-var curStyleNumIDs map[string]int
-
 // collectListStyles 收集文档中有序列表的去重样式（保持出现顺序）。
 func collectListStyles(doc *core.Document) []string {
         seen := map[string]bool{}
         out := []string{}
+        for _, k := range collectListKeys(doc) {
+                if !seen[k.style] {
+                        seen[k.style] = true
+                        out = append(out, k.style)
+                }
+        }
+        return out
+}
+
+// listKey 是编号分配的最小单位：样式 + 起始号（round48）。
+// 同一样式但起始号不同的列表需要各自独立的 numId —— Word 的编号计数
+// 按 numId 全局累计，只有拆开 numId 才能实现"列表 A 从 1、列表 B 从 5"。
+type listKey struct {
+        style string
+        start int
+}
+
+// collectListKeys 收集文档中有序列表的 (style, start) 去重键（保持出现顺序）。
+func collectListKeys(doc *core.Document) []listKey {
+        seen := map[listKey]bool{}
+        out := []listKey{}
         var walk func(blocks []core.Block)
         walk = func(blocks []core.Block) {
                 for _, b := range blocks {
                         if l, ok := b.(*core.BulletList); ok && l.Ordered && l.Style != "" {
-                                if !seen[l.Style] {
-                                        seen[l.Style] = true
-                                        out = append(out, l.Style)
+                                k := listKey{l.Style, l.Start}
+                                if !seen[k] {
+                                        seen[k] = true
+                                        out = append(out, k)
+                                }
+                                continue
+                        }
+                        if l, ok := b.(*core.BulletList); ok && l.Ordered && l.Style == "" && l.Start > 1 {
+                                // 无样式但起始号非 1 的列表：同样需要独立 numId（startOverride）
+                                k := listKey{"", l.Start}
+                                if !seen[k] {
+                                        seen[k] = true
+                                        out = append(out, k)
                                 }
                                 continue
                         }
@@ -2261,26 +2294,44 @@ func collectListStyles(doc *core.Document) []string {
 }
 
 // buildStyleNumIDs 建立样式 → numId 映射（与 buildNumberingXML 的分配一致）。
+// round48：键从"样式"细化为 (样式, 起始号)，同样式不同起始号的列表各自独立。
 func buildStyleNumIDs(doc *core.Document) map[string]int {
         m := map[string]int{}
-        for i, st := range collectListStyles(doc) {
-                m[st] = numIdBase + i
+        for i, k := range collectListKeys(doc) {
+                m[k.style] = numIdBase + i
         }
         return m
 }
 
-// numIdForStyle 计算列表的 numId：bullet=1、缺省有序=2、样式有序=curStyleNumIDs。
-func numIdForStyle(l *core.BulletList) int {
+// curKeyNumIDs (样式,起始号) → numId（Render 单线程使用）。
+var curKeyNumIDs map[listKey]int
+
+// buildKeyNumIDs 建立 (样式, 起始号) → numId 映射（与 buildNumberingXML 一致）。
+func buildKeyNumIDs(doc *core.Document) map[listKey]int {
+        m := map[listKey]int{}
+        for i, k := range collectListKeys(doc) {
+                m[k] = numIdBase + i
+        }
+        return m
+}
+
+// numIdForList 计算列表的 numId：bullet=1、缺省有序(起始1)=2、其余查 (样式,起始号)。
+func numIdForList(l *core.BulletList) int {
         if !l.Ordered {
                 return 1
         }
-        if l.Style == "" {
+        if l.Style == "" && l.Start <= 1 {
                 return 2
         }
-        if id, ok := curStyleNumIDs[l.Style]; ok {
+        if id, ok := curKeyNumIDs[listKey{l.Style, l.Start}]; ok {
                 return id
         }
         return 2
+}
+
+// numIdForStyle 计算列表的 numId（round48 起委托给 numIdForList）。
+func numIdForStyle(l *core.BulletList) int {
+        return numIdForList(l)
 }
 
 // numFmtOfStyle 把 UDM 样式串还原为 Word 的 (numFmt, lvlText)。

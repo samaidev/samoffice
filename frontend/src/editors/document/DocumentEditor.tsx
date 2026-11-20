@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { EditorState, NodeSelection, TextSelection, Plugin, PluginKey } from 'prosemirror-state'
 import { DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view'
-import { schema } from './schema'
+import { schema, parseNumStyle, buildNumStyle } from './schema'
 import { createPaginationPlugin } from './pagination'
 import { keymap } from 'prosemirror-keymap'
 import { baseKeymap, toggleMark, setBlockType, wrapIn, splitBlockAs } from 'prosemirror-commands'
@@ -66,6 +66,8 @@ function readBool(key: string): boolean {
 // === round47：Word 序号样式（编号格式库，对齐 MS Word"定义新编号格式"） ===
 // value 直接写入 ordered_list.attrs.style / UDM BulletList.Style，
 // Go 端 numFmtOfStyle 据此生成 numbering.xml 的 numFmt/lvlText。
+// round48：末尾 "custom" 项打开自定义对话框；常用中文样式（一、二、/壹、贰、）
+// 直接内置，免去打开对话框的往返。
 export const NUMBERING_STYLES: Array<{ value: string; label: string; sample: string }> = [
   { value: '', label: '1. 2. 3.', sample: '1.' },
   { value: '[n]', label: '[1] [2] [3]', sample: '[1]' },
@@ -75,12 +77,62 @@ export const NUMBERING_STYLES: Array<{ value: string; label: string; sample: str
   { value: 'circle-num', label: '① ② ③', sample: '①' },
   { value: 'circle-alpha', label: 'ⓐ ⓑ ⓒ', sample: 'ⓐ' },
   { value: 'cjk-ideographic', label: '一、二、三、', sample: '一、' },
+  { value: 'chineseCountingThousand|第%1部分', label: '第一部分…', sample: '第一部分' },
+  { value: 'chineseLegalSimplified|%1、', label: '壹、贰、叁、', sample: '壹、' },
   { value: 'references', label: '[1] 参考文献', sample: '[文]' },
   { value: 'lower-roman', label: 'i. ii. iii.', sample: 'i.' },
   { value: 'upper-roman', label: 'I. II. III.', sample: 'I.' },
   { value: 'lower-alpha', label: 'a. b. c.', sample: 'a.' },
   { value: 'upper-alpha', label: 'A. B. C.', sample: 'A.' },
 ]
+
+// round48：自定义编号格式的数字样式表（numFmt → 显示名 + 预览字符）。
+// numFmt 直接采用 Word ST_NumberFormat 值，保存往返零转换。
+export const NUM_FMT_CHOICES: Array<{ value: string; label: string; render: (n: number) => string }> = [
+  { value: 'decimal', label: '1, 2, 3, …', render: n => String(n) },
+  { value: 'chineseCounting', label: '一, 二, 三, …', render: n => cjkNum(n) },
+  { value: 'chineseLegalSimplified', label: '壹, 贰, 叁, …', render: n => cjkUpperNum(n) },
+  { value: 'lowerLetter', label: 'a, b, c, …', render: n => String.fromCharCode(96 + ((n - 1) % 26 + 1)) },
+  { value: 'upperLetter', label: 'A, B, C, …', render: n => String.fromCharCode(64 + ((n - 1) % 26 + 1)) },
+  { value: 'lowerRoman', label: 'i, ii, iii, …', render: n => romanNum(n).toLowerCase() },
+  { value: 'upperRoman', label: 'I, II, III, …', render: n => romanNum(n) },
+  { value: 'decimalEnclosedCircle', label: '①, ②, ③, …', render: n => (n >= 1 && n <= 20 ? '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'[n - 1] : String(n)) },
+  { value: 'lowerGreek', label: 'α, β, γ, …', render: n => 'αβγδεζηθικλμνξοπρστυφχψω'[(n - 1) % 24] },
+]
+
+// 中文小写数字（chineseCounting）：支持到 9999，够列表序号用
+function cjkNum(n: number): string {
+  const D = '〇一二三四五六七八九'
+  if (n < 0) return String(n)
+  if (n < 10) return D[n]
+  if (n < 20) return '十' + (n % 10 ? D[n % 10] : '')
+  if (n < 100) return D[Math.floor(n / 10)] + '十' + (n % 10 ? D[n % 10] : '')
+  const parts: string[] = []
+  const q = Math.floor(n / 1000), h = Math.floor((n % 1000) / 100), t = Math.floor((n % 100) / 10), o = n % 10
+  if (q) parts.push(D[q] + '千')
+  if (h) parts.push(D[h] + '百'); else if (q && (t || o)) parts.push('零')
+  if (t) parts.push(D[t] + '十'); else if ((q || h) && o) parts.push('零')
+  if (o) parts.push(D[o])
+  return parts.join('')
+}
+
+// 中文大写数字（chineseLegalSimplified）：壹贰叁…
+function cjkUpperNum(n: number): string {
+  if (n < 1 || n > 99) return cjkNum(n)
+  const D = '零壹贰叁肆伍陆柒捌玖'
+  if (n < 10) return D[n]
+  if (n < 20) return '拾' + (n % 10 ? D[n % 10] : '')
+  return D[Math.floor(n / 10)] + '拾' + (n % 10 ? D[n % 10] : '')
+}
+
+// 罗马数字（1..3999）
+function romanNum(n: number): string {
+  if (n < 1 || n > 3999) return String(n)
+  const T: Array<[number, string]> = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']]
+  let out = ''
+  for (const [v, s] of T) while (n >= v) { out += s; n -= v }
+  return out
+}
 
 const listGlyphKey = new PluginKey('listCircleGlyph')
 
@@ -116,14 +168,15 @@ function circleGlyphDecos(doc: any): Array<{ from: number; to: number; glyph: st
 /** 把选区所在有序列表（可多选）的序号样式改为 style。
  * 逻辑：选区覆盖的 ordered_list 节点 setNodeMarkup 改 attrs.style；
  * 光标在列表内时改光标所在列表（对齐 Word：光标在列表中即作用于整个列表）。 */
-function setListNumberingStyle(v: any, style: string) {
+function setListNumberingStyle(v: any, style: string, start?: number) {
   const { state } = v
   const tr = state.tr
   let touched = 0
   const { from, to } = state.selection
+  const attrsOf = (n: any) => start !== undefined ? { ...n.attrs, style, start } : { ...n.attrs, style }
   state.doc.nodesBetween(from, to, (node: any, pos: number) => {
     if (node.type.name === 'ordered_list') {
-      tr.setNodeMarkup(pos, undefined, { ...node.attrs, style })
+      tr.setNodeMarkup(pos, undefined, attrsOf(node))
       touched++
     }
     return true
@@ -134,7 +187,7 @@ function setListNumberingStyle(v: any, style: string) {
     for (let d = $pos.depth; d > 0; d--) {
       const n = $pos.node(d)
       if (n.type.name === 'ordered_list') {
-        tr.setNodeMarkup($pos.before(d), undefined, { ...n.attrs, style })
+        tr.setNodeMarkup($pos.before(d), undefined, attrsOf(n))
         touched++
         break
       }
@@ -142,6 +195,133 @@ function setListNumberingStyle(v: any, style: string) {
   }
   if (touched) v.dispatch(tr)
   return touched
+}
+
+// === round48：列表 toggle（对齐 MS Word / prosemirror-schema-list 的 liftListItem）===
+// 二次点击"有序列表/无序列表"按钮应取消列表：把选区覆盖的 list_item 的内容
+// 提升为父级同级块。不引 prosemirror-schema-list（其 liftListItem 依赖
+// isValidParent 判断，列表项内是 paragraph+ 的本 schema 同样适用，但为了
+// 零新依赖，这里手写等价逻辑：
+//   list_item(pos) 的内容 = [pos+1, pos+1+content.size)，切片后 replaceWith
+//   到 $pos.before(depth) —— 单 item 时整列表消失，多 item 时只抽出该项。
+/** 选区内是否有指定类型的列表（listType: 'ordered_list' | 'bullet_list'） */
+function selectionInList(state: any, listType: string): boolean {
+  const { from, to } = state.selection
+  const $pos = state.doc.resolve(from)
+  // 空选区：光标向上找
+  if (from === to) {
+    for (let d = $pos.depth; d > 0; d--) {
+      if ($pos.node(d).type.name === listType) return true
+    }
+    return false
+  }
+  let found = false
+  state.doc.nodesBetween(from, to, (node: any) => {
+    if (node.type.name === listType) { found = true; return false }
+    return true
+  })
+  if (!found) {
+    // 选区可能整体在某个列表项内部（未覆盖 ol 边界）
+    for (let d = $pos.depth; d > 0; d--) {
+      if ($pos.node(d).type.name === listType) return true
+    }
+  }
+  return found
+}
+
+/** 取消列表：把列表项内容提升为普通块（返回是否发生变更）。
+ * - 选区覆盖多项：只提升覆盖的 list_item（Word 同款局部取消）
+ * - 空选区：光标所在列表整体取消（Word 的编号按钮作用于整个连续列表，
+ *   只取消一项会让序号断开续号，用户预期是"整个列表去掉"）
+ * 从文档后往前处理，避免前面的替换使后面的位置失效。 */
+function liftListItems(v: any, listTypes: string[]): boolean {
+  const { state } = v
+  const { from, to } = state.selection
+  const items: Array<{ pos: number; node: any }> = []
+  if (from === to) {
+    // 空选区：找光标所在的整个列表（限定 listTypes），提升其全部 item
+    const $pos = state.doc.resolve(from)
+    for (let d = $pos.depth; d > 0; d--) {
+      const n = $pos.node(d)
+      if (listTypes.includes(n.type.name)) {
+        n.forEach((child: any, off: number) => {
+          if (child.type.name === 'list_item') items.push({ pos: $pos.before(d) + 1 + off, node: child })
+        })
+        break
+      }
+    }
+  } else {
+    state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+      if (node.type.name === 'list_item') items.push({ pos, node })
+      return true
+    })
+    if (!items.length) {
+      // 选区可能整体在某个列表项内部（未覆盖 ol 边界）：提升光标所在项
+      const $pos = state.doc.resolve(from)
+      for (let d = $pos.depth; d > 0; d--) {
+        if ($pos.node(d).type.name === 'list_item') {
+          items.push({ pos: $pos.before(d), node: $pos.node(d) })
+          break
+        }
+      }
+    }
+  }
+  // 只处理目标列表类型下的 item（父节点是 ordered_list/bullet_list 之一）
+  const targets = items.filter(({ pos, node }) => {
+    const $p = state.doc.resolve(pos + 1)
+    const parent = $p.node($p.depth - 1)
+    return parent && listTypes.includes(parent.type.name)
+  })
+  if (!targets.length) return false
+  const tr = state.tr
+  // 位置从小到大处理会互相干扰；倒序处理（后面的先提升），每次提升用
+  // 当前三态重新 resolve，避免硬编码偏移。
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const item = targets[i]
+    const $item = tr.doc.resolve(item.pos)
+    const li = $item.nodeAfter
+    if (!li || li.type.name !== 'list_item') continue
+    const itemStart = item.pos
+    const contentStart = itemStart + 1
+    const contentEnd = itemStart + li.nodeSize - 1
+    const slice = tr.doc.slice(contentStart, contentEnd)
+    tr.replaceRangeWith(itemStart, itemStart + li.nodeSize, slice.content)
+  }
+  if (tr.docChanged) { v.dispatch(tr.scrollIntoView()); return true }
+  return false
+}
+
+// round48：Word 式列表包装 —— 选区覆盖的每个顶层块各占一个 list_item。
+// PM 自带 wrapIn 把整个选区包成单个 list_item（ol>li>[p1,p2,p3]），三项内容
+// 只出一个序号；Word 语义是逐段各自编号（1. 2. 3.）。空选区/选区在容器
+// （列表/引用）内部时回退 wrapIn 保持旧行为。返回是否成功。
+function wrapInListWord(v: any, listType: string): boolean {
+  const { state } = v
+  const { from, to, empty } = state.selection
+  const nodeType = schema.nodes[listType]
+  if (!nodeType) return false
+  const liType = schema.nodes.list_item
+  // 空选区：光标所在块包成一个 item（与 wrapIn 等价，直接走 wrapIn）
+  if (empty) return !!wrapIn(nodeType)(v.state, v.dispatch)
+  // 收集选区覆盖的 doc 顶层块（列表容器本身不算——其内部段落随容器走）
+  const blocks: Array<{ pos: number; node: any }> = []
+  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+    const $p = state.doc.resolve(pos)
+    if ($p.depth === 0 && node.isBlock && node.type.name !== 'ordered_list' && node.type.name !== 'bullet_list') {
+      blocks.push({ pos, node })
+      return false // 顶层块内部不再下钻
+    }
+    return $p.depth === 0
+  })
+  if (!blocks.length) return !!wrapIn(nodeType)(v.state, v.dispatch)
+  // list_item 的 content 是 'paragraph block*'：非块级可容纳内容回退 wrapIn
+  const okBlocks = blocks.every(({ node }) => liType.contentMatch.matchType(node.type))
+  if (!okBlocks) return !!wrapIn(nodeType)(v.state, v.dispatch)
+  const first = blocks[0], last = blocks[blocks.length - 1]
+  const olNode = nodeType.create(null, blocks.map(({ node }) => liType.create(null, node)))
+  const tr = state.tr.replaceRangeWith(first.pos, last.pos + last.node.nodeSize, olNode)
+  v.dispatch(tr.scrollIntoView())
+  return true
 }
 
 // === round46：表格多选下的字符样式范围 ===
@@ -590,6 +770,66 @@ function ParagraphDialog({ value, onClose, onSave }: {
         <div className="modal-actions">
           <button className="btn btn-ghost btn-sm" onClick={onClose}>{t('doc.paraCancel')}</button>
           <button className="btn btn-primary btn-sm" onClick={() => onSave(d)}>{t('doc.paraOk')}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// round48：自定义编号格式对话框 —— 对齐 MS Word"开始→编号→定义新编号格式"。
+// 数字样式（含中文 一/壹/罗马/圈号）+ 前缀 + 后缀 + 起始编号，实时预览；
+// 确定后组装 "numFmt|前缀%1后缀" 样式串（Go 端 numFmtOfStyle 透传到
+// numbering.xml 的 w:numFmt/w:lvlText，保存往返保真）。
+function NumberFormatDialog({ initial, onClose, onSave }: {
+  initial: { fmt: string; pre: string; post: string; start: number }
+  onClose: () => void
+  onSave: (v: { style: string; start: number }) => void
+}) {
+  const { t } = useI18n()
+  const [fmt, setFmt] = useState(initial.fmt || 'decimal')
+  const [pre, setPre] = useState(initial.pre || '')
+  const [post, setPost] = useState(initial.post || '.')
+  const [start, setStart] = useState(initial.start || 1)
+  const fmtDef = NUM_FMT_CHOICES.find(f => f.value === fmt) || NUM_FMT_CHOICES[0]
+  const startN = Math.max(1, Math.floor(Number(start) || 1))
+  const preview = (n: number) => pre + fmtDef.render(n) + post
+  const inputStyle = { background: 'var(--color-bg)', color: 'var(--color-text)', border: '1px solid var(--color-border)' } as const
+  return (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 430 }}>
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>{t('doc.numDefine')}</div>
+        <label className="pn-field"><span>{t('doc.numFmtLabel')}</span>
+          <Dropdown
+            className="ribbon-input"
+            style={{ width: 190, height: 26 }}
+            value={fmt}
+            onChange={v => setFmt(v)}
+            options={NUM_FMT_CHOICES.map(f => ({ label: f.label, value: f.value }))}
+          />
+        </label>
+        <label className="pn-field"><span>{t('doc.numPrefix')}</span>
+          <input type="text" value={pre} placeholder={t('doc.numPrefixPh') || ''} onChange={e => setPre(e.target.value)} style={{ ...inputStyle, flex: 1, maxWidth: 190, padding: '4px 8px', borderRadius: 6 }} />
+        </label>
+        <label className="pn-field"><span>{t('doc.numSuffix')}</span>
+          <input type="text" value={post} placeholder="." onChange={e => setPost(e.target.value)} style={{ ...inputStyle, flex: 1, maxWidth: 190, padding: '4px 8px', borderRadius: 6 }} />
+        </label>
+        <label className="pn-field"><span>{t('doc.numStart')}</span>
+          <input type="number" min={1} value={start} onChange={e => setStart(Number(e.target.value))} style={{ ...inputStyle, width: 90, padding: '4px 8px', borderRadius: 6 }} />
+        </label>
+        <div style={{ margin: '12px 0', padding: '10px 12px', border: '1px solid var(--color-border)', borderRadius: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 6 }}>{t('doc.numPreview')}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {[0, 1, 2].map(i => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <span style={{ display: 'inline-block', minWidth: 64, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'pre' }}>{preview(startN + i)}</span>
+                <span style={{ color: 'var(--color-text-muted)' }}>{t('doc.numPreviewItem')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+          <button className="btn btn-outline btn-sm" onClick={onClose}>{t('doc.cancel')}</button>
+          <button className="btn btn-primary btn-sm" onClick={() => onSave({ style: buildNumStyle(fmt, pre, post), start: startN })}>{t('doc.ok')}</button>
         </div>
       </div>
     </div>
@@ -1083,6 +1323,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [cellVAlign, setCellVAlignState] = useState('')  // 当前单元格垂直对齐（表格工具栏高亮用）
   // round47：光标所在有序列表的序号样式（编号格式下拉高亮用）
   const [activeNumStyle, setActiveNumStyle] = useState('')
+  // round48：列表 toggle 按钮激活态 + 当前列表起始号（自定义编号对话框初值）
+  const [inOrderedList, setInOrderedList] = useState(false)
+  const [inBulletList, setInBulletList] = useState(false)
+  const [activeNumStart, setActiveNumStart] = useState(1)
+  const [showNumDialog, setShowNumDialog] = useState(false)
   const [activeFont, setActiveFont] = useState('')
   const [activeFontSize, setActiveFontSize] = useState('')
   const [activeColor, setActiveColor] = useState('')
@@ -2037,15 +2282,30 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     let isInTable = false
     let cellVa = ''
     let numStyle = ''
+    let numStart = 1
+    let inOl = false, inUl = false
+    // round48：选区覆盖（Ctrl+A 等 from 在 doc 边界、深度为 0）时 $from 祖先
+    // 找不到列表 —— 补 nodesBetween 扫描，保证按钮激活态正确
+    const markLists = (node: any) => {
+      if (node.type.name === 'ordered_list') inOl = true
+      if (node.type.name === 'bullet_list') inUl = true
+      if (node.type.name === 'table') isInTable = true
+      return true
+    }
+    if (!empty) state.doc.nodesBetween(from, to, markLists)
     for (let d = $from.depth; d > 0; d--) {
       const n = $from.node(d)
       if (n.type.name === 'table_cell' && !cellVa) cellVa = n.attrs.vAlign || ''
-      if (n.type.name === 'ordered_list' && !numStyle) numStyle = n.attrs.style || ''
+      if (n.type.name === 'ordered_list' && !numStyle) { numStyle = n.attrs.style || ''; numStart = Number(n.attrs.start) || 1 }
+      if (n.type.name === 'ordered_list') inOl = true
+      if (n.type.name === 'bullet_list') inUl = true
       if (n.type.name === 'table') { isInTable = true; break }
     }
     setInTable(isInTable); setActiveMarks(marks); setActiveAttrs(attrs); setActiveFont(f); setActiveFontSize(sz); setActiveColor(c); setActiveCharSpacing(cs)
     setCellVAlignState(cellVa)
     setActiveNumStyle(numStyle)
+    setInOrderedList(inOl); setInBulletList(inUl)
+    setActiveNumStart(numStart)
     // Track if cursor is on an image or shape node (for float/wrap buttons)
     const sel = state.selection
     const selNode = sel instanceof NodeSelection ? sel.node : null
@@ -2545,8 +2805,19 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       case 'h2': setBlockType(schema.nodes.heading, { level: 2 })(v.state, v.dispatch); break
       case 'h3': setBlockType(schema.nodes.heading, { level: 3 })(v.state, v.dispatch); break
       case 'paragraph': setBlockType(schema.nodes.paragraph)(v.state, v.dispatch); break
-      case 'bulletList': wrapIn(schema.nodes.bullet_list)(v.state, v.dispatch); break
-      case 'orderedList': wrapIn(schema.nodes.ordered_list)(v.state, v.dispatch); break
+      // round48：列表按钮 toggle 语义（对齐 MS Word / 主流编辑器）——
+      // 光标/选区已在对应列表中时，再次点击取消列表（提升为普通段落）；
+      // 多块选区逐块各自成 list_item（Word 式逐段编号），见 wrapInListWord。
+      case 'bulletList': {
+        const v = viewRef.current; if (!v) break
+        if (selectionInList(v.state, 'bullet_list')) { liftListItems(v, ['bullet_list']); break }
+        wrapInListWord(v, 'bullet_list'); break
+      }
+      case 'orderedList': {
+        const v = viewRef.current; if (!v) break
+        if (selectionInList(v.state, 'ordered_list')) { liftListItems(v, ['ordered_list']); break }
+        wrapInListWord(v, 'ordered_list'); break
+      }
       case 'quote': wrapIn(schema.nodes.blockquote)(v.state, v.dispatch); break
       // 段落对齐（供悬浮工具栏/右键菜单复用；主 ribbon 直接调 setParaAttr）
       case 'alignLeft': setParaAttr('align', 'left'); break
@@ -3589,16 +3860,25 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 <button onClick={() => setParaAttr('align', 'right')} className={`toolbar-btn ${activeAttrs.align === 'right' ? 'active' : ''}`} title={t('doc.alignRight')} type="button" style={{ width: 28, height: 26 }}><IconAlignRight /></button>
                 <button onClick={() => setParaAttr('align', 'justify')} className={`toolbar-btn ${activeAttrs.align === 'justify' ? 'active' : ''}`} title={t('doc.alignJustify')} type="button" style={{ width: 28, height: 26 }}><IconAlignJustify /></button>
                 <div className="toolbar-divider" />
-                <button onClick={() => exec('bulletList')} className="toolbar-btn" title={t('doc.bulletList')} type="button" style={{ width: 28, height: 26 }}><IconBulletList /></button>
-                <button onClick={() => exec('orderedList')} className="toolbar-btn" title={t('doc.orderedList')} type="button" style={{ width: 28, height: 26 }}><IconNumberList /></button>
+                <button onClick={() => exec('bulletList')} className={`toolbar-btn ${inBulletList ? 'active' : ''}`} title={t('doc.bulletList')} type="button" style={{ width: 28, height: 26 }}><IconBulletList /></button>
+                <button onClick={() => exec('orderedList')} className={`toolbar-btn ${inOrderedList ? 'active' : ''}`} title={t('doc.orderedList')} type="button" style={{ width: 28, height: 26 }}><IconNumberList /></button>
                 {/* round47：序号样式（编号格式）—— 对齐 MS Word"开始→编号库"。
-                    作用于光标所在/选区覆盖的有序列表：[1]、(1)、①、一、罗马数字等 */}
+                    作用于光标所在/选区覆盖的有序列表：[1]、(1)、①、一、罗马数字等。
+                    round48：追加"自定义…"打开定义新编号格式对话框（数字样式/前缀/
+                    后缀/起始编号）；当前样式是自定义模板时下拉直接显示该模板。 */}
                 <Dropdown
                   className="text-xs rounded-md px-2 py-1 ribbon-input"
-                  style={{ width: 84, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
-                  value={activeNumStyle}
-                  onChange={(val) => { const v = viewRef.current; if (!v) return; if (setListNumberingStyle(v, val)) focusNoJump() }}
-                  options={NUMBERING_STYLES.map(s => ({ label: s.label, value: s.value }))}
+                  style={{ width: 96, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', height: 26 }}
+                  value={NUMBERING_STYLES.some(s => s.value === activeNumStyle) ? activeNumStyle : (activeNumStyle ? '__custom__' : '')}
+                  onChange={(val) => {
+                    if (val === '__custom__') { setShowNumDialog(true); return }
+                    const v = viewRef.current; if (!v) return
+                    if (setListNumberingStyle(v, val)) focusNoJump()
+                  }}
+                  options={[
+                    ...NUMBERING_STYLES.map(s => ({ label: s.label, value: s.value })),
+                    { label: '⚙ ' + (t('doc.numDefine') || ''), value: '__custom__' },
+                  ]}
                   title={t('doc.numberingStyle')}
                   testId="numbering-style"
                 />
@@ -4770,6 +5050,47 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           value={paraDraft}
           onClose={() => setShowParaDialog(false)}
           onSave={(d) => { applyParagraphFormat(d); setShowParaDialog(false) }}
+        />
+      )}
+
+      {/* round48：定义新编号格式 —— 初值取当前列表样式（模板串拆回 numFmt/前后缀），
+          光标不在列表中时用缺省 decimal + "."，确认后作用于光标所在列表 */}
+      {showNumDialog && (
+        <NumberFormatDialog
+          initial={((): { fmt: string; pre: string; post: string; start: number } => {
+            const st = activeNumStyle
+            if (st && st.includes('|')) {
+              const p = parseNumStyle(st)
+              return { fmt: p.fmt, pre: p.pre, post: p.post, start: activeNumStart }
+            }
+            if (st === 'cjk-ideographic') return { fmt: 'chineseCounting', pre: '', post: '、', start: activeNumStart }
+            if (st === 'circle-num') return { fmt: 'decimalEnclosedCircle', pre: '', post: '', start: activeNumStart }
+            if (st === '[n]') return { fmt: 'decimal', pre: '[', post: ']', start: activeNumStart }
+            if (st === '(n)') return { fmt: 'decimal', pre: '(', post: ')', start: activeNumStart }
+            if (st === 'n)') return { fmt: 'decimal', pre: '', post: ')', start: activeNumStart }
+            if (st === 'references') return { fmt: 'decimal', pre: '[', post: ']', start: activeNumStart }
+            return { fmt: 'decimal', pre: '', post: '.', start: activeNumStart }
+          })()}
+          onClose={() => setShowNumDialog(false)}
+          onSave={({ style, start }) => {
+            const v = viewRef.current
+            if (v) {
+              if (setListNumberingStyle(v, style, start)) {
+                setShowNumDialog(false)
+                focusNoJump()
+                return
+              }
+              // 光标不在列表中：先应用有序列表再设置样式（对齐 Word —— 从编号
+              // 库选样式直接创建列表）
+              wrapIn(schema.nodes.ordered_list)(v.state, (tr: any) => {
+                // wrapIn 的 dispatch 只包一层；包完后再找 ordered_list 设置样式
+                v.dispatch(tr)
+                setListNumberingStyle(v, style, start)
+              })
+            }
+            setShowNumDialog(false)
+            focusNoJump()
+          }}
         />
       )}
 

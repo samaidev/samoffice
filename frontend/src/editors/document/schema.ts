@@ -14,9 +14,37 @@ const NUM_FMT_CLASS: Record<string, string> = {
   lowerGreek: 'num-fmt-lower-greek',
   chineseCounting: 'num-fmt-cjk',
   chineseCountingThousand: 'num-fmt-cjk',
+  chineseLegalSimplified: 'num-fmt-cjk',
+  ideographDigital: 'num-fmt-cjk',
   chosung: 'num-fmt-cjk',
   decimalZero: 'num-fmt-decimal',
   japaneseCounting: 'num-fmt-cjk',
+}
+
+// 圈号类 numFmt：CSS 计数器无圈号形态，模板族改走 data-glyph 查表（同 circle-num）
+const ENCLOSING_FMTS = new Set(['decimalEnclosedCircle', 'decimalEnclosedCircleChinese', 'circle-num'])
+
+/** round48：解析 UDM 样式串 → { numFmt, 前缀, 后缀, 是否圈号 }。
+ * 支持 "numFmt|lvlText" 透传形式（如 chineseCounting|第%1章）；lvlText 中
+ * 无 %1 时整体视为前缀（对齐 Go 端 numFmtOfStyle 的拆分规则）。 */
+export function parseNumStyle(style: string): { fmt: string; pre: string; post: string; circle: boolean } {
+  const s = style || ''
+  if (s.includes('|')) {
+    const [fmt, tmpl = ''] = s.split('|', 2)
+    const i = tmpl.indexOf('%1')
+    const pre = i >= 0 ? tmpl.slice(0, i) : tmpl
+    const post = i >= 0 ? tmpl.slice(i + 2) : ''
+    return { fmt, pre, post, circle: ENCLOSING_FMTS.has(fmt) }
+  }
+  return { fmt: 'decimal', pre: '', post: '.', circle: false }
+}
+
+/** round48：{numFmt, 前缀, 后缀} → UDM 样式串（"numFmt|前缀%1后缀"）。
+ * 前后缀中的 "|" 用全角替代，避免破坏透传分隔符。 */
+export function buildNumStyle(fmt: string, pre: string, post: string): string {
+  const p = (pre || '').replace(/\|/g, '｜')
+  const q = (post || '').replace(/\|/g, '｜')
+  return `${fmt}|${p}%1${q}`
 }
 
 /** CSS 字符串字面量转义（内容进 style 属性的 --pre/--post 变量值） */
@@ -407,6 +435,13 @@ export const schema = new Schema({
           const i = tmpl.indexOf('%1')
           const pre = i >= 0 ? tmpl.slice(0, i) : tmpl
           const post = i >= 0 ? tmpl.slice(i + 2) : ''
+          // round48：圈号数字（decimalEnclosedCircle 等）CSS 计数器无圈号形态 ——
+          // 与 circle-num 一样走 data-num-style 圈号 + JS data-glyph 查表；
+          // 其余 numFmt 走 --pre/--post 模板 class。
+          if (ENCLOSING_FMTS.has(fmt)) {
+            const s = Number(node.attrs.start) || 1
+            return ['ol', { class: 'num-list', 'data-num-style': 'circle-num', style: 'counter-reset: numitem ' + (s - 1) }, 0]
+          }
           const fmtClass = NUM_FMT_CLASS[fmt] || 'num-fmt-decimal'
           return ['ol', { class: 'num-list num-tmpl ' + fmtClass, style: `counter-reset: numitem ${(Number(node.attrs.start) || 1) - 1}; --pre: ${cssStr(pre)}; --post: ${cssStr(post)}` }, 0]
         }

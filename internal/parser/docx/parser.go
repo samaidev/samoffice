@@ -312,10 +312,10 @@ func parseDocumentXMLCtxLevels(r io.Reader, footnotes map[string]string, media *
                                         }
                                         // numId>0 的段落聚合进列表；其余块先冲刷当前列表再追加
                                         if p, ok := b.(*core.Paragraph); ok && np.NumID > 0 {
-                                                fmtName, lvlText := "", ""
+                                                fmtName, lvlText, lvlStart := "", "", 0
                                                 if lvls, ok2 := numLevels[np.NumID]; ok2 {
                                                         if l, ok3 := lvls[np.Ilvl]; ok3 {
-                                                                fmtName, lvlText = l.Fmt, l.LvlText
+                                                                fmtName, lvlText, lvlStart = l.Fmt, l.LvlText, l.Start
                                                         }
                                                 }
                                                 if fmtName == "" {
@@ -328,6 +328,11 @@ func parseDocumentXMLCtxLevels(r io.Reader, footnotes map[string]string, media *
                                                         // round47：完整序号样式 —— "numFmt|lvlText"（如 "decimal|[%1]"）。
                                                         // 前端按模板渲染 [1]/(3) 等括号形式；缺省保持旧 CSS 样式兼容。
                                                         curList.Style = listStyleOf(fmtName, lvlText)
+                                                        // round48：起始编号（w:startOverride）—— 第一个编号段落的
+                                                        // 期望序号减 (已聚合条目-0) 即列表起始值；仅非 1 时保留
+                                                        if ordered && lvlStart > 1 {
+                                                                curList.Start = lvlStart
+                                                        }
                                                         curNumID, curIlvl = np.NumID, np.Ilvl
                                                 }
                                                 curList.Items = append(curList.Items, []core.Block{p})
@@ -534,6 +539,7 @@ func parseNumbering(files map[string]*zip.File) map[int]map[int]string {
 type numLevel struct {
         Fmt      string // w:numFmt（decimal/decimalEnclosedCircle/chineseCounting/bullet/…）
         LvlText  string // w:lvlText 模板（"%1."、"%1)"、"[%1]"、"(%1)"、"第%1章"…）
+        Start    int    // 起始编号：w:num/w:lvlOverride/w:startOverride（round48；0=未指定）
 }
 
 // listStyleOf 把 Word 的 (numFmt, lvlText) 组合映射为 UDM BulletList.Style。
@@ -613,7 +619,10 @@ func parseNumberingLevels(files map[string]*zip.File) map[int]map[int]numLevel {
         type lvlDef struct{ fmtName, lvlText string }
         abstractFmt := map[int]map[int]*lvlDef{} // abstractNumId → ilvl → def
         numToAbstract := map[int]int{}           // numId → abstractNumId
-        curAbstract, curNum, curLvl := -1, -1, -1
+        // round48：numId → ilvl → startOverride 起始号（<w:num><w:lvlOverride>
+        // <w:startOverride w:val="N"/>；渲染端为"同样式不同起始号"生成）
+        numStartOverride := map[int]map[int]int{}
+        curAbstract, curNum, curLvl, curOverride := -1, -1, -1, false
         for {
                 tok, err := dec.Token()
                 if err == io.EOF {
@@ -634,6 +643,21 @@ func parseNumberingLevels(files map[string]*zip.File) map[int]map[int]numLevel {
                         case "lvl":
                                 if curAbstract >= 0 {
                                         curLvl = atoiSafe(attrOf(t, "ilvl"))
+                                }
+                        case "lvlOverride":
+                                // <w:num> 内的级别覆盖（含 startOverride）
+                                if curNum >= 0 {
+                                        curOverride = true
+                                        curLvl = atoiSafe(attrOf(t, "ilvl"))
+                                }
+                        case "startOverride":
+                                if curNum >= 0 && curOverride && curLvl >= 0 {
+                                        m := numStartOverride[curNum]
+                                        if m == nil {
+                                                m = map[int]int{}
+                                                numStartOverride[curNum] = m
+                                        }
+                                        m[curLvl] = atoiSafe(attrOf(t, "val"))
                                 }
                         case "numFmt":
                                 v := attrOf(t, "val")
@@ -676,6 +700,9 @@ func parseNumberingLevels(files map[string]*zip.File) map[int]map[int]numLevel {
                                 curAbstract = -1
                         case "num":
                                 curNum = -1
+                        case "lvlOverride":
+                                curOverride = false
+                                curLvl = -1
                         case "lvl":
                                 curLvl = -1
                         }
@@ -686,6 +713,17 @@ func parseNumberingLevels(files map[string]*zip.File) map[int]map[int]numLevel {
                         lm := map[int]numLevel{}
                         for ilvl, d := range m {
                                 lm[ilvl] = numLevel{Fmt: d.fmtName, LvlText: d.lvlText}
+                        }
+                        // 起始号覆盖合入对应级别（round48）
+                        if so, ok := numStartOverride[numID]; ok {
+                                for ilvl, s := range so {
+                                        if l, ok := lm[ilvl]; ok {
+                                                l.Start = s
+                                                lm[ilvl] = l
+                                        } else {
+                                                lm[ilvl] = numLevel{Fmt: "decimal", LvlText: "%1.", Start: s}
+                                        }
+                                }
                         }
                         out[numID] = lm
                 }
