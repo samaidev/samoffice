@@ -32,6 +32,13 @@ type Registry struct {
 	mu      sync.RWMutex
 }
 
+// NewRegistryEmpty 空注册表——分格式 WASM 构建（cmd/wasm-docx / wasm-ppt /
+// wasm-xls / wasm-xlsx）按需注册自己的解析器子集，配合链接器死代码剔除，
+// 单格式引擎不链入其余格式的解析/写回代码。
+func NewRegistryEmpty() *Registry {
+	return &Registry{}
+}
+
 func NewRegistry() *Registry {
 	r := &Registry{}
 	r.Register(&docx.Parser{})
