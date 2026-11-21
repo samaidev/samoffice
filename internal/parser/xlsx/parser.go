@@ -10,7 +10,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/xuri/excelize/v2"
+	"github.com/zai/samoffice/internal/excelizelite"
 	"github.com/zai/samoffice/internal/core"
 )
 

@@ -1,7 +1,11 @@
 // cmd/wasm-xlsx — SamOffice 分格式引擎：xlsx（excelize，解析+xlsxOpen+saveXlsx）。
 //
 // 构建：GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o samoffice-xlsx.wasm ./cmd/wasm-xlsx
-// 目标：brotli 后 ≤2MB 进单分包（1.7.70 全量 excelize br≈2.95MB 超预算 defer）。
+// 目标：brotli 后 ≤2MB 进单分包（1.7.70 全量 br≈2.95MB 超预算 defer）。
+// [v1.7.73] 体积根因定位：internal/parser 的 registry.go import 全部 8 个解析器包，
+// 各包 init/包级变量无条件链接（docx 解析器 ≈5MB raw），excelize 本体触底仅
+// ≈4.2MB raw（探针实测 br≈1.61MB）。本入口直接路由 xlsx.Parser，不 import
+// internal/parser，链接后 br≈1.7MB 量级，稳进单分包。
 package main
 
 import (
@@ -13,16 +17,18 @@ import (
 	"syscall/js"
 
 	"github.com/zai/samoffice/internal/core"
-	"github.com/zai/samoffice/internal/parser"
 	"github.com/zai/samoffice/internal/parser/xlsx"
 )
 
 const version = "1.1.0-wasm-xlsx"
 
-var reg = func() *parser.Registry {
-	r := parser.NewRegistryEmpty()
-	r.Register(&xlsx.Parser{})
-	return r
+// extOK xlsx 解析器支持的扩展名（不经 registry，直接路由）
+var extOK = func() map[string]bool {
+	m := map[string]bool{}
+	for _, e := range (&xlsx.Parser{}).Supported() {
+		m[e] = true
+	}
+	return m
 }()
 
 func main() {
@@ -90,8 +96,8 @@ func parseFn(this js.Value, args []js.Value) any {
 	ext = strings.ToLower(ext)
 	var doc *core.Document
 	var warns []core.Warning
-	if p := reg.PickByPath("file" + ext); p != nil {
-		doc, warns, err = p.Parse(bytes.NewReader(raw))
+	if extOK[ext] {
+		doc, warns, err = (&xlsx.Parser{}).Parse(bytes.NewReader(raw))
 	} else {
 		return errResult(fmt.Errorf("不支持的格式: " + ext))
 	}

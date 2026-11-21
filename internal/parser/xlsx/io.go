@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/xuri/excelize/v2"
+	"github.com/zai/samoffice/internal/excelizelite"
 )
 
 // ---- 前端 ↔ 后端 的单元格数据格式 ----
