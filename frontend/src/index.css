@@ -25,6 +25,9 @@
   --color-surface-alt: #f8fafc;
   --color-border: #e2e8f0;
   --color-border-strong: #cbd5e1;
+  /* round51（问题2）：表格行列标头专用边框 —— 比 --color-border 深一档，
+     浅色背景的表头区上肉眼可见（原 #e2e8f0 在 #f1f5f9 上几乎隐形） */
+  --color-heading-border: #b4c0cf;
   --color-text: #0f172a;
   --color-text-secondary: #475569;
   --color-text-muted: #94a3b8;
@@ -76,6 +79,7 @@
     --color-surface-alt: #334155;
     --color-border: #334155;
     --color-border-strong: #475569;
+    --color-heading-border: #56637a;
     --color-text: #f1f5f9;
     --color-text-secondary: #cbd5e1;
     --color-text-muted: #64748b;
@@ -106,6 +110,7 @@
   --color-surface-alt: #334155;
   --color-border: #334155;
   --color-border-strong: #475569;
+  --color-heading-border: #56637a;
   --color-text: #f1f5f9;
   --color-text-secondary: #cbd5e1;
   --color-text-muted: #64748b;

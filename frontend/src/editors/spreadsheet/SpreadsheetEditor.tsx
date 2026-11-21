@@ -2736,33 +2736,80 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         onClose={() => setPrintDialogOpen(false)}
         editorType="excel"
         printSelector="table"
-        renderPreview={(settings) => (
-          <div className="w-full h-full" style={{ color: '#000' }}>
-            <table className="w-full text-[8px] border-collapse" style={{ border: '1px solid #ccc' }}>
-              <thead>
-                <tr>
-                  <th className="border p-0.5 bg-gray-100"></th>
-                  {Array.from({ length: Math.min(cols, 8) }).map((_, c) => (
-                    <th key={c} className="border p-0.5 bg-gray-100">{colName(c)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: Math.min(rows, 12) }).map((_, r) => (
-                  <tr key={r}>
-                    <td className="border p-0.5 bg-gray-100 text-center">{r + 1}</td>
-                    {Array.from({ length: Math.min(cols, 8) }).map((_, c) => (
-                      <td key={c} className="border p-0.5" style={{ fontFamily: settings.printGridlines ? 'monospace' : 'inherit' }}>
-                        {getCell(r, c).value.slice(0, 10)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {settings.printGridlines && <div className="text-[8px] text-gray-500 mt-1">{t('print.excelGridlines')} ✓</div>}
-          </div>
-        )}
+        renderPreview={(settings) => {
+          // round51（问题3）：打印预览应用单元格真实样式。
+          // 旧实现是硬编码骨架表 —— 只取 value.slice(0,10)，加粗/斜体/颜色/填充/边框/
+          // 对齐/字号/合并/换行全部丢失，用户报告"打印预览完全没有应用现有的样式"。
+          // 现按网格同源数据渲染：
+          //  - 样式字段与显示态 span 的 common 对象一致（bold/italic/under/strike/color/
+          //    fontSize/align/valign/wrap），填充色直接用 cell.bg
+          //  - 边框用 cell.border/borderColor（未设置时 printGridlines=true 打浅灰网格线，
+          //    对齐 Excel"打印网格线"选项；否则无边框，即 Excel 默认不打印网格线）
+          //  - 合并单元格按 mergeRange 展开 rowSpan/colSpan，被 hiddenBy 的格子跳过
+          //  - 行列标头（A/B/C… 1/2/3…）不进打印（Excel 打印不含行列标头）；
+          //    列宽按 curColWidths 等比缩放，行数取到数据实际占用行（不为空行浪费纸张）
+          const bw2 = (b?: string) => b === 'thick' ? '3px' : b === 'medium' ? '2px' : b === 'thin' ? '1px' : undefined
+          // 数据实际占用范围（最后一行/列有内容的格子，兜底 12×8）
+          let maxR = 0, maxC = 0, any = false
+          for (const k of Object.keys(data)) {
+            const [rs, cs] = k.split('-').map(Number)
+            const cell = data[k]
+            if ((cell.value && cell.value.trim()) || cell.formula || cell.bg || (cell.border && cell.border !== 'none')) {
+              any = true
+              if (rs > maxR) maxR = rs
+              if (cs > maxC) maxC = cs
+            }
+          }
+          const pvRows = any ? Math.min(rows, maxR + 1) : Math.min(rows, 12)
+          const pvCols = any ? Math.min(cols, maxC + 1) : Math.min(cols, 8)
+          const valignMap2: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
+          return (
+            <div className="w-full h-full overflow-auto" style={{ color: '#000' }}>
+              <table className="border-collapse w-full" style={{ tableLayout: 'fixed' }}>
+                <tbody>
+                  {Array.from({ length: pvRows }).map((_, r) => {
+                    const rowHpx = rowH(r)
+                    return (
+                      <tr key={r} style={{ height: rowHpx }}>
+                        {Array.from({ length: pvCols }).map((_, c) => {
+                          const cell = getCell(r, c)
+                          if (cell.hiddenBy) return null
+                          const mr = cell.mergeRange
+                          const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
+                          const hasBorder = cell.border && cell.border !== 'none'
+                          const gridB = settings.printGridlines && !hasBorder ? '1px solid #d0d7de' : undefined
+                          return (
+                            <td key={c} rowSpan={mr?.rowSpan} colSpan={mr?.colSpan}
+                              style={{
+                                background: cell.bg || '#ffffff',
+                                color: cell.color || '#000',
+                                fontWeight: cell.bold ? 700 : 400,
+                                fontStyle: cell.italic ? 'italic' : undefined,
+                                textDecoration: decoration || undefined,
+                                fontSize: cell.fontSize ? `${Math.max(8, cell.fontSize * 0.75)}px` : '11px',
+                                fontFamily: cell.fontFamily || undefined,
+                                textAlign: cell.align || (mr ? 'center' : 'left'),
+                                verticalAlign: cell.valign ? valignMap2[cell.valign] : 'middle',
+                                whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                padding: '2px 4px',
+                                border: hasBorder ? `${bw2(cell.border)} solid ${cell.borderColor || '#000'}` : gridB,
+                                width: `${(curColWidths[c] || 80) * 0.6}px`,
+                              }}>
+                              {fmtDisplay(cell)}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {settings.printGridlines && <div className="text-[8px] text-gray-500 mt-1">{t('print.excelGridlines')} ✓</div>}
+            </div>
+          )
+        }}
       />
 
       {/* 公式栏 */}
@@ -2858,11 +2905,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         )}
         {/* 网格容器持有键盘焦点（Excel 模型）：方向键/回车/输入即编辑等由 onGridKeyDown 统一处理 */}
         <div className="relative" ref={gridRef} tabIndex={0} onKeyDown={onGridKeyDown} style={{ outline: 'none' }}>
-        <table className="border-collapse text-sm select-none" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        {/* round51（问题2）：外层去掉 borderRadius+overflow:hidden —— border-collapse 表格配
+            overflow:hidden 会把表格四周 1px 边框裁掉（尤其左上角行列标头交汇处），
+            用户看起来就像"行列标头没有边框"。圆角效果由外层 boxShadow 自然勾勒。 */}
+        <table className="border-collapse text-sm select-none" style={{ background: '#ffffff', boxShadow: 'var(--shadow-sm)' }}>
           {showHeadings && (
           <thead>
             <tr>
-              <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}></th>
+              {/* round51（问题2）：左上角行列标头交汇格。边框原用 --color-border(#e2e8f0)，
+                  浅色背景(#f1f5f9)上几乎不可见，用户报告"看不到边框"。改用专门的表头边框色
+                  --color-heading-border（更深一档），与 Excel 行列标头一致的有感边框。 */}
+              <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-heading-border)', color: 'var(--color-text-muted)' }}></th>
               {Array.from({ length: cols }).map((_, c) => {
                 const w = curColWidths[c] || 80
                 const colSel = colInAnyArea(c)
@@ -2870,7 +2923,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 return (
                 <th key={c}
                   className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 transition-colors cursor-pointer select-none`}
-                  style={{ zIndex: filterMenuCol === c ? 45 : 10, background: colSel ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
+                  style={{ zIndex: filterMenuCol === c ? 45 : 10, background: colSel ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-heading-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
                   onMouseDown={e => {
                     // 右键/中键不改变列选区（Excel 行为，防止右键撤销已选列）
                     if (e.button !== 0) return
@@ -2952,7 +3005,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               <tr key={r} style={rowHpx !== 28 ? { height: rowHpx } : undefined}>
                 {showHeadings && (
                 <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow ? 'sticky z-30' : ''}`}
-                  style={{ background: rowInAnyArea(r) ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
+                  style={{ background: rowInAnyArea(r) ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-heading-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
                   onMouseDown={e => {
                     // 右键/中键不改变行选区（Excel 行为，防止右键撤销已选行）
                     if (e.button !== 0) return

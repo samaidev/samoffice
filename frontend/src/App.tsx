@@ -221,6 +221,9 @@ ${t('sample.md.more')}
   const [windows, setWindows] = useState<OpenWindow[]>([])
   const [activeWindowId, setActiveWindowId] = useState<number | null>(null)
   const [dragTabId, setDragTabId] = useState<number | null>(null)
+  // round51（问题1）：拖拽悬停的目标标签与插入侧（before/after）——驱动插入指示线
+  const [dragOverTabId, setDragOverTabId] = useState<number | null>(null)
+  const [dragOverSide, setDragOverSide] = useState<'before' | 'after' | null>(null)
   const winIdRef = useRef(1)
   const activeWindow = windows.find(w => w.id === activeWindowId) || null
   // round29：handleSlideSnapshot（useCallback []）读取最新活动窗口用
@@ -1818,6 +1821,9 @@ ${t('sample.md.more')}
           {windows.map((w) => {
             const active = w.id === activeWindowId
             const isDragging = dragTabId === w.id
+            // round51（问题1）：拖拽悬停位置 —— 落点在目标标签左半=插到它前面，右半=插到它后面。
+            // 旧实现只能在"整个标签"上 drop 且无左半插入，行为不完整；此状态驱动插入指示线。
+            const dragSide = dragOverTabId === w.id ? dragOverSide : null
             return (
               <div
                 key={w.id}
@@ -1825,28 +1831,45 @@ ${t('sample.md.more')}
                 onDragStart={(e) => {
                   setDragTabId(w.id)
                   e.dataTransfer.effectAllowed = 'move'
+                  // Firefox/部分内核要求 setData 才会真正开始拖拽
+                  try { e.dataTransfer.setData('text/plain', String(w.id)) } catch {}
                 }}
                 onDragOver={(e) => {
-                  if (dragTabId != null && dragTabId !== w.id) e.preventDefault()
+                  if (dragTabId == null || dragTabId === w.id) return
+                  // 必须 preventDefault 才允许 drop；按鼠标在标签内的横向位置决定插入侧
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                  const side = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+                  setDragOverTabId(w.id)
+                  setDragOverSide(side)
+                }}
+                onDragLeave={() => {
+                  if (dragOverTabId === w.id) { setDragOverTabId(null); setDragOverSide(null) }
                 }}
                 onDrop={(e) => {
                   e.preventDefault()
-                  if (dragTabId == null || dragTabId === w.id) { setDragTabId(null); return }
                   const from = dragTabId
+                  const target = w.id
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                  const side = e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+                  setDragOverTabId(null); setDragOverSide(null)
+                  setDragTabId(null)
+                  if (from == null || from === target) return
                   setWindows(prev => {
                     const fromIdx = prev.findIndex(x => x.id === from)
-                    const toIdx = prev.findIndex(x => x.id === w.id)
+                    const toIdx = prev.findIndex(x => x.id === target)
                     if (fromIdx < 0 || toIdx < 0) return prev
                     const next = [...prev]
                     const [moved] = next.splice(fromIdx, 1)
-                    const insertAt = next.findIndex(x => x.id === w.id)
-                    next.splice(insertAt, 0, moved)
+                    // 目标在移除后的新索引；before=插到它前面，after=后面
+                    const newTargetIdx = next.findIndex(x => x.id === target)
+                    next.splice(side === 'before' ? newTargetIdx : newTargetIdx + 1, 0, moved)
                     return next
                   })
-                  setDragTabId(null)
                 }}
-                onDragEnd={() => setDragTabId(null)}
-                className="group flex items-center px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium transition-all rounded-md min-w-0 flex-shrink overflow-hidden"
+                onDragEnd={() => { setDragTabId(null); setDragOverTabId(null); setDragOverSide(null) }}
+                className="group flex items-center px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium transition-all rounded-md min-w-0 flex-shrink overflow-hidden relative"
                 style={{
                   // round25 动态缩放：单标签上限 200px，空间不足按比例压缩
                   //（活动标签保底 130px、非活动 56px），仍不足则容器横向滚动
@@ -1867,6 +1890,9 @@ ${t('sample.md.more')}
                 }}
                 data-testid={`tab-${w.type}`}
               >
+                {/* round51：拖拽插入指示线（2px 竖线，白色，指示松手后插入的位置） */}
+                {dragSide === 'before' && <span aria-hidden className="absolute left-0 top-1 bottom-1 w-0.5 rounded" style={{ background: 'rgba(255,255,255,0.95)', boxShadow: '0 0 4px rgba(255,255,255,0.8)' }} />}
+                {dragSide === 'after' && <span aria-hidden className="absolute right-0 top-1 bottom-1 w-0.5 rounded" style={{ background: 'rgba(255,255,255,0.95)', boxShadow: '0 0 4px rgba(255,255,255,0.8)' }} />}
                 <span className="mr-1 truncate min-w-0" title={w.title}>{typePrefix(w.type)}：{truncateName(w.title, 18)}</span>
                 {isWindowDirty(w) && (
                   <span
