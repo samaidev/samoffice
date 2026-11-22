@@ -740,7 +740,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const rowAnchorRef = useRef(0)
   const colAnchorRef = useRef(0)
   const [colorMode, setColorMode] = useState<'font' | 'fill' | 'border'>('font')
-  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number } | null>(null)
+  // round53（问题1）：右键菜单来源 —— cell=单元格 / col=列标头 / row=行标头。
+  // 标头右键对齐 MS Excel：先选中整列/整行（已在选区内则保留多选），再弹对应菜单。
+  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number; kind?: 'cell' | 'col' | 'row' } | null>(null)
   const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
   const [sheets, setSheets] = useState(initialSheetList)
   const activeId = sheets.find(s => s.active)?.id ?? 1
@@ -2948,6 +2950,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     if (d.additive) updateLastExtraArea({ r1: 0, r2: rows - 1, c1: Math.min(d.anchor, c), c2: Math.max(d.anchor, c), mode: 'col' })
                     else selectColSpan(Math.min(d.anchor, c), Math.max(d.anchor, c))
                   }}
+                  onContextMenu={e => {
+                    // round53（问题1）：右键列标头 —— 对齐 MS Excel：该列不在选区内时
+                    // 先选中整列（在选区内保留原多选），再弹列头菜单（插入/删除列等）
+                    e.preventDefault()
+                    if (!colInAnyArea(c)) { colAnchorRef.current = c; selectCol(c) }
+                    setMenu({ x: e.clientX, y: e.clientY, r: 0, c, kind: 'col' })
+                  }}
                   title={tf('sheet.selectCol', '选择整列')}>
                   {colName(c)}
                   {/* 排序方向三角（对齐 MS Excel：排序后列头显示 ▲/▼，点击可反向重排） */}
@@ -3029,6 +3038,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     if (!d) return
                     if (d.additive) updateLastExtraArea({ r1: Math.min(d.anchor, r), c1: 0, r2: Math.max(d.anchor, r), c2: cols - 1, mode: 'row' })
                     else selectRowSpan(Math.min(d.anchor, r), Math.max(d.anchor, r))
+                  }}
+                  onContextMenu={e => {
+                    // round53（问题1）：右键行标头 —— 对齐 MS Excel：该行不在选区内时
+                    // 先选中整行（在选区内保留原多选），再弹行头菜单（插入/删除行等）
+                    e.preventDefault()
+                    if (!rowInAnyArea(r)) { rowAnchorRef.current = r; selectRow(r) }
+                    setMenu({ x: e.clientX, y: e.clientY, r, c: 0, kind: 'row' })
                   }}
                   title={tf('sheet.selectRow', '选择整行')}>
                   {gr && (
@@ -3310,6 +3326,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       {menu && (() => {
         const sr = selRect()
         const selIsMerged = selection.mode === 'cell' && (getCell(Math.min(selection.r1, selection.r2), Math.min(selection.c1, selection.c2)).mergeRange || false)
+        const kind = menu.kind || 'cell'
         const ctxItem = (label: string, icon: string, fn: () => void, disabled = false) => (
           <button key={label} onClick={() => { fn(); setMenu(null) }}
             disabled={disabled}
@@ -3319,6 +3336,38 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </button>
         )
         const sep = <div key={'sep' + Math.random()} className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
+        // round53（问题1）：列标头 / 行标头右键菜单（对齐 MS Excel 标头菜单：
+        // 剪切/复制 + 插入/删除 + 清除内容 + 列宽/行高；选区即右键时选中的整列/整行）
+        if (kind === 'col' || kind === 'row') {
+          const isCol = kind === 'col'
+          return (
+            <div className="fixed z-[100] py-1 rounded-lg shadow-xl border" style={{ left: menu.x, top: menu.y, background: 'var(--color-surface)', borderColor: 'var(--color-border)' }} onContextMenu={e => e.preventDefault()} onMouseDown={e => e.stopPropagation()}>
+              {ctxItem(tf('sheet.cut', '剪切'), '✂', () => copyCells(true))}
+              {ctxItem(tf('sheet.copy', '复制'), '⧉', () => copyCells(false))}
+              {sep}
+              {isCol && ctxItem(tf('sheet.insertColLeft', '在左侧插入列'), '↤', () => insertCols(sr.c1, 1))}
+              {isCol && ctxItem(tf('sheet.insertColRight', '在右侧插入列'), '↦', () => insertCols(sr.c2 + 1, 1))}
+              {isCol && ctxItem(tf('sheet.deleteCols', '删除列'), '🗑', () => deleteCols(sr.c1, sr.c2 - sr.c1 + 1))}
+              {!isCol && ctxItem(tf('sheet.insertRowAbove', '在上方插入行'), '↥', () => insertRows(sr.r1, 1))}
+              {!isCol && ctxItem(tf('sheet.insertRowBelow', '在下方插入行'), '↧', () => insertRows(sr.r2 + 1, 1))}
+              {!isCol && ctxItem(tf('sheet.deleteRows', '删除行'), '🗑', () => deleteRows(sr.r1, sr.r2 - sr.r1 + 1))}
+              {sep}
+              {ctxItem(tf('sheet.clearContent', '清除内容'), '⌫', () => clearCellsContent())}
+              {isCol && ctxItem(tf('sheet.colWidth', '列宽'), '↔', () => {
+                const v = prompt(tf('sheet.colWidthPrompt', '输入列宽(px，80 为默认)：'), String(curColWidths[menu.c] || 80))
+                if (v === null) return
+                const w = Math.max(40, Math.min(600, Number(v) || 80))
+                setColWidths(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.c]: w } }))
+              })}
+              {!isCol && ctxItem(tf('sheet.rowHeight', '行高'), '↕', () => {
+                const v = prompt(tf('sheet.rowHeightPrompt', '输入行高(px，28 为默认)：'), String(rowH(menu.r)))
+                if (v === null) return
+                const h = Math.max(20, Math.min(400, Number(v) || 28))
+                setRowHeights(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.r]: h } }))
+              })}
+            </div>
+          )
+        }
         return (
           <div className="fixed z-[100] py-1 rounded-lg shadow-xl border" style={{ left: menu.x, top: menu.y, background: 'var(--color-surface)', borderColor: 'var(--color-border)' }} onContextMenu={e => e.preventDefault()} onMouseDown={e => e.stopPropagation()}>
             {ctxItem(tf('sheet.cut', '剪切'), '✂', () => copyCells(true))}

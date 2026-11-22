@@ -388,12 +388,14 @@ body {
   opacity: 0.6;
   pointer-events: none;
 }
+/* round53（问题2）：显式分页符标记不再套方框（旧版渐变底纹+虚线边框+padding
+   会撑高块盒 —— 切"显示标记"时内容被挤压移位）。标记文字与提示线全部改为
+   绝对定位悬浮在分页符自身的 16px margin 空隙内：零文档流占用、简单细虚线、
+   置于内容底层（pointer-events none + z-index 0）。 */
 .show-edit-marks .ProseMirror div[data-page-break] {
-  background: repeating-linear-gradient(45deg, #fef3c7, #fef3c7 6px, #fff 6px, #fff 12px) !important;
-  border: 1px dashed #d97706 !important;
-  color: #d97706 !important;
-  font-weight: 600;
-  padding: 4px 0 !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
 }
 .show-edit-marks .ProseMirror hr {
   border-top: 2px dashed #6366f1 !important;
@@ -1498,10 +1500,16 @@ div > div[style*="flex: 1 1 50%"] .ProseMirror {
 /* TOC 标题块（保留样式名，避免被目录清理误删时仍能识别） */
 .ProseMirror p[style] { /* 占位，保持样式块可见 */ }
 
-/* === 分页符节点：默认不显示任何标记线，仅在显示编辑标记时显示虚线/文字 === */
+/* === 分页符节点：round53（问题2）标记悬浮化 ——
+   分页符块自身高度恒为 0（仅保留 16px 上下 margin 作为分页锚点空隙），
+   "— 分页 —" 文字与提示虚线绝对定位悬浮在这段空隙里：
+   开关"显示标记"不改变任何块的流程高度（旧版 label 从 display:none 切 inline
+   会多出一行高，内容整体被挤压下移），样式只有一条细虚线 + 灰字，无方框，
+   pointer-events:none 不挡编辑，z-index 0 置于正文底层。 === */
 .page-break {
   page-break-after: always;
   margin: 16px 0;
+  position: relative;
   text-align: center;
 }
 .page-break-label {
@@ -1510,9 +1518,29 @@ div > div[style*="flex: 1 1 50%"] .ProseMirror {
   color: #94a3b8;
   letter-spacing: 2px;
 }
-.show-marks .page-break-label {
-  display: inline;
+.show-marks .page-break-label,
+.show-edit-marks .page-break-label {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -100%);
   padding: 0 8px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 0;
+}
+.show-marks .page-break::after,
+.show-edit-marks .page-break::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 0;
+  border-top: 1px dashed #cbd5e1;
+  pointer-events: none;
+  z-index: 0;
 }
 
 /* === 参考文献列表：序号渲染为 [1] [2] ... === */
@@ -1698,20 +1726,25 @@ img[data-float="center"] { display: block; margin: 0 auto; }
 .comment-mark { background: #fef3c7; border-bottom: 1px dashed #f59e0b; cursor: pointer; }
 .comment-mark:hover { background: #fde68a; }
 
-/* === 段前分页（pageBreakBefore）在连续编辑视图中可见 === */
+/* === 段前分页（pageBreakBefore）在连续编辑视图中可见 ===
+   round53（问题2）：标记文字绝对定位（不再占 padding-top 12px 的流程高度），
+   仅保留 1px 细虚线上边作为分页位置提示 —— 开关标记不挤压内容。 */
 .pm-break-before {
   border-top: 1px dashed #94a3b8;
-  padding-top: 12px;
   position: relative;
 }
 .pm-break-before::before {
   content: '— 分页 —';
-  display: block;
-  text-align: center;
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
   color: #94a3b8;
   font-size: 12px;
   line-height: 1;
-  margin: -12px 0 12px;
+  background: transparent;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* === Slide 编辑器（PPTX 渲染） === */
