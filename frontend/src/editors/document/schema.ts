@@ -330,7 +330,12 @@ export const schema = new Schema({
       }]
     },
     table_row: {
-      content: 'table_cell+',
+      // round52（问题3）：table_cell+ → table_cell*。
+      // 合并单元格可整行覆盖（如 2x2 表全选合并后第二行没有自己的物理格），
+      // prosemirror-tables 上游的 row content 也是 (table_cell | table_header)*
+      // 允许空行；旧 + 规则下 gridToRows 只能丢弃整行 → 后续行 rowspan 语义
+      // 错乱（e2e 实锤：级联合并产出 cs=8 / [9,8] 畸形结构）。
+      content: 'table_cell*',
       tableRole: 'row',
       attrs: {
         // 行高（px，对齐 MS Word 拖拽水平边框调行高）。0 = 自适应内容。

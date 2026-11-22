@@ -737,6 +737,21 @@ func renderTable(sb *strings.Builder, t *core.Table, images map[string]*embedIma
         // 输出 w:trHeight（hRule 缺省 atLeast，与前端 tr 最小高度语义一致）。
         // 注意 trPr 必须是 w:tr 的第一个子元素。
         for ri, row := range t.Rows {
+                // round52：合并整行覆盖后前端允许空行（PM schema table_cell*），
+                // 空行必须完全由 pending vMerge 续格填充 —— 防御：若无任何 pending
+                // 则跳过该行（避免输出无 w:tc 的非法 w:tr）
+                if len(row) == 0 {
+                        anyPending := false
+                        for col := 0; col < cols; col++ {
+                                if pending[col] > 0 {
+                                        anyPending = true
+                                        break
+                                }
+                        }
+                        if !anyPending {
+                                continue
+                        }
+                }
                 sb.WriteString("<w:tr>")
                 if len(t.RowHeights) > ri && t.RowHeights[ri] > 0 {
                         hTwips := int(t.RowHeights[ri] * 15)

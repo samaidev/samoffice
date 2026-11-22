@@ -463,6 +463,54 @@ function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }
   )
 }
 
+// round52（问题1）：插入表格网格选择器 —— MS Word「插入 > 表格」同款交互。
+// 悬停网格实时预览行列数（高亮 NxM），底部文字同步「N x M 表格」，
+// 点击即插入；悬空移出则回到 0x0（禁用态）。最多 10x8（Word 默认网格规模）。
+function TableInsertGridPopup({ maxRows = 10, maxCols = 8, labels, onPick, onClose }: {
+  maxRows?: number; maxCols?: number
+  labels: { caption: (r: number, c: number) => string; insert: string; custom?: string }
+  onPick: (rows: number, cols: number) => void
+  onClose: () => void
+}) {
+  const [hover, setHover] = useState({ rows: 0, cols: 0 })
+  const cellSize = 20
+  const gap = 2
+  return (
+    <>
+      {/* 点击外部关闭（mousedown 关闭 —— 不抢编辑器焦点语义） */}
+      <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={onClose} />
+      <div className="absolute top-full left-0 mt-1 p-2.5 rounded-lg shadow-xl animate-fade-in"
+        style={{ zIndex: 95, background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}
+        onMouseLeave={() => setHover({ rows: 0, cols: 0 })}>
+        {/* 动态网格 */}
+        <div className="grid" style={{ gridTemplateColumns: `repeat(${maxCols}, ${cellSize}px)`, gap, marginBottom: 6 }}>
+          {Array.from({ length: maxRows * maxCols }).map((_, i) => {
+            const r = Math.floor(i / maxCols) + 1
+            const c = (i % maxCols) + 1
+            const on = r <= hover.rows && c <= hover.cols
+            return (
+              <div key={i}
+                onMouseEnter={() => setHover({ rows: r, cols: c })}
+                onClick={() => { if (r >= 1 && c >= 1) onPick(r, c) }}
+                style={{
+                  width: cellSize, height: cellSize,
+                  background: on ? 'var(--color-primary)' : 'var(--color-bg-alt)',
+                  border: `1px solid ${on ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                  borderRadius: 2, cursor: 'pointer',
+                  transition: 'background 0.06s',
+                }} />
+            )
+          })}
+        </div>
+        {/* 底部状态文字：NxM 表格 / 插入表格 */}
+        <div className="text-xs text-center pt-1 pb-0.5" style={{ color: hover.rows > 0 ? 'var(--color-text)' : 'var(--color-text-muted)', minWidth: maxCols * cellSize + (maxCols - 1) * gap }}>
+          {hover.rows > 0 && hover.cols > 0 ? labels.caption(hover.rows, hover.cols) : (labels.custom || labels.insert)}
+        </div>
+      </div>
+    </>
+  )
+}
+
 function RibbonGroup({ label, children }: any) {
   return (
     <div className="flex flex-col items-center px-2 border-r ribbon-group" style={{ borderColor: 'var(--color-border)' }}>
@@ -1365,6 +1413,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [showTableBorderMenu, setShowTableBorderMenu] = useState(false)
   const [tableBorderColor, setTableBorderColor] = useState('#000000')
   const [tableBorderWidth, setTableBorderWidth] = useState(1)
+  // round52（问题1）：插入表格的 MS Word 式动态行列网格选择器
+  const [showTableGridPopup, setShowTableGridPopup] = useState(false)
+  const [tableGridHover, setTableGridHover] = useState({ rows: 0, cols: 0 })
   const [watermark, setWatermark] = useState('')
   // 自动调整下拉（对齐 MS Word 表格工具「自动调整」：根据内容/根据窗口/固定列宽）
   const [showAutoFitMenu, setShowAutoFitMenu] = useState(false)
@@ -2942,7 +2993,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         }
         break
       }
-      case 'insertTable': { const rows = parseInt(prompt(t('doc.prompt.rows'), '3') || '3'); const cols = parseInt(prompt(t('doc.prompt.cols'), '3') || '3'); if (rows > 0 && cols > 0) { const tr = []; for (let r = 0; r < rows; r++) { const cells = []; for (let c = 0; c < cols; c++) { const headerText = r === 0 ? `列${c+1}` : ''; const content = headerText ? schema.text(headerText) : null; cells.push(schema.nodes.table_cell.create({ isHeader: r === 0 }, schema.nodes.paragraph.create(null, content))) } tr.push(schema.nodes.table_row.create(null, cells)) } v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.table.create(null, tr))) } break }
+      case 'insertTable': { /* round52（问题1）：改为 MS Word 式动态行列网格选择器（showTableGridPopup 状态 + TableInsertGridPopup 组件），不再弹 prompt */ setShowTableGridPopup(v => !v) } break
       case 'dropCap': setParaAttr('dropCap', !activeAttrs.dropCap); break
       case 'toggleRTL': setParaAttr('rtl', !activeAttrs.rtl); break
     }
@@ -3955,7 +4006,34 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         </>)}
 
         {ribbonTab === 'insert' && (<>
-          <RibbonGroup label={t('doc.table')}><RibbonButton icon="📊" label={t('doc.table')} onClick={() => exec('insertTable')} /></RibbonGroup>
+          {/* round52（问题1）：插入表格 —— MS Word 式动态行列网格选择器（悬停预览 NxM，点击插入） */}
+          <RibbonGroup label={t('doc.table')}>
+            <div className="relative">
+              <RibbonButton icon="📊" label={t('doc.table')} onClick={() => { setShowTableGridPopup(v => !v); setTableGridHover({ rows: 0, cols: 0 }) }} title={t('doc.insertTable')} active={showTableGridPopup} />
+              {showTableGridPopup && (
+                <TableInsertGridPopup
+                  labels={{ caption: (r, c) => `${r} × ${c} ${t('doc.table')}`, insert: t('doc.insertTable') }}
+                  onPick={(rows, cols) => {
+                    setShowTableGridPopup(false)
+                    const v = viewRef.current
+                    if (!v || rows < 1 || cols < 1) return
+                    const tr = []
+                    for (let r = 0; r < rows; r++) {
+                      const cells = []
+                      for (let c = 0; c < cols; c++) {
+                        const headerText = r === 0 ? `列${c + 1}` : ''
+                        const content = headerText ? schema.text(headerText) : null
+                        cells.push(schema.nodes.table_cell.create({ isHeader: r === 0 }, schema.nodes.paragraph.create(null, content)))
+                      }
+                      tr.push(schema.nodes.table_row.create(null, cells))
+                    }
+                    v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.table.create(null, tr)))
+                    focusNoJump()
+                  }}
+                  onClose={() => setShowTableGridPopup(false)} />
+              )}
+            </div>
+          </RibbonGroup>
           <RibbonGroup label={t('doc.image')}>
             <RibbonButton icon="🖼" label={t('doc.image')} onClick={insertImage} />
             {/* 文字环绕（对齐 MS Word 六种：嵌入型/四周型左右/上下型/衬于文字下方/浮于文字上方） */}
@@ -4448,8 +4526,15 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
               title={t('doc.tblBorders') || '边框'} type="button">▦</button>
             {showTableBorderMenu && (
               <>
-                <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={() => setShowTableBorderMenu(false)} />
-                <div className="absolute top-full left-0 mt-1 py-1.5 rounded-lg shadow-xl" style={{ zIndex: 95, background: 'var(--color-surface)', border: '1px solid var(--color-border)', width: 190 }}>
+                {/* round52（问题2）：遮罩/菜单全部改 mousedown 关闭 + preventDefault ——
+                    旧版遮罩 onMouseDown 不阻止默认聚焦行为，菜单按钮走 onClick 但 mousedown
+                    阶段浏览器已把焦点移到 body，WebView 环境下 DOM 选区被折叠，
+                    DOMObserver 把 CellSelection 压塌成光标 —— 用户"选行后点边框按钮丢焦点"。
+                    现统一：菜单内所有元素的 mousedown 均 preventDefault（点击不夺焦），
+                    预设/色/宽修改直接作用于保留的 CellSelection。 */}
+                <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={(e) => { e.preventDefault(); setShowTableBorderMenu(false) }} />
+                <div className="absolute top-full left-0 mt-1 py-1.5 rounded-lg shadow-xl" style={{ zIndex: 95, background: 'var(--color-surface)', border: '1px solid var(--color-border)', width: 190 }}
+                  onMouseDown={(e) => { const t = e.target as HTMLElement; if (!t.closest?.('input, select')) e.preventDefault() }}>
                   {([
                     ['all', t('doc.tblBorderAll') || '所有框线'],
                     ['outer', t('doc.tblBorderOuter') || '外侧框线'],
@@ -4463,6 +4548,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     ['innerV', t('doc.tblBorderInnerV') || '内部竖线'],
                   ] as [string, string][]).map(([preset, label]) => (
                     <button key={preset} type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => { setCellBorders(viewRef.current!.state, viewRef.current!.dispatch, preset, { color: tableBorderColor, width: tableBorderWidth }); setShowTableBorderMenu(false) }}
                       className="flex w-full items-center px-3 py-1.5 text-xs transition-colors"
                       style={{ color: 'var(--color-text)' }}
@@ -4513,7 +4599,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
               title={t('doc.tblAutoFit') || '自动调整'} type="button">⇔</button>
             {showAutoFitMenu && (
               <>
-                <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={() => setShowAutoFitMenu(false)} />
+                <div className="fixed inset-0" style={{ zIndex: 90 }} onMouseDown={(e) => { e.preventDefault(); setShowAutoFitMenu(false) }} />
                 <div className="absolute top-full left-0 mt-1 py-1.5 rounded-lg shadow-xl" style={{ zIndex: 95, background: 'var(--color-surface)', border: '1px solid var(--color-border)', width: 190 }}>
                   {([
                     ['content', t('doc.tblAutoFitContent') || '根据内容调整表格'],
@@ -4521,6 +4607,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     ['fixed', t('doc.tblAutoFitFixed') || '固定列宽'],
                   ] as [string, string][]).map(([mode, label]) => (
                     <button key={mode} type="button"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
                         const v = viewRef.current
                         if (v) {

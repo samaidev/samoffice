@@ -112,220 +112,206 @@ function getTableInfo(state: any): TableInfo | null {
   return { tablePos, tableNode, startRow, startCol, endRow, endCol }
 }
 
-// 合并选中单元格
+// ============================================================
+// round52（问题3）：网格模型工具 —— 合并/拆分的正确算法基础。
+//
+// 旧 mergeCells/splitCell 的错乱根因（e2e 实锤：4x4 合并 2x2 变成 5 行
+// [3,2,4,4,4]，拆分变成 6 行）：
+//   1. 多步 replaceWith 全部用旧 doc 的位置 —— 第一步替换后后续位置全部偏移；
+//   2. 行位置用 r * row.nodeSize —— 行高不同/含合并格时 nodeSize 不是等差，
+//      必须累加每行 nodeSize；
+//   3. splitCell 的 rowspan>1 分支用 tableNode.child(r)（旧结构）拼新行，
+//      与已替换的行叠加出新行。
+//
+// 新算法（与 prosemirror-tables 同思路）：
+//   表格先展开为二维网格（每格记录源单元格 + 网格行列），
+//   在网格上做合并/拆分变换，最后一次性 replaceWith 整个表格。
+//   单步事务、无位置漂移、无行数膨胀。
+// ============================================================
+
+// 网格单元：源单元格 + 它在网格中的锚点行列
+interface GridCell {
+  cell: any        // 源 table_cell 节点（PM node）
+  anchorRow: number // rowspan 扩展的锚点行（= 所在行）
+  anchorCol: number
+}
+
+// 把表格展开为 rows x cols 网格。grid[r][c] = 源单元格（同一合并格的
+// 所有被覆盖格都指向同一个源 cell + 锚点）。返回 { grid, rows, cols }。
+function expandGrid(tableNode: any): { grid: (GridCell | null)[][]; rows: number; cols: number } {
+  const rows = tableNode.childCount
+  const occupied: (GridCell | null)[][] = []
+  let maxCols = 0
+  for (let r = 0; r < rows; r++) {
+    const row = tableNode.child(r)
+    if (!occupied[r]) occupied[r] = []
+    let c = 0
+    for (let i = 0; i < row.childCount; i++) {
+      const cell = row.child(i)
+      const rs = cell.attrs.rowspan || 1
+      const cs = cell.attrs.colspan || 1
+      while (occupied[r][c]) c++
+      const gc: GridCell = { cell, anchorRow: r, anchorCol: c }
+      for (let ri = r; ri < r + rs; ri++) {
+        if (!occupied[ri]) occupied[ri] = []
+        for (let ci = c; ci < c + cs; ci++) occupied[ri][ci] = gc
+      }
+      c += cs
+      if (c > maxCols) maxCols = c
+    }
+  }
+  return { grid: occupied, rows, cols: maxCols }
+}
+
+// 网格 → 新表格行数组（每个网格格生成一个 table_cell 节点；content 取
+// 源 cell 内容 —— 合并/拆分不丢文字）。rowType 用源行（保 height attr）。
+function gridToRows(grid: (GridCell | null)[][], rows: number, cols: number, srcTable: any) {
+  const cellType = srcTable.child(0).child(0).type
+  const rowType = srcTable.child(0).type
+  const outRows: any[] = []
+  for (let r = 0; r < rows; r++) {
+    const cells: any[] = []
+    for (let c = 0; c < cols; c++) {
+      const gc = grid[r][c]
+      if (!gc) {
+        // 网格空洞（结构异常兜底）：空段落格
+        cells.push(cellType.create({ rowspan: 1, colspan: 1, isHeader: false, align: '' }, cellType.schema.nodes.paragraph.create()))
+        continue
+      }
+      if (gc.anchorRow === r && gc.anchorCol === c) {
+        // 锚点：真实渲染的格（attrs 保留源格，但 rowspan/colspan 由网格扩展重算）
+        let rs = 1, cs = 1
+        while (r + rs < rows && grid[r + rs][c] === gc) rs++
+        while (c + cs < cols && grid[r][c + cs] === gc) cs++
+        const src = gc.cell
+        const newAttrs: any = { ...src.attrs }
+        if (newAttrs.rowspan !== rs || newAttrs.colspan !== cs) {
+          newAttrs.rowspan = rs
+          newAttrs.colspan = cs
+        }
+        // colspan=1/rowspan=1 是默认值 —— 显式写 1 保持一致（schema 默认 1）
+        cells.push(cellType.create(newAttrs, src.content))
+      }
+      // 非锚点：被合并覆盖的网格位，不生成节点（由锚点格的 span 覆盖）
+    }
+    // round52（问题3）：整行被 rowspan 覆盖（无物理格）也必须保留行节点 ——
+    // schema table_row content 已放宽为 table_cell*（对齐 prosemirror-tables 上游），
+    // 丢弃行会让后续行的 rowspan 语义错乱。
+    const srcRow = srcTable.child(Math.min(r, srcTable.childCount - 1))
+    outRows.push(rowType.create({ ...srcRow.attrs }, cells))
+  }
+  return outRows
+}
+
+// 一次性替换整个表格（单步事务 —— 修复位置漂移的根）
+function replaceTable(state: any, dispatch: any, tablePos: number, tableNode: any, newRows: any[]): boolean {
+  if (newRows.length === 0) return false
+  const newTable = tableNode.type.create({ ...tableNode.attrs }, newRows)
+  const tr = state.tr.replaceWith(tablePos, tablePos + tableNode.nodeSize, newTable)
+  // 把选区放回表格内（合并后光标落第一个受影响格子）
+  const $pos = tr.doc.resolve(tablePos + 2)
+  try {
+    const TextSelection = (state.selection.constructor as any) // TextSelection
+    if (TextSelection && TextSelection.near) tr.setSelection(TextSelection.near($pos))
+  } catch { /* 选区放置失败不影响结构替换 */ }
+  dispatch(tr)
+  return true
+}
+
+// 合并选中单元格（round52 重写：网格算法）
 export function mergeCells(state: any, dispatch: any): boolean {
   const info = getTableInfo(state)
   if (!info) return false
   if (info.startRow === info.endRow && info.startCol === info.endCol) return false
 
   const { tablePos, tableNode, startRow, startCol, endRow, endCol } = info
-  const rowSpan = endRow - startRow + 1
-  const colSpan = endCol - startCol + 1
+  const { grid, rows, cols } = expandGrid(tableNode)
 
-  // 收集所有要合并的单元格内容
-  let cellContent: any[] = []
-  let absCellIdx = 0
-  const cellsToMerge = new Set<string>()
-  const colCounts: number[][] = []
-
-  for (let r = 0; r < tableNode.childCount; r++) {
-    const row = tableNode.child(r)
-    let c = 0
-    while (colCounts[r] && colCounts[r][c]) c++
-
-    for (let i = 0; i < row.childCount; i++) {
-      const cell = row.child(i)
-      const rs = cell.attrs.rowspan || 1
-      const cs = cell.attrs.colspan || 1
-
-      if (r >= startRow && r <= endRow && c >= startCol && c <= endCol) {
-        cellsToMerge.add(`${r}-${c}-${i}`)
-        // 收集内容
-        cell.forEach((child: any) => {
-          cellContent.push(child)
-        })
-      }
-
-      for (let ri = r; ri < r + rs; ri++) {
-        if (!colCounts[ri]) colCounts[ri] = []
-        for (let ci = c; ci < c + cs; ci++) colCounts[ri][ci] = 1
-      }
-      c += cs
-      absCellIdx++
+  // 选区矩形内所有源格子收集（去重 —— 合并格可能只占部分）
+  const covered = new Set<any>()
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      const gc = grid[r][c]
+      if (gc) covered.add(gc)
     }
   }
+  if (covered.size < 2 && grid[startRow][startCol] && grid[startRow][startCol].cell.attrs.rowspan === endRow - startRow + 1 && grid[startRow][startCol].cell.attrs.colspan === endCol - startCol + 1) return false
 
-  // 重建表格：第一个选中单元格变为合并单元格，其余删除
-  let tr = state.tr
-  let isFirst = true
-  absCellIdx = 0
-  const newColCounts: number[][] = []
-
-  for (let r = 0; r < tableNode.childCount; r++) {
-    const row = tableNode.child(r)
-    const newRowChildren: any[] = []
-    let c = 0
-    while (newColCounts[r] && newColCounts[r][c]) c++
-
-    for (let i = 0; i < row.childCount; i++) {
-      const cell = row.child(i)
-      const rs = cell.attrs.rowspan || 1
-      const cs = cell.attrs.colspan || 1
-      const inMerge = r >= startRow && r <= endRow && c >= startCol && c <= endCol
-
-      if (inMerge && isFirst) {
-        // 第一个合并单元格
-        const newCell = cell.type.create({
-          ...cell.attrs,
-          rowspan: rowSpan,
-          colspan: colSpan,
-        }, cellContent.length > 0 ? cellContent : cell.content)
-        newRowChildren.push(newCell)
-        isFirst = false
-      } else if (inMerge) {
-        // 跳过（删除）
-      } else {
-        newRowChildren.push(cell)
-      }
-
-      for (let ri = r; ri < r + rs; ri++) {
-        if (!newColCounts[ri]) newColCounts[ri] = []
-        for (let ci = c; ci < c + cs; ci++) newColCounts[ri][ci] = 1
-      }
-      c += cs
-    }
-
-    if (newRowChildren.length > 0) {
-      const newRow = row.type.create(null, newRowChildren)
-      tr = tr.replaceWith(
-        tablePos + 1 + r * (row.nodeSize),
-        tablePos + 1 + r * (row.nodeSize) + row.nodeSize,
-        newRow
-      )
-    }
+  // 内容拼接：按网格行列顺序（先锚点格内容，再其余），全部合进锚点格。
+  // 每个源格的块内容直接搬（空段落跳过 —— 避免合并格出现成串空行）。
+  const mergedContent: any[] = []
+  const sorted = Array.from(covered).sort((a: any, b: any) => (a.anchorRow - b.anchorRow) || (a.anchorCol - b.anchorCol))
+  for (const gc of sorted) {
+    gc.cell.forEach((child: any) => {
+      if (child.type.name === 'paragraph' && child.content.size === 0) return
+      mergedContent.push(child)
+    })
+  }
+  if (mergedContent.length === 0) {
+    mergedContent.push(tableNode.child(0).child(0).type.schema.nodes.paragraph.create())
   }
 
-  dispatch(tr)
-  return true
+  // 构造合并格（锚点 = 选区左上角网格位）
+  const cellType = tableNode.child(0).child(0).type
+  const anchorSrc = grid[startRow][startCol]!.cell
+  const mergedCell = cellType.create(
+    { ...anchorSrc.attrs, rowspan: endRow - startRow + 1, colspan: endCol - startCol + 1 },
+    mergedContent,
+  )
+
+  // 重建网格：选区矩形内全部指向新的合并格
+  const mergedGC: GridCell = { cell: mergedCell, anchorRow: startRow, anchorCol: startCol }
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) grid[r][c] = mergedGC
+  }
+
+  const newRows = gridToRows(grid, rows, cols, tableNode)
+  return replaceTable(state, dispatch, tablePos, tableNode, newRows)
 }
 
-// 拆分单元格
+// 拆分单元格（round52 重写：网格算法）
+// 支持选区内多个合并格同时拆分（对齐 Word：框选拆分作用于全部选中格）。
 export function splitCell(state: any, dispatch: any): boolean {
-  const { $from } = state.selection
-  let cellNode: any = null
-  let cellPos = -1
-  let rowNode: any = null
-  let rowPos = -1
-  let tableNode: any = null
-  let tablePos = -1
+  const info = getTableInfo(state)
+  if (!info) return false
+  const { tablePos, tableNode, startRow, startCol, endRow, endCol } = info
+  const { grid, rows, cols } = expandGrid(tableNode)
 
-  for (let d = $from.depth; d > 0; d--) {
-    const node = $from.node(d)
-    if (node.type.name === 'table_cell' && !cellNode) {
-      cellNode = node
-      cellPos = $from.before(d)
-    }
-    if (node.type.name === 'table_row' && !rowNode) {
-      rowNode = node
-      rowPos = $from.before(d)
-    }
-    if (node.type.name === 'table') {
-      tableNode = node
-      tablePos = $from.before(d)
-      break
+  // 找出选区覆盖的所有源合并格（span>1 才需要拆）
+  const toSplit = new Set<any>()
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      const gc = grid[r][c]
+      if (!gc) continue
+      const rs = gc.cell.attrs.rowspan || 1
+      const cs = gc.cell.attrs.colspan || 1
+      if (rs > 1 || cs > 1) toSplit.add(gc)
     }
   }
+  if (toSplit.size === 0) return false
 
-  if (!cellNode || cellNode.attrs.rowspan <= 1 && cellNode.attrs.colspan <= 1) return false
-
-  const { rowspan, colspan, isHeader } = cellNode.attrs
-  const tr = state.tr
-
-  // 创建拆分后的单元格
-  for (let r = 0; r < rowspan; r++) {
-    for (let c = 0; c < colspan; c++) {
-      if (r === 0 && c === 0) continue // 第一个保留位置
-      const newCell = cellNode.type.create({
-        rowspan: 1, colspan: 1, isHeader, align: '',
-      }, cellNode.type.schema.nodes.paragraph.create())
-      // 插入到原单元格后
-      // 简化：直接替换原单元格为多个
-    }
-  }
-
-  // 简化实现：替换原单元格为 rowspan x colspan 个单元格
-  const newCells: any[] = []
-  for (let r = 0; r < rowspan; r++) {
-    for (let c = 0; c < colspan; c++) {
-      const content = (r === 0 && c === 0) ? cellNode.content : cellNode.type.schema.nodes.paragraph.create()
-      newCells.push(cellNode.type.create({ rowspan: 1, colspan: 1, isHeader, align: '' }, content))
-    }
-  }
-
-  // 重建该行：可能需要新增行（如果有 rowspan > 1）
-  // 简化：仅在 colspan > 1 时拆分（行内拆分）
-  if (rowspan === 1 && colspan > 1) {
-    tr.replaceWith(cellPos, cellPos + cellNode.nodeSize, newCells)
-    dispatch(tr)
-    return true
-  }
-
-  // rowspan > 1 的情况：需要在后续行添加单元格
-  // 找到该单元格在行中的位置
-  let cellIdxInRow = 0
-  rowNode.forEach((child: any, _offset: number, idx: number) => {
-    if (child === cellNode) cellIdxInRow = idx
-  })
-
-  // 替换当前行的单元格
-  const newRowChildren: any[] = []
-  rowNode.forEach((child: any, idx: number) => {
-    if (idx === cellIdxInRow) {
-      // 插入第一行的 colspan 个单元格
-      for (let c = 0; c < colspan; c++) {
-        newRowChildren.push(cellNode.type.create(
-          { rowspan: 1, colspan: 1, isHeader, align: '' },
-          c === 0 ? cellNode.content : cellNode.type.schema.nodes.paragraph.create()
-        ))
+  const cellType = tableNode.child(0).child(0).type
+  for (const gc of toSplit) {
+    const src = gc.cell
+    const r0 = gc.anchorRow, c0 = gc.anchorCol
+    let rs = 1, cs = 1
+    while (r0 + rs < rows && grid[r0 + rs][c0] === gc) rs++
+    while (c0 + cs < cols && grid[r0][c0 + cs] === gc) cs++
+    // 拆分：锚点位保留源内容 + span=1，其余每格一个空段落格（置 null，
+    // gridToRows 的 null 分支生成空格）
+    const keepAttrs = { ...src.attrs, rowspan: 1, colspan: 1 }
+    const keepCell = cellType.create(keepAttrs, src.content)
+    grid[r0][c0] = { cell: keepCell, anchorRow: r0, anchorCol: c0 }
+    for (let r = r0; r < r0 + rs; r++) {
+      for (let c = c0; c < c0 + cs; c++) {
+        if (r === r0 && c === c0) continue
+        grid[r][c] = null
       }
-    } else {
-      newRowChildren.push(child)
     }
-  })
-
-  tr.replaceWith(rowPos, rowPos + rowNode.nodeSize, rowNode.type.create(null, newRowChildren))
-
-  // 在后续行添加单元格
-  for (let r = 1; r < rowspan; r++) {
-    const nextRow = tableNode.child(tableNode.childCount > r ? r : tableNode.childCount - 1)
-    const insertCells: any[] = []
-    for (let c = 0; c < colspan; c++) {
-      insertCells.push(cellNode.type.create(
-        { rowspan: 1, colspan: 1, isHeader, align: '' },
-        cellNode.type.schema.nodes.paragraph.create()
-      ))
-    }
-    // 在对应位置插入
-    let nextRowPos = tablePos + 1
-    for (let i = 0; i < r; i++) {
-      nextRowPos += tableNode.child(i).nodeSize
-    }
-    const nextRowNode = tableNode.child(r)
-    const newNextChildren: any[] = []
-    let inserted = false
-    nextRowNode.forEach((child: any, idx: number) => {
-      if (idx === cellIdxInRow && !inserted) {
-        newNextChildren.push(...insertCells)
-        inserted = true
-      }
-      newNextChildren.push(child)
-    })
-    if (!inserted) newNextChildren.push(...insertCells)
-    tr.replaceWith(nextRowPos, nextRowPos + nextRowNode.nodeSize, nextRowNode.type.create(null, newNextChildren))
   }
 
-  dispatch(tr)
-  return true
+  const newRows = gridToRows(grid, rows, cols, tableNode)
+  return replaceTable(state, dispatch, tablePos, tableNode, newRows)
 }
 
 // 添加行
