@@ -194,7 +194,7 @@ func TestNestedGrpSpParse(t *testing.T) {
 
 	master := &masterExtras{clrMap: defaultClrMap(), txStyles: map[string]runDef{}}
 	slide := parseSlide(strings.NewReader(xmlStr), "ppt/slides/slide1.xml", nil, nil,
-		themeScheme{}, master, map[string]phXfrm{}, map[string]phXfrm{}, map[string]string{}, map[string]string{})
+		themeScheme{}, master, map[string]phXfrm{}, map[string]phXfrm{}, map[string]string{}, map[string]string{}, map[string]phLstStyle{})
 	if len(slide.Shapes) != 2 {
 		t.Fatalf("shapes = %d, want 2", len(slide.Shapes))
 	}

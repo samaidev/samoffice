@@ -23,6 +23,8 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"image"
+	"image/color"
 	"image/jpeg"
 	"io"
 	"math"
@@ -59,8 +61,12 @@ type runDef struct {
 
 // paraDef 单个段落：对齐 + 多 run
 type paraDef struct {
-	Align string   `json:"align,omitempty"` // l|c|r
-	Runs  []runDef `json:"runs"`
+	Align       string   `json:"align,omitempty"`       // l|c|r
+	Bullet      bool     `json:"bullet,omitempty"`      // round58：段落级项目符号（继承母版样式）
+	BulletChar  string   `json:"bulletChar,omitempty"`  // round58：项目符号字符（默认 •）
+	BulletColor string   `json:"bulletColor,omitempty"` // round58：项目符号颜色
+	Numbered    bool     `json:"numbered,omitempty"`    // round58：段落编号（a:buAutoNum）
+	Runs        []runDef `json:"runs"`
 }
 
 // shapeDef 描述单个形状（文本/矩形/图片），几何单位均为 EMU
@@ -82,6 +88,7 @@ type shapeDef struct {
 	Vanchor    string    `json:"vanchor,omitempty"`    // t|ctr|b
 	Geom       string    `json:"geom,omitempty"`       // prstGeom 预设几何（rect/ellipse/roundRect/...）
 	Ph         string    `json:"ph,omitempty"`         // 占位符类型（title/ctrTitle/subTitle/body/...）
+	PhIdx      string    `json:"phIdx,omitempty"`       // round58：idx-only 占位符（无 type）—— 装饰层过滤用
 	LineColor  string    `json:"lineColor,omitempty"`  // 边框色（a:ln solidFill）
 	LineWpt    int       `json:"lineWpt,omitempty"`    // 边框宽（磅）
 	Gradient   string    `json:"gradient,omitempty"`   // 渐变 "RRGGBB,RRGGBB"（无 #，取前两个停止色）
@@ -116,6 +123,10 @@ type slideContent struct {
 	Bg         string
 	Transition string // 切换效果：fade/push/wipe/cover/cut/zoom/morph
 	Shapes     []shapeDef
+	// round58：背景纹理图（bgRef → 主题 bgFillStyleLst blipFill + duotone）。
+	// Bg 仍是 duotone 平均色（底色），Img 叠加平铺纹理。
+	BgImg   bgImageInfo
+	HasBgImg bool
 }
 
 // ---------- 主题与母版 ----------
@@ -127,6 +138,24 @@ type themeScheme map[string]string
 type masterExtras struct {
 	clrMap   map[string]string // bg1→lt1 等
 	txStyles map[string]runDef // title/body/other → lvl1 默认样式
+	// round58：母版样式级项目符号（buChar/buClr）+ 段落对齐 —— 段落未显式
+	// buNone 时继承（装备工业 PPT 正文橙色圆点来自 bodyStyle lvl1pPr）
+	bullets map[string]masterBulletDef
+	aligns  map[string]string
+}
+
+// masterBulletDef 母版样式级项目符号定义
+type masterBulletDef struct {
+	Char  string // buChar char（Wingdings 空字符 = 实心圆点）
+	Color string // buClr 解析后 #RRGGBB
+	None  bool   // buNone（显式无符号）
+}
+
+// bgImageInfo 背景图填充（round58：bgRef → 主题 bgFillStyleLst blipFill）
+type bgImageInfo struct {
+	Img   string // data URL
+	TileW int    // 平铺宽（% of slide）
+	TileH int    // 平铺高（% of slide）
 }
 
 // phXfrm 占位符几何 [x,y,cx,cy]（EMU）
@@ -443,8 +472,9 @@ func parseTheme(files map[string]*zip.File) themeScheme {
 }
 
 // parseMasterExtras 解析母版的 clrMap 与 txStyles（title/body/other 的 lvl1 默认样式）
-func parseMasterExtras(files map[string]*zip.File, masterPath string) *masterExtras {
-	me := &masterExtras{clrMap: defaultClrMap(), txStyles: map[string]runDef{}}
+func parseMasterExtras(files map[string]*zip.File, masterPath string, theme themeScheme) *masterExtras {
+	me := &masterExtras{clrMap: defaultClrMap(), txStyles: map[string]runDef{},
+		bullets: map[string]masterBulletDef{}, aligns: map[string]string{}}
 	f, ok := files[masterPath]
 	if !ok {
 		return me
@@ -461,6 +491,10 @@ func parseMasterExtras(files map[string]*zip.File, masterPath string) *masterExt
 	var inLvl1 bool     // 当前在 lvl1pPr 内
 	var inDefRPr bool   // 当前在 defRPr 内
 	curDef := runDef{}
+	// round58：lvl1pPr 内的项目符号/对齐
+	curBul := masterBulletDef{}
+	inBuClr := false
+	buClrPending := ""
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -501,10 +535,56 @@ func parseMasterExtras(files map[string]*zip.File, masterPath string) *masterExt
 			case "srgbClr":
 				if inDefRPr {
 					curDef.Color = "#" + strings.ToUpper(attrVal(t, "val"))
+				} else if inBuClr {
+					buClrPending = "#" + strings.ToUpper(attrVal(t, "val"))
 				}
 			case "sysClr":
 				if inDefRPr {
 					curDef.Color = "#" + sysColorHex(t)
+				} else if inBuClr {
+					buClrPending = "#" + sysColorHex(t)
+				}
+			case "schemeClr":
+				// round58：母版样式默认色多为 schemeClr（bodyStyle tx1 → clrMap lt1）。
+				// 之前只解 srgbClr/sysClr → 颜色空 → run 无色 → 前端落深色默认，
+				// 浅底深字/深底浅字全错（装备工业 PPT 正文应浅绿白）。
+				if inDefRPr {
+					if c := resolveScheme(theme, me.clrMap, attrVal(t, "val")); c != "" {
+						curDef.Color = "#" + c
+					}
+				} else if inBuClr {
+					if c := resolveScheme(theme, me.clrMap, attrVal(t, "val")); c != "" {
+						buClrPending = "#" + c
+					}
+				}
+			case "algn":
+				// lvl1pPr 的段落对齐默认（bodyStyle/otherStyle algn="l"）
+				if inLvl1 && curStyle != "" {
+					if v := attrVal(t, "val"); v == "l" || v == "ctr" || v == "r" || v == "just" {
+						if v == "ctr" {
+							v = "c"
+						} else if v == "just" {
+							v = "l"
+						}
+						me.aligns[curStyle] = v
+					}
+				}
+			case "buChar":
+				if inLvl1 && curStyle != "" {
+					curBul.Char = attrVal(t, "char")
+				}
+			case "buAutoNum":
+				// 编号列表按符号渲染（字符 "1."），色同 buClr
+				if inLvl1 && curStyle != "" && curBul.Char == "" {
+					curBul.Char = "1."
+				}
+			case "buNone":
+				if inLvl1 && curStyle != "" {
+					curBul.None = true
+				}
+			case "buClr":
+				if inLvl1 {
+					inBuClr = true
 				}
 			}
 		case xml.EndElement:
@@ -512,12 +592,18 @@ func parseMasterExtras(files map[string]*zip.File, masterPath string) *masterExt
 			case "lvl1pPr":
 				if inLvl1 && curStyle != "" {
 					me.txStyles[curStyle] = curDef
+					curBul.Color = buClrPending
+					me.bullets[curStyle] = curBul
+					curBul = masterBulletDef{}
+					buClrPending = ""
 				}
 				inLvl1 = false
 				inDefRPr = false
 				curStyle = ""
 			case "defRPr":
 				inDefRPr = false
+			case "buClr":
+				inBuClr = false
 			}
 		}
 	}
@@ -889,6 +975,331 @@ func bgFillItemInfo(dec *xml.Decoder, start xml.StartElement, item, target int) 
 		}
 	}
 	return "", "", ""
+}
+
+// bgImageAt round58：取主题 bgFillStyleLst 第 (idx-1001) 项的平铺图。
+// blipFill 时解析 a:tile sx/sy（1/100000 百分比）+ blip r:embed → 主题 rels
+// → media data URL；duotone 时做像素级双色调映射（灰度亮度 → 暗/亮色插值），
+// 前端直接平铺无需混合（multiply 近似偏浅，round58 二轮对比实测）。
+func bgImageAt(files map[string]*zip.File, idx int, phClr string) bgImageInfo {
+	var out bgImageInfo
+	tp := findThemePath(files)
+	if tp == "" || idx < 1001 || idx > 1003 {
+		return out
+	}
+	f, ok := files[tp]
+	if !ok {
+		return out
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return out
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	inLst := false
+	item := -1
+	embed := ""
+	tileW, tileH := 0, 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return out
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "bgFillStyleLst" {
+				inLst = true
+				continue
+			}
+			if !inLst {
+				continue
+			}
+			switch t.Name.Local {
+			case "solidFill", "gradFill", "blipFill", "pattFill":
+				item++
+				if item == idx-1001 {
+					if t.Name.Local != "blipFill" {
+						return out
+					}
+					// 消费整个 blipFill，抓 blip embed + tile
+					depth := 1
+					for depth > 0 {
+						tk, e := dec.Token()
+						if e != nil {
+							return out
+						}
+						switch tt := tk.(type) {
+						case xml.StartElement:
+							switch tt.Name.Local {
+							case "blip":
+								embed = attrVal(tt, "embed")
+							case "tile":
+								if v, e := strconv.Atoi(attrVal(tt, "sx")); e == nil && v > 0 {
+									tileW = v
+								}
+								if v, e := strconv.Atoi(attrVal(tt, "sy")); e == nil && v > 0 {
+									tileH = v
+								}
+							}
+							depth++
+						case xml.EndElement:
+							depth--
+						}
+					}
+					// 主题 rels → media 路径 → data URL（duotone 像素处理）
+					if embed != "" {
+						relsPath := strings.Replace(tp, "theme/", "theme/_rels/", 1) + ".rels"
+						if target := relsTargetByID(files, relsPath, embed); target != "" {
+							// relsTargetByID 已是包内绝对路径（ppt/media/…）→
+							// loadMedia 走绝对分支（"/"+path）；直接传会被当
+							// 相对路径再拼一遍主题目录而 404（round58 实测）
+							if mf, ok := files[target]; ok {
+								if mrc, me := mf.Open(); me == nil {
+									if proc, pok := duotoneImage(mrc, files, idx, phClr); pok {
+										_ = mrc.Close()
+										out.Img = proc
+										out.TileW = tileW
+										out.TileH = tileH
+										return out
+									}
+									mrc.Close()
+								}
+							}
+							if img, ok := loadMedia(files, "ppt/theme/theme1.xml", "/"+target); ok {
+								out.Img = img
+								out.TileW = tileW
+								out.TileH = tileH
+							}
+						}
+					}
+					return out
+				}
+				// 跳过非目标项
+				depth := 1
+				for depth > 0 {
+					tk, e := dec.Token()
+					if e != nil {
+						return out
+					}
+					switch tk.(type) {
+					case xml.StartElement:
+						depth++
+					case xml.EndElement:
+						depth--
+					}
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "bgFillStyleLst" {
+				return out
+			}
+		}
+	}
+}
+
+// duotoneImage 把主题背景纹理按 bgFillStyleLst 第 idx 项的 duotone 变换
+// 做像素级映射：像素亮度 t → lerp(dark, light)。phClr 是 bgRef 的基色
+//（schemeClr bg2 解析后）。非 duotone / 解码失败返回原图 false。
+func duotoneImage(r io.Reader, files map[string]*zip.File, idx int, phClr string) (string, bool) {
+	kind, darkSpec, lightSpec := themeBgFillAt(files, idx)
+	if kind != "duotone" || phClr == "" {
+		return "", false
+	}
+	// lightSpec 尾部 "@@embed" 去掉（与 resolveBgRef 相同约定）
+	if i := strings.Index(lightSpec, "@@"); i >= 0 {
+		lightSpec = lightSpec[:i]
+	}
+	base := strings.TrimPrefix(phClr, "#")
+	dark := resolvePhVariant(darkSpec, base)
+	light := resolvePhVariant(lightSpec, base)
+	if dark == "" || light == "" {
+		return "", false
+	}
+	img, err := jpeg.Decode(r)
+	if err != nil {
+		return "", false
+	}
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	dr, dg, db := hexRGB(dark)
+	lr, lg, lb := hexRGB(light)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r32, g32, b32, _ := img.At(x, y).RGBA()
+			// Rec.601 亮度
+			t := (0.299*float64(r32) + 0.587*float64(g32) + 0.114*float64(b32)) / 65535
+			or_ := uint8(float64(dr) + (float64(lr)-float64(dr))*t + 0.5)
+			og := uint8(float64(dg) + (float64(lg)-float64(dg))*t + 0.5)
+			ob := uint8(float64(db) + (float64(lb)-float64(db))*t + 0.5)
+			out.SetRGBA(x-b.Min.X, y-b.Min.Y, color.RGBA{R: or_, G: og, B: ob, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: 82}); err != nil {
+		return "", false
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), true
+}
+
+// parsePhLstStyles round58：解析版式/母版中占位符形状的 lstStyle lvl1pPr defRPr
+//（颜色/字号/加粗）。这是占位符文本继承的第 2 层：slide rPr → 形状自身 lstStyle
+// → 版式占位符 lstStyle → 母版 txStyles → 主题。此前缺版式层：layout3 的标题
+// lstStyle 写了 F9F9F9（白），我们落到母版 tx1→lt1（浅绿），VLM 对比标题色差。
+// phLstStyle 版式占位符 lstStyle 的 lvl1 默认（样式 + 对齐 + 无符号标记）
+type phLstStyle struct {
+	runDef
+	Align  string // lvl1pPr algn（l/c/r）
+	BuNone bool   // lvl1pPr buNone（版式显式无符号 —— 副标题等）
+}
+
+func parsePhLstStyles(files map[string]*zip.File, path string, theme themeScheme, clrMap map[string]string) map[string]phLstStyle {
+	out := map[string]phLstStyle{}
+	f, ok := files[path]
+	if !ok {
+		return out
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return out
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	dec.Strict = false
+	curPh := ""
+	inLst := false
+	inLvl1 := false
+	inDef := false
+	cur := runDef{}
+	curAlign := ""
+	curBuNone := false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return out
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "sp":
+				curPh = ""
+			case "ph":
+				curPh = attrVal(t, "type")
+				if curPh == "" {
+					// round58：idx-only 占位符（<p:ph idx="1"/>）按 i:idx 键入
+					if iv := attrVal(t, "idx"); iv != "" {
+						curPh = "i:" + iv
+					}
+				}
+			case "lstStyle":
+				if curPh != "" {
+					inLst = true
+				}
+			case "lvl1pPr":
+				if inLst {
+					inLvl1 = true
+					// round58：lvl1pPr 的 algn / buNone（副标题 algn=ctr+buNone）
+					curAlign = ""
+					curBuNone = false
+					for _, a := range t.Attr {
+						if a.Name.Local == "algn" {
+							curAlign = a.Value
+						}
+					}
+				}
+			case "buNone":
+				if inLvl1 {
+					curBuNone = true
+				}
+			case "defRPr":
+				if inLvl1 {
+					inDef = true
+					cur = runDef{}
+					for _, a := range t.Attr {
+						switch a.Name.Local {
+						case "sz":
+							cur.SizePt = atoi(a.Value) / 100
+						case "b":
+							cur.Bold = a.Value == "1" || a.Value == "true"
+						}
+					}
+				}
+			case "srgbClr":
+				if inDef {
+					cur.Color = "#" + strings.ToUpper(attrVal(t, "val"))
+				}
+			case "schemeClr":
+				if inDef {
+					if c := resolveScheme(theme, clrMap, attrVal(t, "val")); c != "" {
+						cur.Color = "#" + c
+					}
+				}
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "lvl1pPr":
+				if inLvl1 && curPh != "" {
+					if cur.SizePt != 0 || cur.Color != "" || cur.Bold || curAlign != "" || curBuNone {
+						if curAlign == "ctr" {
+							curAlign = "c"
+						} else if curAlign == "just" {
+							curAlign = "l"
+						}
+						out[curPh] = phLstStyle{runDef: cur, Align: curAlign, BuNone: curBuNone}
+					}
+					cur = runDef{}
+					curAlign = ""
+					curBuNone = false
+				}
+				inLvl1 = false
+				inDef = false
+			case "lstStyle":
+				inLst = false
+				curPh = ""
+			}
+		}
+	}
+}
+
+// parseBgInfo round58：背景色 + 背景图（bgRef blipFill 场景）。
+// 色逻辑与 parseBgColor 相同；命中 bgRef 时附带主题平铺图。
+func parseBgInfo(files map[string]*zip.File, path string, theme themeScheme, clrMap map[string]string) (string, bgImageInfo) {
+	color := parseBgColor(files, path, theme, clrMap)
+	var img bgImageInfo
+	// bgRef 的 idx —— 从 path 重新扫一遍拿 idx（parseBgColor 不回传）
+	if f, ok := files[path]; ok {
+		if rc, e := f.Open(); e == nil {
+			dec := xml.NewDecoder(rc)
+			dec.Strict = false
+			inBg := false
+			for {
+				tok, e := dec.Token()
+				if e != nil {
+					break
+				}
+				switch t := tok.(type) {
+				case xml.StartElement:
+					if t.Name.Local == "bg" {
+						inBg = true
+					} else if inBg && t.Name.Local == "bgRef" {
+						if idx, e := strconv.Atoi(attrVal(t, "idx")); e == nil {
+							// bgRef 的第一个子颜色 = phClr（duotone 基色）
+							ph := readFirstChildColor(dec, theme, clrMap)
+							img = bgImageAt(files, idx, ph)
+						}
+					}
+				case xml.EndElement:
+					if t.Name.Local == "bg" {
+						rc.Close()
+						return color, img
+					}
+				}
+			}
+			rc.Close()
+		}
+	}
+	return color, img
 }
 
 // themeImageLuma 估算主题背景图的平均亮度（0..1）。
@@ -1494,6 +1905,7 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 	var masterBg string
 	// 母版形状（MasterShapes）：写盘端 slideWrite 同名，前端 SlideEditor 母版视图消费
 	var masterShapes []shapeDef
+	var masterBgImgRef bgImageInfo
 	{
 		masterPath := ""
 		for name := range files {
@@ -1504,13 +1916,18 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 			}
 		}
 		if masterPath != "" {
-			master = parseMasterExtras(files, masterPath)
-			masterBg = parseBgColor(files, masterPath, theme, master.clrMap)
+			master = parseMasterExtras(files, masterPath, theme)
+			var masterBgImg bgImageInfo
+			masterBg, masterBgImg = parseBgInfo(files, masterPath, theme, master.clrMap)
+			_ = masterBgImg // 母版背景图与版式共用主题图；slide 装配时按 layout/master 回退统一取
+			masterBgImgRef = masterBgImg
 			// 母版形状（对齐 MS PPT 母版层）：解析 slideMaster spTree 中的形状，
-			// 随首页 slide 数据回传前端（母版视图可编辑，普通视图作装饰底层渲染）
+			// 随每页 slide 数据回传前端（普通视图作装饰底层渲染）。
+			// round58：过滤占位符（母版占位符是模板提示，不应渲染 —— 之前
+			// body/dt/ftr/sldNum 提示文本全部进装饰层）；装饰 = 非占位符形状。
 			if mf, ok := files[masterPath]; ok {
 				if mrc, merr := mf.Open(); merr == nil {
-					ms := parseSlide(mrc, masterPath, files, map[string]string{}, theme, master, map[string]phXfrm{}, map[string]phXfrm{}, map[string]string{}, map[string]string{})
+					ms := parseSlide(mrc, masterPath, files, map[string]string{}, theme, master, map[string]phXfrm{}, map[string]phXfrm{}, map[string]string{}, map[string]string{}, map[string]phLstStyle{})
 					mrc.Close()
 					masterShapes = ms.Shapes
 				}
@@ -1542,14 +1959,32 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 
 		// 版式背景（幻灯片未设背景时回退）+ 版式/母版占位符几何
 		layoutBg := ""
+		layoutBgImg := bgImageInfo{}
+		layoutDecor := []shapeDef{}
+		layoutStyles := map[string]phLstStyle{}
 		layoutPh := map[string]phXfrm{}
 		layoutVanc := map[string]string{}
 		if layoutPath := relsOfType(files, relsName, "slideLayout"); layoutPath != "" {
-			layoutBg = parseBgColor(files, layoutPath, theme, master.clrMap)
+			layoutBg, layoutBgImg = parseBgInfo(files, layoutPath, theme, master.clrMap)
 			layoutPh = parsePlaceholderXfrms(files, layoutPath)
 			// round29：占位符垂直锚点继承（layout bodyPr anchor="b" 等 ——
 			// slide 未设 anchor 时按版式/母版继承，LibreOffice 同行为）
 			layoutVanc = parsePlaceholderVanchors(files, layoutPath)
+			// round58：版式占位符 lstStyle（颜色/字号继承第 2 层）
+			layoutStyles = parsePhLstStyles(files, layoutPath, theme, master.clrMap)
+			// round58：版式装饰形状（分隔线/圆点等非占位符形状 —— MS 每页
+			// 底层渲染；之前完全未解析，标题页的橙点装饰全丢）
+			if lf, ok := files[layoutPath]; ok {
+				if lrc, lerr := lf.Open(); lerr == nil {
+					ls := parseSlide(lrc, layoutPath, files, map[string]string{}, theme, master, map[string]phXfrm{}, map[string]phXfrm{}, map[string]string{}, map[string]string{}, map[string]phLstStyle{})
+					lrc.Close()
+					for _, d := range ls.Shapes {
+						if d.Ph == "" && d.PhIdx == "" {
+							layoutDecor = append(layoutDecor, d)
+						}
+					}
+				}
+			}
 		}
 		masterPh := map[string]phXfrm{}
 		masterVanc := map[string]string{}
@@ -1568,16 +2003,30 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 			}
 		}
 
-		slide := parseSlide(rc, slideName, files, rels, theme, master, layoutPh, masterPh, layoutVanc, masterVanc)
+		slide := parseSlide(rc, slideName, files, rels, theme, master, layoutPh, masterPh, layoutVanc, masterVanc, layoutStyles)
 		rc.Close()
 
-		// 背景逐级回退：slide 自身 → 版式 → 母版
+		// 背景逐级回退：slide 自身 → 版式 → 母版（色与图同链）
 		if slide.Bg == "" {
 			slide.Bg = layoutBg
 		}
 		if slide.Bg == "" {
 			slide.Bg = masterBg
 		}
+		slide.BgImg = layoutBgImg
+		slide.HasBgImg = layoutBgImg.Img != ""
+		if !slide.HasBgImg {
+			slide.BgImg = masterBgImgRef
+			slide.HasBgImg = masterBgImgRef.Img != ""
+		}
+		// 装饰层：母版非占位符 + 版式非占位符（母版先铺，版式叠加）
+		decor := make([]shapeDef, 0, len(masterShapes)+len(layoutDecor))
+		for _, d := range masterShapes {
+			if d.Ph == "" && d.PhIdx == "" {
+				decor = append(decor, d)
+			}
+		}
+		decor = append(decor, layoutDecor...)
 
 		// 幻灯片标题作为 Heading，正文作为段落列表（供大纲视图使用）
 		if slide.Title != "" {
@@ -1606,7 +2055,11 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 				"bg":           slide.Bg,
 				"transition":   slide.Transition,
 				"shapes":       slide.Shapes,
-				"masterShapes": masterShapes,
+				"masterShapes": decor,
+				// round58：背景纹理图（bgRef → 主题 bgFillStyleLst blipFill）
+				"bgImg":      slide.BgImg.Img,
+				"bgImgTileW": slide.BgImg.TileW,
+				"bgImgTileH": slide.BgImg.TileH,
 				"pageW":        pageWEMU,
 				"pageH":        pageHEMU,
 			},
@@ -1693,12 +2146,17 @@ type slideParseCtx struct {
 	txStyles map[string]runDef
 	layoutPh map[string]phXfrm // 版式占位符几何
 	masterPh map[string]phXfrm // 母版占位符几何
+	// round58：母版样式级对齐/项目符号（段落继承）
+	masterAligns  map[string]string
+	masterBullets map[string]masterBulletDef
+	// round58：版式占位符 lstStyle（颜色/字号继承第 2 层 + algn/buNone）
+	layoutStyles map[string]phLstStyle
 }
 
 // parseSlide 解析单张幻灯片 XML，提取形状（文本/矩形/图片），含完整段落样式
 func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[string]string,
 	theme themeScheme, master *masterExtras, layoutPh, masterPh map[string]phXfrm,
-	layoutVanc, masterVanc map[string]string) *slideContent {
+	layoutVanc, masterVanc map[string]string, layoutStyles map[string]phLstStyle) *slideContent {
 
 	slide := &slideContent{}
 	dec := xml.NewDecoder(r)
@@ -1710,6 +2168,10 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 		txStyles: master.txStyles,
 		layoutPh: layoutPh,
 		masterPh: masterPh,
+		// round58：母版样式级对齐/项目符号（段落继承）
+		masterAligns:  master.aligns,
+		masterBullets: master.bullets,
+		layoutStyles:  layoutStyles,
 	}
 
 	var shapes []shapeDef
@@ -1753,6 +2215,18 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 	var bgBlipRID string    // 背景图 rId
 	// 段落是否为空（无任何 run）
 	paraHasRun := false
+	// round58：段落自身显式项目符号状态（buNone/buChar/buClr）
+	paraBuNone := false
+	paraBuChar := ""
+	paraBuClr := ""
+	buClrDepth := 0
+	// round58：p:style 引用（版式装饰形状常见 —— 椭圆 13 的橙色就是
+	// fillRef idx=1 schemeClr accent2，spPr 无任何填充）
+	var styleFill, styleLn, styleFont string
+	var inStyle, inFillRef, inLnRef, inFontRef bool
+	// round58：normAutofit（bodyPr 内 fontScale/lnSpcReduction —— MS 自动
+	// 缩字防溢出；slide2 专利列表 fontScale=85% 我们按 100% 渲染 → 溢出截断）
+	var autofitScale, autofitLnRed float64
 
 	// finalizePara 结束当前段落：应用默认样式并追加
 	finalizePara := func() {
@@ -1788,15 +2262,50 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 		defColor := shapeDefault.Color
 		defBold := shapeDefault.Bold
 		if defSize == 0 && defColor == "" {
-			if ms, ok := ctx.txStyles[styleKey]; ok {
+			// round58：版式占位符 lstStyle 层（标题白色 F9F9F9 / 字号覆盖）
+			// 先于母版 txStyles；idx-only 占位符按 body 语义查
+			phKey := styleKey
+			if cur != nil {
+				if phKey == "body" && cur.Ph != "" {
+					phKey = cur.Ph // body/subTitle 精确匹配版式 ph 类型
+				} else if phKey == "body" && curPhIdx != "" {
+					phKey = "i:" + curPhIdx // idx-only 占位符按版式 i:idx 查
+				}
+			}
+			if ls, ok := ctx.layoutStyles[phKey]; ok {
 				if defSize == 0 {
-					defSize = ms.SizePt
+					defSize = ls.SizePt
 				}
 				if defColor == "" {
-					defColor = ms.Color
+					defColor = ls.Color
 				}
 				if !defBold {
-					defBold = ms.Bold
+					defBold = ls.Bold
+				}
+			}
+			// round58：版式级对齐/无符号（副标题 algn=ctr+buNone）
+			if curPara != nil && curPara.Align == "" {
+				if ls, ok := ctx.layoutStyles[phKey]; ok && ls.Align != "" {
+					curPara.Align = ls.Align
+				}
+			}
+			if curPara != nil && !paraBuNone {
+				if ls, ok := ctx.layoutStyles[phKey]; ok && ls.BuNone {
+					paraBuNone = true
+					curPara.Bullet = false
+				}
+			}
+			if defSize == 0 && defColor == "" {
+				if ms, ok := ctx.txStyles[styleKey]; ok {
+					if defSize == 0 {
+						defSize = ms.SizePt
+					}
+					if defColor == "" {
+						defColor = ms.Color
+					}
+					if !defBold {
+						defBold = ms.Bold
+					}
 				}
 			}
 		}
@@ -1812,9 +2321,38 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 				r.Bold = defBold
 			}
 		}
+		// round58：段落对齐默认 —— 段落未写 algn 时继承母版样式（bodyStyle/
+		// otherStyle lvl1pPr algn="l"），再兜底左对齐（OOXML 默认 algn=l；
+		// 之前前端兜底居中 → 全篇文字居中，MS 实为左对齐）
+		if curPara.Align == "" {
+			if a, ok := ctx.masterAligns[styleKey]; ok && a != "" {
+				curPara.Align = a
+			} else {
+				curPara.Align = "l"
+			}
+		}
+		// round58：段落级项目符号 —— 显式 buNone → 无符号；否则占位符
+		// 段落继承母版样式符号（bodyStyle buChar+buClr=accent2 橙点；
+		// 之前只认段落自身 buChar → 继承全丢，正文无橙点）
+		if !paraBuNone && !curPara.Bullet {
+			if mb, ok := ctx.masterBullets[styleKey]; ok && !mb.None && mb.Char != "" {
+				curPara.Bullet = true
+				if paraBuChar != "" {
+					curPara.BulletChar = paraBuChar
+				} else {
+					curPara.BulletChar = "•"
+				}
+				if paraBuClr != "" {
+					curPara.BulletColor = paraBuClr
+				} else if mb.Color != "" {
+					curPara.BulletColor = mb.Color
+				}
+			}
+		}
 		paras = append(paras, *curPara)
 		curPara = nil
 		paraHasRun = false
+		paraBuNone, paraBuChar, paraBuClr = false, "", ""
 	}
 
 	// finalizeShape 结束当前形状：由 paras 计算兼容的扁平字段
@@ -1822,7 +2360,44 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 		if cur == nil {
 			return
 		}
-		finalizePara()
+		// round58：p:style 引用回退 —— spPr 无显式填充/线色时用
+		// fillRef/lnRef 色（装饰形状的橙色/边框来自这里）
+		if cur.Fill == "" && styleFill != "" {
+			cur.Fill = styleFill
+		}
+		if cur.LineColor == "" && styleLn != "" {
+			cur.LineColor = styleLn
+			if cur.LineWpt == 0 {
+				cur.LineWpt = 1
+			}
+		}
+		if cur.Color == "" && styleFont != "" && cur.Text != "" {
+			cur.Color = styleFont
+		}
+		// round58：normAutofit —— MS 的自动缩字（fontScale）与行距折减。
+		// 对齐 MS 视觉：run 字号 × scale；行距按 (1 - lnSpcReduction)。
+		if autofitScale > 0 || autofitLnRed > 0 {
+			if autofitScale > 0 {
+				if cur.SizePt > 0 {
+				cur.SizePt = int(float64(cur.SizePt)*autofitScale + 0.5)
+				}
+				for pi := range paras {
+				for ri := range paras[pi].Runs {
+					if paras[pi].Runs[ri].SizePt > 0 {
+						paras[pi].Runs[ri].SizePt = int(float64(paras[pi].Runs[ri].SizePt)*autofitScale + 0.5)
+					}
+				}
+				}
+			}
+			if autofitLnRed > 0 {
+				base := cur.LineHeight
+				if base == 0 {
+				base = 1
+				}
+				cur.LineHeight = base * (1 - autofitLnRed)
+			}
+			}
+			finalizePara()
 		cur.Paras = paras
 		var sb strings.Builder
 		for pi, pa := range paras {
@@ -1945,6 +2520,9 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 				bodyVanchor = ""
 				sawOff, sawExt = false, false
 				curPhIdx = ""
+				styleFill, styleLn, styleFont = "", "", ""
+				inStyle, inFillRef, inLnRef, inFontRef = false, false, false, false
+				autofitScale, autofitLnRed = 0, 0
 			case "pic":
 				finalizeShape()
 				cur = &shapeDef{Kind: "pic"}
@@ -1964,6 +2542,7 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 				if cur != nil {
 					cur.Ph = attrVal(t, "type")
 					curPhIdx = attrVal(t, "idx")
+					cur.PhIdx = curPhIdx
 				}
 			case "xfrm":
 				// 形状/图片的几何容器
@@ -2213,12 +2792,57 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 			case "buChar":
 				if inPara && cur != nil && !cur.Numbered {
 					cur.Bullet = true
+					paraBuChar = attrVal(t, "char")
+					if paraBuChar == "" || paraBuChar == "\uf0b7" || paraBuChar == "\ue00a" {
+						// Wingdings 圆点字符 → 标准圆点（浏览器无 Wingdings 映射）
+						paraBuChar = "•"
+					}
+					if curPara != nil {
+						curPara.Bullet = true
+						curPara.BulletChar = paraBuChar
+					}
 					// marL=285750*(lvl+1) → 推断缩进层级
 					if cur.Indent == 0 && pPrMarL >= 2*285750 {
 						cur.Indent = int(pPrMarL/285750) - 1
 					}
 				}
+			case "style":
+				// p:style（在 spPr 后）—— fillRef/lnRef/fontRef 引用
+				inStyle = true
+			case "fillRef":
+				inFillRef = inStyle
+			case "lnRef":
+				inLnRef = inStyle
+			case "fontRef":
+				inFontRef = inStyle
+			case "normAutofit":
+				if v, e := strconv.Atoi(attrVal(t, "fontScale")); e == nil && v > 0 && v < 100000 {
+					autofitScale = float64(v) / 100000
+				}
+				if v, e := strconv.Atoi(attrVal(t, "lnSpcReduction")); e == nil && v > 0 && v < 100000 {
+					autofitLnRed = float64(v) / 100000
+				}
+			case "buNone":
+				// round58：段落显式无符号（优先于样式继承）
+				if inPara {
+					paraBuNone = true
+					if curPara != nil {
+						curPara.Bullet = false
+					}
+				}
+			case "buClr":
+				// round58：段落级符号颜色（pPr > buClr > 颜色）
+				if inPara {
+					buClrDepth = 1
+				}
 			case "buAutoNum":
+				if inPara {
+					if curPara != nil {
+						curPara.Numbered = true
+						curPara.Bullet = false
+					}
+					paraBuNone = true // 编号不走圆点继承
+				}
 				if inPara && cur != nil && !cur.Bullet {
 					cur.Numbered = true
 					if cur.Indent == 0 && pPrMarL >= 2*285750 {
@@ -2244,6 +2868,33 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 					}
 				}
 			case "srgbClr", "sysClr", "schemeClr", "prstClr":
+				// round58：p:style 引用色捕获（fillRef/lnRef/fontRef 的子颜色）
+				if inFillRef || inLnRef || inFontRef {
+					if c := readColorElement(dec, t, ctx.theme, ctx.clrMap); c != "" {
+						switch {
+						case inFillRef:
+							if styleFill == "" {
+								styleFill = c
+							}
+						case inLnRef:
+							if styleLn == "" {
+								styleLn = c
+							}
+						case inFontRef:
+							if styleFont == "" {
+								styleFont = c
+							}
+						}
+					}
+					continue
+				}
+				// round58：buClr 内的颜色是项目符号色（优先捕获）
+				if buClrDepth > 0 {
+					if c := readColorElement(dec, t, ctx.theme, ctx.clrMap); c != "" {
+						paraBuClr = c
+					}
+					continue
+				}
 				// 段落 pPr 里的颜色不存在；此处按 fillCtx 分派
 				switch {
 				case inEndPr:
@@ -2353,6 +3004,11 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 							cur.Vanchor = va
 						}
 					}
+					// round58：OOXML bodyPr anchor 缺省 = t（顶部）。
+					// 之前留空 → 前端垂直居中 → 正文整块下坠到页面中部（VLM 对比）
+					if cur.Vanchor == "" {
+						cur.Vanchor = "t"
+					}
 					finalizeShape()
 					finishChild(cur)
 					cur = nil
@@ -2402,6 +3058,7 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 					finalizePara()
 					inPara = false
 				}
+				buClrDepth = 0
 			case "r":
 				if inRun {
 					if curPara != nil && curRun != nil {

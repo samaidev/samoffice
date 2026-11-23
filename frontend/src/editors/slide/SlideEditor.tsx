@@ -6,6 +6,11 @@ import { SlideData, SlideShape } from '../../lib/openroute'
 
 interface Slide {
   id: number; title: string; content: string; bg: string
+  // round58：背景纹理图（bgRef → 主题 blipFill；tile 0 = stretch cover）
+  bgImg?: string; bgImgTileW?: number; bgImgTileH?: number
+  // round58：本页装饰形状（版式/母版非占位符形状 —— 每页版式不同，装饰不同；
+  // 之前用首页装饰渲染所有页 → 无装饰页出现多余分隔线）
+  deco?: ShapeItem[]
   layout: 'title' | 'section' | 'content' | 'blank'
   transition: string; notes: string
   shapes: ShapeItem[]; artTexts: ArtTextItem[]
@@ -138,12 +143,66 @@ const SHAPE_CLIP: Record<string, string> = {
 // 按 808x454 画布等比缩放，完整渲染：背景、形状（含 paras 逐 run 样式、
 // 填充/渐变/边框/裁剪几何）、图片、艺术字。修复打开 PPT 后左侧缩略图
 // 只显示裸文字、没有样式的问题。
-const SlideThumb = memo(function SlideThumb({ slide, width, aspect = 454 / 808 }: { slide: Slide; width: number; aspect?: number }) {
+// round58：CJK-Latin 自动间距（MS autoSpaceDE/DN 默认开 —— 中文与西文 run
+// 之间自动加约 1/8 em 空隙；XML 无空格但 MS 渲染有（"互联网 + 机遇"）。
+// 用 U+2009 thin space 近似；pre-wrap 不会折叠它。
+const CJK = /[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]/
+const LATIN = /[A-Za-z0-9+=$%.]/
+const autoSpaceRuns = (runs: { text: string }[]) => {
+  const out = runs.map(r => ({ ...r, text: r.text || '' }))
+  for (let i = 1; i < out.length; i++) {
+    const prev = out[i - 1].text
+    const cur = out[i].text
+    if (!prev || !cur) continue
+    const pLast = prev[prev.length - 1]
+    const cFirst = cur[0]
+    if (CJK.test(pLast) && LATIN.test(cFirst)) {
+      out[i].text = '\u2009' + cur
+    } else if (LATIN.test(pLast) && CJK.test(cFirst)) {
+      out[i - 1].text = prev + '\u2009'
+    }
+  }
+  return out
+}
+
+const bgImgStyle = (bgImg?: string, tileW?: number, tileH?: number): React.CSSProperties => {
+  if (!bgImg) return {}
+  const tiled = !!tileW && !!tileH
+  // round58 二轮：背景图已在解析侧做 duotone 像素映射，直接平铺
+  //（multiply 混合近似偏浅，VLM 对比背景过亮）
+  return {
+    backgroundImage: `url("${bgImg}")`,
+    backgroundRepeat: tiled ? 'repeat' : 'no-repeat',
+    backgroundSize: tiled ? `${tileW! / 1000}% ${tileH! / 1000}%` : 'cover',
+    backgroundPosition: 'center',
+  }
+}
+
+const SlideThumb = memo(function SlideThumb({ slide, width, aspect = 454 / 808, deco }: { slide: Slide; width: number; aspect?: number; deco?: ShapeItem[] }) {
   const K = width / 808
   const isDark = slide.bg === '#1e293b' || slide.bg === '#312e81'
   return (
     <div style={{ width, height: Math.round(width * aspect), overflow: 'hidden', position: 'relative', background: slide.bg, flex: '0 0 auto' }}>
+      {/* round58：背景纹理图（bgRef → 主题 blipFill + duotone，multiply 混合近似） */}
+      {slide.bgImg && <div style={{ position: 'absolute', inset: 0, backgroundColor: slide.bg, ...bgImgStyle(slide.bgImg, slide.bgImgTileW, slide.bgImgTileH) }} />}
       <div style={{ width: 808, height: Math.round(808 * aspect), transform: `scale(${K})`, transformOrigin: 'top left', position: 'relative', color: isDark ? '#f1f5f9' : '#0f172a' }}>
+        {/* round58：版式/母版装饰层（分隔线/圆点等非占位符形状） */}
+        {(deco || []).map((msh, i) => {
+          const isDecoPic = typeof msh.fill === 'string' && msh.fill.startsWith('url(')
+          return (
+            <div key={'d' + i} style={{
+              position: 'absolute', left: msh.x / 8, top: msh.y / 8, width: msh.w / 8, height: msh.h / 8,
+              transform: msh.rotation ? `rotate(${msh.rotation}deg)` : undefined,
+              background: isDecoPic ? msh.fill : (msh.gradient ? `linear-gradient(135deg, #${msh.gradient.split(',')[0]}, #${msh.gradient.split(',')[1]})` : msh.fill),
+              backgroundSize: isDecoPic ? 'cover' : undefined,
+              clipPath: msh.type === 'roundRect' ? 'inset(0 round 8px)' : (SHAPE_CLIP[msh.type] || (msh.type === 'ellipse' ? 'ellipse(50% 50% at 50% 50%)' : undefined)),
+              borderRadius: msh.type === 'ellipse' ? '50%' : undefined,
+              border: msh.stroke ? `${Math.max(1, msh.strokeWidth || 1)}px solid ${msh.stroke}` : 'none',
+              boxShadow: msh.shadow ? '0 4px 12px rgba(0,0,0,0.2)' : 'none',
+              overflow: 'hidden',
+            }} />
+          )
+        })}
         {/* 无形状时展示 title/content（新建的版式幻灯片） */}
         {!slide.shapes.length && (
           <div style={{ position: 'absolute', inset: 0, padding: 40, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -190,7 +249,9 @@ const SlideThumb = memo(function SlideThumb({ slide, width, aspect = 454 / 808 }
               paddingLeft: sh.indent ? `${sh.indent * 12}px` : undefined,
             }}>
               {hasParas ? sh.paras!.map((p, pi) => (
-                <div key={pi} style={{ width: '100%', textAlign: (p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : p.align === 'l' ? 'left' : undefined) as any }}>
+                <div key={pi} style={{ width: '100%', display: (p as any).bullet ? 'flex' : undefined, gap: (p as any).bullet ? 10 : undefined, textAlign: ((p as any).bullet ? undefined : (p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : 'left')) as any }}>
+                  {(p as any).bullet && <span style={{ color: (p as any).bulletColor || undefined, flex: '0 0 auto' }}>{(p as any).bulletChar || '•'}</span>}
+                  <span key={'rw' + pi} style={{ display: (p as any).bullet ? 'block' : undefined, flex: (p as any).bullet ? 1 : undefined, textAlign: (p as any).bullet ? ((p as any).align === 'c' ? 'center' : (p as any).align === 'r' ? 'right' : 'left') as any : undefined }}>
                   {(p.runs && p.runs.length ? p.runs : [{ text: '' } as any]).map((r, ri) => (
                     <span key={ri} style={{
                       color: r.color || undefined,
@@ -203,6 +264,7 @@ const SlideThumb = memo(function SlideThumb({ slide, width, aspect = 454 / 808 }
                       wordBreak: 'break-word',
                     }}>{r.text}</span>
                   ))}
+                  </span>
                 </div>
               )) : (sh.text ? (
                 sh.bullet
@@ -294,7 +356,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       const fill = isPic && s.img ? `url("${s.img}")` : (s.fill || '')
       const paras = (s.paras || []).map((p) => ({
         align: p.align,
-        runs: (p.runs || []).map((r) => ({
+        // round58：段落级项目符号（母版样式继承 —— 橙色圆点）
+        bullet: !!(p as any).bullet,
+        bulletChar: (p as any).bulletChar,
+        bulletColor: (p as any).bulletColor,
+        numbered: !!(p as any).numbered,
+        runs: autoSpaceRuns((p.runs || []).map((r) => ({
           text: r.text || '',
           color: r.color,
           fontSize: r.sizePt ? ptToPx(r.sizePt) : undefined,
@@ -302,15 +369,19 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           italic: r.italic,
           underline: r.underline,
           font: r.font,
-        })),
+        }))),
       }))
+      // round58：line 几何 —— 细长 rect 用描边渲染（填充空、border=线色）
+      const isLine = s.geom === 'line' || s.geom === 'straightConnector1'
       return {
-        type: isPic ? 'rect' : (GEOM_MAP[s.geom || ''] || 'rect'),
+        type: isPic ? 'rect' : (isLine ? 'rect' : (GEOM_MAP[s.geom || ''] || 'rect')),
         x: (s.x || 0) * SX,
         y: (s.y || 0) * SX,
         w: (s.cx || 0) * SX,
         h: (s.cy || 0) * SX,
-        fill,
+        fill: isLine ? '' : fill,
+        stroke: isLine ? (s.lineColor || s.fill || '#000000') : (s.lineColor || undefined),
+        strokeWidth: isLine ? Math.max(1, s.lineWpt || 1) : (s.lineWpt || undefined),
         text: isPic ? '' : (s.text || ''),
         shadow: !!s.shadow,
         glow: !!s.glow,
@@ -321,15 +392,15 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         fontBold: !!s.bold,
         fontColor: s.color || undefined,
         font: s.font || undefined,
-        textAlign: s.align === 'l' ? 'left' : s.align === 'r' ? 'right' : s.align === 'c' ? 'center' : undefined,
+        textAlign: s.align === 'l' ? 'left' : s.align === 'r' ? 'right' : s.align === 'c' ? 'center' : 'left',
         vAlign: s.vanchor === 't' ? 'top' : s.vanchor === 'b' ? 'bottom' : s.vanchor === 'ctr' ? 'middle' : undefined,
         paras: paras.length ? paras : undefined,
         noDecor: true,
-        stroke: s.lineColor || undefined,
-        strokeWidth: s.lineWpt || undefined,
         bullet: !!s.bullet,
         numbered: !!s.numbered,
-        lineHeight: s.lineHeight && s.lineHeight !== 1 ? s.lineHeight : undefined,
+        // round58：行距 —— MS 对 CJK 的单倍行距渲染 ≈1.25em（字体内 leading），
+        // 浏览器 normal ≈1.15 偏密（VLM 终审"行距过紧/字号偏小"观感）
+        lineHeight: s.lineHeight && s.lineHeight !== 1 ? s.lineHeight : 1.25,
         indent: s.indent || undefined,
         link: s.link || undefined,
         groupId: s.groupId || undefined,
@@ -347,6 +418,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
   const [slides, setSlides] = useState<Slide[]>(() => {
     if (initialSlides && initialSlides.length) {
+      // round58：背景纹理图共享（openroute 只随首页传，其余页引用同串）
+      const firstBgImgSlide = initialSlides.find(x => (x as any).bgImg) as any
+      const firstBgImg: string | undefined = firstBgImgSlide?.bgImg
       return initialSlides.map((s, i) => {
         const pageW = (s.pageW && s.pageW > 0 ? s.pageW : 12192000) as number
         const pageH = (s.pageH && s.pageH > 0 ? s.pageH : 6858000) as number
@@ -355,6 +429,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           title: s.title || (i === 0 ? t('slide.titleDefault') : t('slide.contentSlide')),
           content: s.content || (i === 0 ? t('slide.subtitleDefault') : t('slide.contentPlaceholder')),
           bg: s.bg || '#ffffff',
+          bgImg: (s as any).bgImg || firstBgImg,
+          bgImgTileW: (s as any).bgImgTileW,
+          bgImgTileH: (s as any).bgImgTileH,
+          deco: emuShapesToItems((s as any).masterShapes, pageW, pageH),
           layout: 'blank', // 文件打开的幻灯片全部内容都在 shapes 里，用 blank 布局避免默认标题/正文输入框与形状层重叠
           transition: (s as any).transition || (i === 0 ? 'fade' : ''),
           notes: s.notes || '',
@@ -428,7 +506,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               {papers.map((paperSlides, pi) => (
                 <div key={pi} className="print-paper" style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box', position: 'relative' }}>
                   <div className="flex flex-wrap justify-center items-start" style={{ gap: 8 }}>
-                    {paperSlides.map((s, i) => <SlideThumb key={i} slide={s} width={thumbW} aspect={aspect} />)}
+                    {paperSlides.map((s, i) => <SlideThumb key={i} slide={s} deco={s.deco} width={thumbW} aspect={aspect} />)}
                     {Array.from({ length: per - paperSlides.length }).map((_, k) => (
                       <div key={'e' + k} style={{ width: thumbW, height: (808 * aspect) * K2, flex: '0 0 auto' }} />
                     ))}
@@ -1916,7 +1994,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 style={{ borderColor: i === active ? 'var(--color-primary)' : 'var(--color-border)', background: 'var(--color-surface)' }}
               >
                 <div style={{ background: sl.bg }}>
-                  <SlideThumb slide={sl} width={240} aspect={deckH / deckW} />
+                  <SlideThumb slide={sl} deco={sl.deco} width={240} aspect={deckH / deckW} />
                 </div>
                 <div className="flex items-center justify-between px-2 py-1">
                   <span className="text-xs" style={{ color: 'var(--color-text)' }}>{i + 1}. {sl.title || `Slide ${i + 1}`}</span>
@@ -1941,7 +2019,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 style={{ borderColor: i === active ? 'var(--color-primary)' : 'var(--color-border)', background: 'var(--color-surface)' }}>
                 {/* 真实迷你画布：完整渲染形状/文字样式/图片，修复缩略图只剩裸文字 */}
                 <div className="rounded overflow-hidden relative" style={{ background: s.bg }}>
-                  <SlideThumb slide={s} width={thumbWidth} aspect={deckH / deckW} />
+                  <SlideThumb slide={s} deco={s.deco} width={thumbWidth} aspect={deckH / deckW} />
                   {s.animations.length > 0 && (
                     <div className="absolute top-0.5 right-0.5 text-[8px] px-1 rounded" style={{ background: 'rgba(0,0,0,0.35)', color: '#fff' }}>✨{s.animations.length}</div>
                   )}
@@ -1962,6 +2040,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           {/* slide-canvas：打印选择器锚点（PrintDialog printSelector 与 e2e 依赖） */}
           <div className="slide-canvas bg-white shadow-xl rounded-lg animate-fade-in relative overflow-hidden"
             style={{ width: 808, height: canvasH, background: current.bg, boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', transform: `scale(${zoom / 100})`, transformOrigin: 'center', flexShrink: 0 }}>
+            {/* round58：背景纹理层（bgRef → 主题 blipFill + duotone；multiply 近似双色调） */}
+            {current.bgImg && <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', ...bgImgStyle(current.bgImg, current.bgImgTileW, current.bgImgTileH) }} />}
             <div className="absolute inset-0 flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={() => setSelectedEl(null)}>
               {/* 文字内容 */}
               {current.layout === 'title' && (
@@ -1988,10 +2068,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: isDark ? '#f1f5f9' : '#334155' }} placeholder={t('slide.placeholder.blank')} />
               )}
 
-              {/* 母版装饰层（对齐 MS PPT：母版形状出现在每页幻灯片底层；母版视图下不重复渲染） */}
-              {!masterView && masterShapes.length > 0 && (
+              {/* 母版/版式装饰层（对齐 MS PPT：每页底层渲染该页版式的非占位符形状；
+                  母版视图下不重复渲染。round58 二轮：per-slide deco —— 之前首页
+                  装饰泄漏到所有页（无装饰页出现多余分隔线） */}
+              {!masterView && (current.deco || []).length > 0 && (
                 <div className="absolute inset-0" style={{ zIndex: 15, pointerEvents: 'none' }}>
-                  {masterShapes.map((msh, mi) => (
+                  {(current.deco || []).map((msh, mi) => (
                     <div key={'m' + mi} className="absolute" style={{
                       left: `${msh.x / 8}px`, top: `${msh.y / 8}px`, width: `${msh.w / 8}px`, height: `${msh.h / 8}px`,
                       transform: msh.rotation ? `rotate(${msh.rotation}deg)` : '',
@@ -2068,8 +2150,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                       <textarea ref={editAreaRef} defaultValue={sh.text} onBlur={commitEdit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); commitEdit() } }} className="w-full h-full outline-none bg-transparent resize-none" style={{ color: 'inherit', fontSize: 'inherit', fontWeight: 'inherit', textAlign: (sh.textAlign || 'center') as any, lineHeight: 'inherit', background: 'rgba(255,255,255,0.15)', padding: 2 }} />
                     ) : sh.text && !(sh.media && (sh.media.type === 'video' || sh.media.type === 'audio')) && (<span style={{ pointerEvents: 'none', display: 'block', textShadow: sh.fill && !sh.fill.startsWith('url') ? '0 1px 2px rgba(0,0,0,0.3)' : 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       {sh.paras && sh.paras.some(p => p.runs && p.runs.length) ? (
-                        sh.paras.map((p, pi) => (
-                          <div key={pi} style={{ width: '100%', textAlign: p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : p.align === 'l' ? 'left' : undefined }}>
+                        sh.paras.map((p, pi) => {
+                          const pnum = (p as any).numbered ? 1 + (sh.paras || []).slice(0, pi).filter((q: any) => q.numbered).length : 0
+                          const pbullet = (p as any).bullet || pnum > 0
+                          return (
+                          <div key={pi} style={{ width: '100%', display: pbullet ? 'flex' : undefined, gap: pbullet ? 10 : undefined, textAlign: pbullet ? undefined : (p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : 'left') }}>
+                            {pbullet && <span style={{ color: (p as any).bulletColor || undefined, flex: '0 0 auto' }}>{pnum > 0 ? `${pnum}.` : ((p as any).bulletChar || '•')}</span>}
+                            <span style={{ display: (p as any).bullet ? 'block' : undefined, flex: (p as any).bullet ? 1 : undefined, textAlign: (p as any).bullet ? (p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : 'left') : undefined }}>
                             {((p.runs && p.runs.length) ? p.runs : [{ text: '' } as any]).map((r, ri) => (
                               <span key={ri} style={{
                                 color: r.color || undefined,
@@ -2081,8 +2168,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                                 whiteSpace: 'pre-wrap',
                               }}>{r.text}</span>
                             ))}
+                            </span>
                           </div>
-                        ))
+                          )
+                        })
                       ) : sh.bullet
                         ? sh.text.split('\n').map((line, li) => <div key={li} style={{ display: 'flex', gap: 6 }}><span>•</span><span style={{ flex: 1 }}>{line || ' '}</span></div>)
                         : sh.numbered

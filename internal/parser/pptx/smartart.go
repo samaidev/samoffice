@@ -161,6 +161,11 @@ func parseDiagramDrawing(r io.Reader, theme themeScheme, frameX, frameY, frameCx
 	}
 
 	inSp, inLn, inSolidFill, inTxBody, inPara, inRun := false, false, false, false, false, false
+	// round58：solidFill 归属 —— dsp:spPr 内 = 形状填充/线色；txBody rPr 内 = 文字色。
+	// 之前无区分：时间轴文本标签的红色强调文字（rPr solidFill FF0000）被当成
+	// 形状填充 → 黑/红色块盖住文字（VLM 对比第 6/7 页）。
+	inSpPr := false
+	inRPr := false
 	var pendingScheme, pendingSrgb string
 
 	flushPara := func() {
@@ -235,6 +240,10 @@ func parseDiagramDrawing(r io.Reader, theme themeScheme, frameX, frameY, frameCx
 				if inSp && cur != nil {
 					cur.geom = dgmAttrVal(t, "prst")
 				}
+			case "spPr":
+				inSpPr = true
+			case "endParaRPr", "defRPr":
+				inRPr = true
 			case "solidFill":
 				inSolidFill = true
 				pendingScheme, pendingSrgb = "", ""
@@ -271,6 +280,7 @@ func parseDiagramDrawing(r io.Reader, theme themeScheme, frameX, frameY, frameCx
 					inRun = true
 				}
 			case "rPr":
+				inRPr = true
 				if inRun && cur != nil && cur.curRun != nil {
 					cur.curRun.SizePt = int(dgmAttrInt1(t, "sz") / 100)
 					cur.curRun.Bold = dgmAttrVal(t, "b") == "1"
@@ -283,6 +293,10 @@ func parseDiagramDrawing(r io.Reader, theme themeScheme, frameX, frameY, frameCx
 			}
 		case xml.EndElement:
 			switch t.Name.Local {
+			case "spPr":
+				inSpPr = false
+			case "rPr", "endParaRPr", "defRPr":
+				inRPr = false
 			case "sp":
 				flushShape()
 				inSp = false
@@ -299,9 +313,17 @@ func parseDiagramDrawing(r io.Reader, theme themeScheme, frameX, frameY, frameCx
 							if cur != nil {
 								cur.lnColor = rgb
 							}
-						} else if cur != nil {
-							cur.fill = rgb
+						} else if inRPr {
+							// round58：rPr 内 solidFill = 文字颜色
+							if cur != nil && cur.curRun != nil && cur.curRun.Color == "" {
+								cur.curRun.Color = rgb
+							}
+						} else if inSpPr || !inTxBody {
+							if cur != nil {
+								cur.fill = rgb
+							}
 						}
+						// 其余（style fillRef 等中间层）：忽略
 					}
 					inSolidFill = false
 					pendingScheme, pendingSrgb = "", ""

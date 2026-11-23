@@ -73,6 +73,9 @@ export interface SlideData {
   pageW?: number // 页面宽度 EMU
   pageH?: number // 页面高度 EMU
   masterShapes?: SlideShape[] // 母版形状（随首页携带；母版视图可编辑，对齐 MS PPT 母版）
+  bgImg?: string        // round58：背景纹理图（data URL，bgRef → 主题 blipFill）
+  bgImgTileW?: number   // 平铺宽（1/100000 %，0 = stretch）
+  bgImgTileH?: number
 }
 
 export interface OpenDecision {
@@ -148,6 +151,7 @@ export function isSlidePath(path: string): boolean {
 // pptx 解析器会把每张幻灯片存为 RawBlock{Data:{title,bullets,notes}}。
 export function rawBlocksToSlides(doc: any): SlideData[] | null {
   const blocks: any[] = (doc && doc.blocks) || []
+  let firstBgImg: string | undefined
   const slides: SlideData[] = []
   for (const b of blocks) {
     // RawBlock 序列化后只有 kind/data 字段（无 type 字段），故用 b.kind 判断
@@ -190,6 +194,11 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
             paras: Array.isArray(s.paras)
               ? s.paras.map((p: any) => ({
                   align: typeof p?.align === 'string' ? p.align : undefined,
+                  // round58：段落级项目符号（母版样式继承的橙色圆点）
+                  bullet: !!p?.bullet,
+                  bulletChar: typeof p?.bulletChar === 'string' ? p.bulletChar : undefined,
+                  bulletColor: typeof p?.bulletColor === 'string' ? p.bulletColor : undefined,
+                  numbered: !!p?.numbered,
                   runs: Array.isArray(p?.runs)
                     ? p.runs.map((r: any) => ({
                         text: typeof r?.text === 'string' ? r.text : undefined,
@@ -214,6 +223,11 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
         transition: typeof d.transition === 'string' ? d.transition : undefined,
         pageW: typeof d.pageW === 'number' ? d.pageW : undefined,
         pageH: typeof d.pageH === 'number' ? d.pageH : undefined,
+        // round58：背景纹理图（去重 —— 同一主题图只随首页传输，其余引用共享）
+        bgImg: (typeof (d as any).bgImg === 'string' && (d as any).bgImg) ? ((firstBgImg ??= (d as any).bgImg)) : undefined,
+        bgImgTileW: typeof (d as any).bgImgTileW === 'number' ? (d as any).bgImgTileW : undefined,
+        bgImgTileH: typeof (d as any).bgImgTileH === 'number' ? (d as any).bgImgTileH : undefined,
+        masterShapes: Array.isArray((d as any).masterShapes) ? (d as any).masterShapes : undefined,
       })
     }
   }

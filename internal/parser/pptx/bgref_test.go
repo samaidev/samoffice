@@ -79,7 +79,7 @@ func makeBgRefZip(t *testing.T) map[string]*zip.File {
 func TestBgRefDuotone(t *testing.T) {
 	files := makeBgRefZip(t)
 	theme := parseTheme(files)
-	master := parseMasterExtras(files, "ppt/slideMasters/slideMaster1.xml")
+	master := parseMasterExtras(files, "ppt/slideMasters/slideMaster1.xml", theme)
 	t.Logf("theme=%v clrMap=%v", theme, master.clrMap)
 	got := parseBgColor(files, "ppt/slideMasters/slideMaster1.xml", theme, master.clrMap)
 	if got == "" {
@@ -97,7 +97,7 @@ func TestBgRefDuotone(t *testing.T) {
 func TestBgRefSolid(t *testing.T) {
 	files := makeBgRefZip(t)
 	theme := parseTheme(files)
-	master := parseMasterExtras(files, "ppt/slideMasters/slideMaster1.xml")
+	master := parseMasterExtras(files, "ppt/slideMasters/slideMaster1.xml", theme)
 	// 改 idx=1001
 	masterWithSolid := bytes.Replace([]byte(masterWithBgRef), []byte(`idx="1003"`), []byte(`idx="1001"`), 1)
 	var buf bytes.Buffer
