@@ -1418,7 +1418,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
 
   // 应用填充：src = 选区，target = 拖拽覆盖区（含源），dir = 主方向
+  // ★ round59：copyMode 必须在【入口同步捕获】—— setData 的 updater 是异步执行的，
+  //   而 onUp 里 applyFill() 之后紧跟着 fillCopyMode.current=false（同步），
+  //   等 React 真正执行 updater 时 ref 已被重置 —— Ctrl 纯复制从未生效过（round23 起），
+  //   Ctrl+拖拽始终走累加分支（用户报告"只能累加不能复制"的根因）。
   const applyFill = (r1: number, c1: number, r2: number, c2: number, srcR: number, srcC: number) => {
+    const copyMode = fillCopyMode.current
     pushHistory()
     setData(d => {
       const nd = { ...d }
@@ -1436,7 +1441,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             : selection.c1 + mod(c - selection.c1, Math.abs(selection.c2 - selection.c1) + 1)
           const srcCell = nd[`${sr}-${sc}`] || { value: '' }
           let val: string
-          if (srcR !== 0 && selection.r1 === selection.r2 && selection.c1 === selection.c2 && !fillCopyMode.current) {
+          if (srcR !== 0 && selection.r1 === selection.r2 && selection.c1 === selection.c2 && !copyMode) {
             // 纵向单格填充 → 数字累加
             const base = parseFloat((nd[`${selection.r1}-${selection.c1}`]?.value || '').trim())
             const isNum = !isNaN(base) && /^-?\d+(\.\d+)?$/.test((nd[`${selection.r1}-${selection.c1}`]?.value || '').trim())
@@ -1444,7 +1449,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               const idx = srcR > 0 ? r - selection.r1 - 1 : selection.r1 - r - 1
               val = fmtNum(base + (idx + 1))
             } else val = srcCell.value
-          } else if (srcC !== 0 && selection.r1 === selection.r2 && selection.c1 === selection.c2 && !fillCopyMode.current) {
+          } else if (srcC !== 0 && selection.r1 === selection.r2 && selection.c1 === selection.c2 && !copyMode) {
             // 横向单格填充 → 数字累加
             const raw = (nd[`${selection.r1}-${selection.c1}`]?.value || '').trim()
             const base = parseFloat(raw)
@@ -1453,26 +1458,30 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               const idx = srcC > 0 ? c - selection.c1 - 1 : selection.c1 - c - 1
               val = fmtNum(base + (idx + 1))
             } else val = srcCell.value
-          } else if (!fillCopyMode.current) {
-            // 多格序列填充（按拖拽方向的行/列序列）
+          } else if (!copyMode) {
+            // 多格序列填充（round59：按列/按行【独立】取序列 —— MS Excel 行为：
+            // A列=1,2 B列=10,20 下拖 → A 延续 3,4…，B 延续 30,40…。
+            // 旧版只读首列/首行的序列，把同一个生成值糊给所有列/行）
             const horiz = srcC !== 0
-            if (horiz) {
-              const seq: string[] = []
-              for (let cc = selection.c1; cc <= selection.c2; cc++) seq.push(nd[`${selection.r1}-${cc}`]?.value || '')
-              const gen = makeFillSeries(seq)
-              if (gen) {
-                const idx = c < selection.c1 ? selection.c1 - c - 1 : c - selection.c2 - 1
-                val = gen(idx)
-              } else val = srcCell.value
-            } else {
-              const seq: string[] = []
-              for (let rr = selection.r1; rr <= selection.r2; rr++) seq.push(nd[`${rr}-${selection.c1}`]?.value || '')
-              const gen = makeFillSeries(seq)
-              if (gen) {
-                const idx = r < selection.r1 ? selection.r1 - r - 1 : r - selection.r2 - 1
-                val = gen(idx)
-              } else val = srcCell.value
+            // 序列生成器按"线"缓存：纵向=每列一条，横向=每行一条
+            const genCache = new Map<number, ReturnType<typeof makeFillSeries>>()
+            const seqGen = (line: number) => {
+              if (!genCache.has(line)) {
+                const seq: string[] = []
+                if (horiz) {
+                  for (let cc = selection.c1; cc <= selection.c2; cc++) seq.push(nd[`${line}-${cc}`]?.value || '')
+                } else {
+                  for (let rr = selection.r1; rr <= selection.r2; rr++) seq.push(nd[`${rr}-${line}`]?.value || '')
+                }
+                genCache.set(line, makeFillSeries(seq))
+              }
+              return genCache.get(line)!
             }
+            const gen = seqGen(horiz ? r : c)
+            const idx = horiz
+              ? (c < selection.c1 ? selection.c1 - c - 1 : c - selection.c2 - 1)
+              : (r < selection.r1 ? selection.r1 - r - 1 : r - selection.r2 - 1)
+            val = gen ? gen(idx) : srcCell.value
           } else val = srcCell.value
           const existing = nd[`${r}-${c}`] || { value: '' }
           nd[`${r}-${c}`] = { ...existing, value: val, formula: '' }
@@ -2749,11 +2758,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </RibbonGroup>
           <RibbonGroup label={t('sheet.illustration')}>
             {/* 真实浮动图片：选中文件后锚定当前活动格，网格上绝对定位渲染，可选中删除，保存时写回 xlsx */}
-            <RibbonButton icon="🖼" label={t('sheet.image')} onClick={() => {
+            <RibbonButton icon="🖼" label={t('sheet.image')} data-testid="sheet-btn-image" onClick={() => {
+              // ★ round59 修复：input 必须【挂到 DOM】再 click() —— 游离节点在
+              // Chromium/WebView2 里不弹文件选择框（点击被静默吞掉），图片功能完全无法用。
+              // 用完（选中或 60s 超时）移除，避免残留隐藏节点。
               const input = document.createElement('input')
               input.type = 'file'
               input.accept = 'image/*'
+              input.style.display = 'none'
               input.onchange = () => {
+                input.remove()
                 const file = input.files?.[0]
                 if (!file) return
                 const reader = new FileReader()
@@ -2771,7 +2785,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 }
                 reader.readAsDataURL(file)
               }
+              document.body.appendChild(input)
               input.click()
+              setTimeout(() => input.isConnected && input.remove(), 60_000)
             }} title={tf('sheet.imageTitle', '插入浮动图片（锚定当前单元格）')} />
           </RibbonGroup>
           <RibbonGroup label={t('sheet.function')}>
@@ -3454,9 +3470,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                                 className="absolute right-0 top-0 h-full w-4 flex items-center justify-center text-[9px] cursor-pointer"
                                 style={{ color: 'var(--color-text-muted)' }}>▾</span>
                             )}
-                            {/* round23: 填充柄（MS Excel 右下角方块）—— 活动格=选区右下角且不在编辑态。
-                                多格选区同样支持（Excel 行为）：源区序列按拖拽方向延续/循环 */}
-                            {isActive && r === Math.max(selection.r1, selection.r2) && c === Math.max(selection.c1, selection.c2) && !editCell && (
+                            {/* round23: 填充柄（MS Excel 右下角方块）。
+                                ★ round59：柄挂【选区右下角】而不是活动格 —— MS Excel 里
+                                无论从哪个方向框选，柄始终在选区右下角；旧版要求
+                                active === 右下角，从左上往右下拖选时活动格停在起点，
+                                柄不出现 —— 用户报告"框选两个格子没有填充柄可拉"。
+                                行/列选区不显示柄（与 Excel 单元格选区语义一致）。 */}
+                            {selection.mode === 'cell' && r === Math.max(selection.r1, selection.r2) && c === Math.max(selection.c1, selection.c2) && !editCell && (
                               <span
                                 data-fill-handle
                                 title="拖拽填充（数字自动累加，Ctrl 纯复制）"
@@ -3487,7 +3507,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             style={{
               position: 'absolute',
               left: colLeft(im.col) + 2,
-              top: rowTop(im.row) + 2,
+              // ★ round59：纵向要加表头高度 —— rowTop 只累加了数据行，而图片层定位
+              // 基准（gridRef div）里 thead 占 32px（列标头行，同 sticky 冻结用的
+              // frozenTop = 32 + rowTop(r) 约定）。缺这 32px 图片整体上移一格高度，
+              // 锚定 A1 的图直接画到列标头上 —— 用户报告"图片显示在表格外面"。
+              top: rowTop(im.row) + (showHeadings ? 32 : 0) + 2,
               width: im.width || 'auto',
               height: im.height || 'auto',
               maxWidth: 'none',

@@ -80,3 +80,7 @@ scripts/e2e/ppt-cmp/ref.pptx
 scripts/e2e/ppt-cmp/zoom-*.png
 scripts/e2e/ppt-cmp/probe.mjs
 scripts/patches/
+
+# round59 探针产物
+scripts/e2e-web/r59-shots/
+scripts/e2e-web/r59-results.json
