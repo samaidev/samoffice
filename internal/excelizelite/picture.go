@@ -309,6 +309,53 @@ func (f *File) AddPictureFromBytes(sheet, cell string, pic *Picture) error {
 	return err
 }
 
+// RegisterPictureMedia registers an image as a media part referenced by the
+// drawing part of the given sheet, and returns the drawing relationship id
+// ("rIdN") together with the drawing part path. Unlike AddPictureFromBytes
+// it neither decodes the image nor writes an anchor: the caller owns the
+// drawing markup (SamOffice rewrites the anchors as full DrawingML).
+func (f *File) RegisterPictureMedia(sheet string, file []byte, ext string) (string, string, error) {
+	ext = strings.ToLower(ext)
+	if _, ok := supportedImageTypes[ext]; !ok {
+		return "", "", ErrImgExt
+	}
+	f.mu.Lock()
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		f.mu.Unlock()
+		return "", "", err
+	}
+	f.mu.Unlock()
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	drawingID := f.countDrawings() + 1
+	drawingXML := "xl/drawings/drawing" + strconv.Itoa(drawingID) + ".xml"
+	drawingID, drawingXML = f.prepareDrawing(ws, drawingID, sheet, drawingXML)
+	drawingRels := "xl/drawings/_rels/drawing" + strconv.Itoa(drawingID) + ".xml.rels"
+	mediaStr := ".." + strings.TrimPrefix(f.addMedia(file, ext), "xl")
+	var drawingRID int
+	if rels, _ := f.relsReader(drawingRels); rels != nil {
+		for _, rel := range rels.Relationships {
+			if rel.Type == SourceRelationshipImage && rel.Target == mediaStr {
+				drawingRID, _ = strconv.Atoi(strings.TrimPrefix(rel.ID, "rId"))
+				break
+			}
+		}
+	}
+	if drawingRID == 0 {
+		drawingRID = f.addRels(drawingRels, SourceRelationshipImage, mediaStr, "")
+	}
+	// Make sure the drawing part itself exists (empty until the caller fills it).
+	if _, _, err = f.drawingParser(drawingXML); err != nil {
+		return "", "", err
+	}
+	if err = f.addContentTypePart(drawingID, "drawings"); err != nil {
+		return "", "", err
+	}
+	f.addSheetNameSpace(sheet, SourceRelationship)
+	return "rId" + strconv.Itoa(drawingRID), drawingXML, nil
+}
+
 // addSheetLegacyDrawing provides a function to add legacy drawing element to
 // xl/worksheets/sheet%d.xml by given worksheet name and relationship index.
 func (f *File) addSheetLegacyDrawing(sheet string, rID int) {

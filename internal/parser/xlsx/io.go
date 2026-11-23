@@ -1,14 +1,10 @@
 package xlsx
 
 import (
+	"archive/zip"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"math"
 	"os"
 	"regexp"
@@ -58,6 +54,9 @@ type sheetJSON struct {
 	Cells map[string]cellJSON `json:"cells"`
 	// ColWidths 列宽表：key 为 0 基列号字符串，value 为像素宽（前端约定默认 80px 不写入）
 	ColWidths map[string]float64 `json:"colWidths,omitempty"`
+	// RowHeights 行高表：key 为 0 基行号字符串，value 为像素高。round60 起行高随行持久化，
+	// 浮动图片的两单元格锚点才能在前端按原样还原。
+	RowHeights map[string]float64 `json:"rowHeights,omitempty"`
 	// Freeze 冻结窗格单元格（如 "C3" 表示冻结上方 2 行与左侧 2 列），空表示未冻结
 	Freeze string `json:"freeze,omitempty"`
 	// PrintTitleRows 打印标题行数（_xlnm.Print_Titles 的 $1:$N；0=不重复）
@@ -66,16 +65,7 @@ type sheetJSON struct {
 	Images []imageJSON `json:"images,omitempty"`
 }
 
-// imageJSON 描述一张浮动图片：锚定单元格（0 基 row/col）、原始字节 base64、
-// 扩展名（不含点，如 png/jpeg/gif）与显示像素尺寸。
-type imageJSON struct {
-	Row    int    `json:"row"`
-	Col    int    `json:"col"`
-	Base64 string `json:"base64"`
-	Ext    string `json:"ext"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-}
+// imageJSON（浮动图片完整模型）round60 起迁移到 pictures.go。
 
 type workbookJSON struct {
 	Sheets []sheetJSON `json:"sheets"`
@@ -115,6 +105,12 @@ func ReadXLSXBytes(data []byte) (string, error) {
 	loadStyleCaches(f, data)
 	defer clearStyleCaches(f)
 
+	// round60：浮动图片与行高直接从原始 zip 解析（不经 excelize 的有损摘要）
+	var zi *zipIndex
+	if zr, zerr := zip.NewReader(bytes.NewReader(data), int64(len(data))); zerr == nil {
+		zi = newZipIndex(zr)
+	}
+
 	// 收集每个 sheet 的合并区域
 	mergeMap := map[string][][2][2]int{} // sheetName -> [][2]r,c  (start,end)
 	for _, name := range f.GetSheetList() {
@@ -131,7 +127,7 @@ func ReadXLSXBytes(data []byte) (string, error) {
 	}
 
 	out := workbookJSON{}
-	for _, name := range f.GetSheetList() {
+	for si, name := range f.GetSheetList() {
 		sj := sheetJSON{Name: name, Cells: map[string]cellJSON{}}
 		rows, err := f.GetRows(name)
 		if err != nil {
@@ -288,8 +284,12 @@ func ReadXLSXBytes(data []byte) (string, error) {
 		sj.Cols = maxC + 3
 		// 读取 list 类型数据验证，写入覆盖单元格的 valid 字段
 		applyValidations(f, name, &sj)
-		// 读取列宽 / 冻结窗格 / 浮动图片（新增的 sheet 级元数据）
+		// 读取列宽 / 冻结窗格 / 打印标题行（sheet 级元数据；图片与行高由 drawing 直读）
 		readSheetExtras(f, name, &sj)
+		if zi != nil {
+			readSheetPictures(zi, f, si, &sj)
+			readRowHeights(zi, si, &sj)
+		}
 		out.Sheets = append(out.Sheets, sj)
 	}
 
@@ -432,50 +432,8 @@ func readSheetExtras(f *excelize.File, sheet string, sj *sheetJSON) {
 	}
 	// ---- 打印标题行：_xlnm.Print_Titles（Scope=本表）形如 Sheet1!$1:$2 → 行数 2 ----
 	sj.PrintTitleRows = readPrintTitleRows(f, sheet)
-	// ---- 浮动图片：GetPictureCells 枚举锚点，GetPictures 取字节与显示尺寸 ----
-	cells, err := f.GetPictureCells(sheet)
-	if err != nil {
-		return
-	}
-	for _, cellRef := range cells {
-		pics, perr := f.GetPictures(sheet, cellRef)
-		if perr != nil {
-			continue
-		}
-		col, row, cerr := excelize.CellNameToCoordinates(cellRef)
-		if cerr != nil {
-			continue
-		}
-		for _, pic := range pics {
-			if len(pic.File) == 0 {
-				continue
-			}
-			ext := strings.TrimPrefix(strings.ToLower(pic.Extension), ".")
-			if ext == "jpg" {
-				ext = "jpeg"
-			}
-			// 显示尺寸 = 原始尺寸 × ScaleX/Y（excelize 读回时已算好缩放）
-			w, h := 0, 0
-			if cfg, _, derr := image.DecodeConfig(bytes.NewReader(pic.File)); derr == nil {
-				w = cfg.Width
-				h = cfg.Height
-			}
-			if w > 0 && pic.Format != nil && pic.Format.ScaleX > 0 {
-				w = int(math.Round(float64(w) * pic.Format.ScaleX))
-			}
-			if h > 0 && pic.Format != nil && pic.Format.ScaleY > 0 {
-				h = int(math.Round(float64(h) * pic.Format.ScaleY))
-			}
-			sj.Images = append(sj.Images, imageJSON{
-				Row:    row - 1,
-				Col:    col - 1,
-				Base64: base64.StdEncoding.EncodeToString(pic.File),
-				Ext:    ext,
-				Width:  w,
-				Height: h,
-			})
-		}
-	}
+	// 浮动图片 round60 起由 readSheetPictures 直接解析 drawing XML（含锚点/效果/裁剪），
+	// 不再走 GetPictureCells + GetPictures 的有损摘要。
 }
 
 // defaultColWidthChars 是 xlsx 未显式设置列宽时的默认字符宽（8.43 ≈ 64px）。
@@ -515,6 +473,9 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 
 	// 删除默认 Sheet1（后面会按数据重建）
 	f.SetSheetName("Sheet1", "__tmp__")
+
+	// round60：drawing 部件 → 图片锚点计划（registerPictures 填充，最后统一重写）
+	picPlans := map[string][]picPlan{}
 
 	sheetNames := f.GetSheetList()
 	first := true
@@ -610,13 +571,13 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 
 		// 数据验证（下拉列表）：valid 字段写为 list 类型 DataValidation
 		writeValidations(f, sheetName, &sj)
-		// 列宽 / 冻结窗格 / 打印标题行 / 浮动图片（sheet 级元数据）
+		// 列宽 / 行高 / 冻结窗格 / 打印标题行（sheet 级元数据）
 		writeColWidths(f, sheetName, &sj)
+		writeRowHeights(f, sheetName, &sj)
 		writeFreeze(f, sheetName, &sj)
 		writePrintTitles(f, sheetName, &sj)
-		if err := writeImages(f, sheetName, &sj); err != nil {
-			return nil, err
-		}
+		// 浮动图片：excelize 只登记媒体部件，锚点 XML 在写出后统一重写为完整 DrawingML
+		registerPictures(f, sheetName, &sj, picPlans)
 	}
 
 	// 若仍有空的 __tmp__ 残留则删除
@@ -628,7 +589,14 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("save: %w", err)
 	}
-	return buf.Bytes(), nil
+	out := buf.Bytes()
+	// round60：把各 drawing 部件替换为完整 DrawingML（锚点/旋转/裁剪/效果）
+	if len(picPlans) > 0 {
+		if out, err = rewriteDrawings(out, picPlans); err != nil {
+			return nil, fmt.Errorf("rewrite drawings: %w", err)
+		}
+	}
+	return out, nil
 }
 
 // writeColWidths 把前端列宽表（key 为 0 基列号字符串，value 为 px）写回 xlsx。
@@ -747,51 +715,9 @@ func writeFreeze(f *excelize.File, sheet string, sj *sheetJSON) {
 	})
 }
 
-// writeImages 把前端浮动图片列表写回 xlsx：base64 解码后经 AddPictureFromBytes
-// 写入，缩放比例按目标尺寸/原始尺寸计算。解码失败或扩展名不支持时跳过该图。
-func writeImages(f *excelize.File, sheet string, sj *sheetJSON) error {
-	for _, im := range sj.Images {
-		if im.Base64 == "" || im.Row < 0 || im.Col < 0 {
-			continue
-		}
-		raw, err := base64.StdEncoding.DecodeString(im.Base64)
-		if err != nil || len(raw) == 0 {
-			continue
-		}
-		ext := strings.ToLower(strings.TrimSpace(im.Ext))
-		if ext == "" {
-			ext = "png"
-		}
-		if !strings.HasPrefix(ext, ".") {
-			ext = "." + ext
-		}
-		if _, ok := writableImageExts[ext]; !ok {
-			continue // webp/svg 等当前不支持写入的格式
-		}
-		if ext == ".jpg" {
-			ext = ".jpeg"
-		}
-		cfg, _, derr := image.DecodeConfig(bytes.NewReader(raw))
-		scaleX, scaleY := 1.0, 1.0
-		if derr == nil && cfg.Width > 0 && cfg.Height > 0 && im.Width > 0 && im.Height > 0 {
-			scaleX = float64(im.Width) / float64(cfg.Width)
-			scaleY = float64(im.Height) / float64(cfg.Height)
-		}
-		cellRef, cerr := excelize.CoordinatesToCellName(im.Col+1, im.Row+1)
-		if cerr != nil {
-			continue
-		}
-		pic := &excelize.Picture{
-			Extension: ext,
-			File:      raw,
-			Format:    &excelize.GraphicOptions{ScaleX: scaleX, ScaleY: scaleY},
-		}
-		if err := f.AddPictureFromBytes(sheet, cellRef, pic); err != nil {
-			return fmt.Errorf("add picture at %s: %w", cellRef, err)
-		}
-	}
-	return nil
-}
+// writeImages 已被 round60 的 registerPictures + rewriteDrawings 取代：
+// excelize 的 GraphicOptions 表达不了旋转/裁剪/效果/几何形状，锚点 XML 由
+// pictures_write.go 生成完整 DrawingML 后重写进 zip。
 
 func contains(list []string, s string) bool {
 	for _, x := range list {
