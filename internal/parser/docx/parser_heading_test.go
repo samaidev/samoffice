@@ -26,7 +26,7 @@ func TestParseHeadingStyle(t *testing.T) {
   </w:body>
 </w:document>`
 
-	blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]string{})
+	blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]footnoteParsed{})
 	if len(blocks) != 3 {
 		t.Fatalf("expected 3 blocks, got %d (warns=%v)", len(blocks), warns)
 	}

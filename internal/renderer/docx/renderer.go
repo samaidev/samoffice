@@ -12,6 +12,7 @@
 package docx
 
 import (
+	"math"
         "archive/zip"
         "bytes"
         "encoding/base64"
@@ -105,7 +106,8 @@ func (r *Renderer) Render(doc *core.Document) ([]byte, error) {
                 return nil, err
         }
         // word/footnotes.xml（分隔符脚注 + 正文脚注内容；renderFootnoteRef 输出 w:footnoteReference）
-        if err := writeZip(w, "word/footnotes.xml", renderFootnotesXML(footnotes)); err != nil {
+        // round55：脚注区条目（编辑后文本+样式）优先于引用携带的旧文本
+        if err := writeZip(w, "word/footnotes.xml", renderFootnotesXML(footnotes, footnoteSectionItems(doc))); err != nil {
                 return nil, err
         }
         // word/comments.xml（批注正文；正文由 renderText 输出 commentRangeStart/End + commentReference）
@@ -1708,8 +1710,29 @@ func renderFootnoteRef(sb *strings.Builder, num int) {
         sb.WriteString(`"/></w:r>`)
 }
 
+// footnoteSectionItems 收集文档脚注区（FootnoteSection）的条目，按 num 索引 ——
+// 用户在前端编辑脚注文本/样式后，条目是权威内容（引用的 content 是打开时的旧文）。
+func footnoteSectionItems(doc *core.Document) map[int]core.FootnoteItem {
+        out := map[int]core.FootnoteItem{}
+        for _, b := range doc.Blocks {
+                if fs, ok := b.(core.FootnoteSection); ok {
+                        for _, it := range fs.Items {
+                                out[it.Num] = it
+                        }
+                } else if fs, ok := b.(*core.FootnoteSection); ok && fs != nil {
+                        for _, it := range fs.Items {
+                                out[it.Num] = it
+                        }
+                }
+        }
+        return out
+}
+
 // collectFootnotes 按文档顺序收集正文中的脚注引用（按 num 去重，保留首次内容），
 // 供 renderFootnotesXML 生成 word/footnotes.xml。
+// round55：脚注区（FootnoteSection）的条目是用户编辑后的权威内容 —— 以条目
+// 文本/样式覆盖引用携带的旧文本（否则前端改了脚注、保存后仍是旧文），引用
+// 仅在无对应条目时兜底。样式（粗体/斜体/下划线/字号/颜色）写入 w:rPr。
 func collectFootnotes(doc *core.Document) []core.FootnoteRef {
         seen := map[int]bool{}
         out := []core.FootnoteRef{}
@@ -1732,7 +1755,37 @@ func collectFootnotes(doc *core.Document) []core.FootnoteRef {
 
 // renderFootnotesXML 生成 word/footnotes.xml：
 // 分隔符（id=-1）、续接分隔符（id=0）与正文脚注（id=1..N，内容为 FootnoteRef.Content）。
-func renderFootnotesXML(items []core.FootnoteRef) string {
+// round55：secItems 为脚注区条目（num → 编辑后的文本+样式），优先于引用内容；
+// 样式输出为脚注正文 run 的 w:rPr（粗体/斜体/下划线/半磅字号/十六进制颜色）。
+func renderFootnotesXML(items []core.FootnoteRef, secItems map[int]core.FootnoteItem) string {
+        if secItems == nil {
+                secItems = map[int]core.FootnoteItem{}
+        }
+        rprOf := func(st *core.FootnoteStyle) string {
+                if st == nil {
+                        return ""
+                }
+                var sb strings.Builder
+                if st.Bold {
+                        sb.WriteString("<w:b/>")
+                }
+                if st.Italic {
+                        sb.WriteString("<w:i/>")
+                }
+                if st.Underline {
+                        sb.WriteString(`<w:u w:val="single"/>`)
+                }
+                if st.FontSize > 0 {
+                        fmt.Fprintf(&sb, `<w:sz w:val="%d"/>`, int(math.Round(st.FontSize*2)))
+                }
+                if st.Color != "" {
+                        fmt.Fprintf(&sb, `<w:color w:val="%s"/>`, strings.ToUpper(strings.TrimPrefix(st.Color, "#")))
+                }
+                if sb.Len() == 0 {
+                        return ""
+                }
+                return "<w:rPr>" + sb.String() + "</w:rPr>"
+        }
         var sb strings.Builder
         sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`)
@@ -1741,12 +1794,35 @@ func renderFootnotesXML(items []core.FootnoteRef) string {
         for _, it := range items {
                 fmt.Fprintf(&sb, `<w:footnote w:id="%d">`, it.Num)
                 sb.WriteString(`<w:p><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r>`)
-                if it.Content != "" {
-                        sb.WriteString(`<w:r><w:t xml:space="preserve">` + escapeXML(" "+it.Content) + `</w:t></w:r>`)
+                // 脚注区条目（编辑后内容+样式）优先；无条目时回退引用 content
+                content, style := it.Content, (*core.FootnoteStyle)(nil)
+                if si, ok := secItems[it.Num]; ok {
+                        content = fnItemText(si.Inline)
+                        if content == "" {
+                                content = it.Content
+                        }
+                        style = si.Style
+                }
+                if content != "" {
+                        sb.WriteString(`<w:r>` + rprOf(style) + `<w:t xml:space="preserve">` + escapeXML(" "+content) + `</w:t></w:r>`)
                 }
                 sb.WriteString(`</w:p></w:footnote>`)
         }
         sb.WriteString(`</w:footnotes>`)
+        return sb.String()
+}
+
+// fnItemText 提取行内序列的纯文本（FootnoteItem.Inline → 文本）。
+// 与 writer_roundtrip_test.go 的测试助手 inlineText 同名冲突，改名。
+func fnItemText(ins []core.Inline) string {
+        var sb strings.Builder
+        for _, in := range ins {
+                if t, ok := in.(core.Text); ok {
+                        sb.WriteString(t.Content)
+                } else if t, ok := in.(*core.Text); ok && t != nil {
+                        sb.WriteString(t.Content)
+                }
+        }
         return sb.String()
 }
 

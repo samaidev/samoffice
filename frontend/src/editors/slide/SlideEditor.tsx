@@ -1,6 +1,6 @@
 import { useState, useMemo, memo, useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
-import { PrintDialog } from '../../components/PrintDialog'
+import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
 import { SlideData, SlideShape } from '../../lib/openroute'
 
@@ -1814,12 +1814,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           const showOutline = settings.pptContent === 'outline'
           // 网格列数（对标 MS PPT 讲义布局：2→1列, 3→3列, 4→2列, 6→3列, 9→3列）
           const cols = per <= 1 ? 1 : per === 2 ? 1 : per === 3 ? 3 : per === 4 ? 2 : per === 6 ? 3 : 3
-          // 缩略图缩放（画布 808x454 → 约 86px 宽）
-          const K = 0.106
-
+          // 单张幻灯片缩略图缩放比（画布 808 宽 → 纸张格宽，见下方 K2）
           // 单张幻灯片缩略图（复用 SlideThumb，与主画布/左侧面板一致的真实渲染）
           const aspect = deckH / deckW
-          const SlideMini = ({ slide }: { slide: Slide }) => <SlideThumb slide={slide} width={808 * K} aspect={aspect} />
 
           if (showNotes) {
             return (
@@ -1844,19 +1841,29 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           }
 
           // 每页纸排 per 张，多页纸纵向堆叠（对标 MS PPT 讲义视图）
+          // round55：纸张卡片按【真实纸张】尺寸渲染（PAPER_SIZES × 方向 × 1.5 预览
+          // 缩放 + settings.margins 边距）—— 之前是固定 padding 的小卡片，纸张
+          // 大小/横竖切换对预览毫无作用（用户报告：打印预览按钮全无效）。
           const papers: Slide[][] = []
           for (let i = 0; i < slides.length; i += per) papers.push(slides.slice(i, i + per))
+          const paper = PAPER_SIZES[settings.paperSize] || PAPER_SIZES.A4
+          const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
+          const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
+          const pad = `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`
+          const cellW = (pageWpx - (settings.margins.left + settings.margins.right) * 1.5) / cols
+          const thumbW = Math.max(40, cellW - 8)
+          const K2 = thumbW / 808
           return (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {papers.map((paper, pi) => (
-                <div key={pi} style={{ background: '#fff', border: '1px solid #d1d5db', boxShadow: '0 1px 3px rgba(0,0,0,0.12)', padding: 8, position: 'relative' }}>
-                  <div className="flex flex-wrap justify-center" style={{ gap: 6, gridTemplateColumns: `repeat(${cols}, auto)` }}>
-                    {paper.map((s, i) => <SlideMini key={i} slide={s} />)}
-                    {Array.from({ length: per - paper.length }).map((_, k) => (
-                      <div key={'e' + k} style={{ width: 808 * K, height: (808 * aspect) * K, flex: '0 0 auto' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '8px 0 16px' }}>
+              {papers.map((paperSlides, pi) => (
+                <div key={pi} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box', position: 'relative' }}>
+                  <div className="flex flex-wrap justify-center items-start" style={{ gap: 8 }}>
+                    {paperSlides.map((s, i) => <SlideThumb key={i} slide={s} width={thumbW} aspect={aspect} />)}
+                    {Array.from({ length: per - paperSlides.length }).map((_, k) => (
+                      <div key={'e' + k} style={{ width: thumbW, height: (808 * aspect) * K2, flex: '0 0 auto' }} />
                     ))}
                   </div>
-                  <div style={{ textAlign: 'center', fontSize: 9, color: '#6b7280', marginTop: 4 }}>- {pi + 1} -</div>
+                  <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 6 }}>- {pi + 1} -</div>
                 </div>
               ))}
             </div>
@@ -1896,7 +1903,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
         {/* 中间画布（高度随页面比例：宽 808 固定，高 = 808·pageH/pageW） */}
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
-          <div className="bg-white shadow-xl rounded-lg animate-fade-in relative overflow-hidden"
+          {/* slide-canvas：打印选择器锚点（PrintDialog printSelector 与 e2e 依赖） */}
+          <div className="slide-canvas bg-white shadow-xl rounded-lg animate-fade-in relative overflow-hidden"
             style={{ width: 808, height: canvasH, background: current.bg, boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', transform: `scale(${zoom / 100})`, transformOrigin: 'center', flexShrink: 0 }}>
             <div className="absolute inset-0 flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={() => setSelectedEl(null)}>
               {/* 文字内容 */}

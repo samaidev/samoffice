@@ -114,7 +114,7 @@ func TestParseParaBorderShading(t *testing.T) {
     <w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/></w:pBdr></w:pPr><w:r><w:t>上下边框</w:t></w:r></w:p>
   </w:body>
 </w:document>`
-        blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]string{})
+        blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]footnoteParsed{})
         if len(blocks) != 2 {
                 t.Fatalf("expected 2 blocks, got %d (warns=%v)", len(blocks), warns)
         }

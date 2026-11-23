@@ -752,11 +752,30 @@ export const schema = new Schema({
     footnote_item: {
       content: 'inline*',
       atom: false,
-      toDOM: (node) => ['div', { class: 'footnote-item', style: 'margin: 2px 0' },
-        ['sup', { class: 'footnote-num', style: 'color: #4f46e5; margin-right: 4px', contenteditable: 'false' }, `${node.attrs.num}.`],
-        ['span', { class: 'footnote-body' }, 0]],
+      // round55：脚注条目级样式 attrs（粗/斜/下划线/字号/颜色）—— 弹窗编辑，
+      // 页底脚注区渲染 + docx 往返（footnotes.xml w:rPr）保真。
+      toDOM: (node) => {
+        const st = node.attrs || {}
+        const bodyStyle = [
+          st.bold ? 'font-weight: 700' : '',
+          st.italic ? 'font-style: italic' : '',
+          st.underline ? 'text-decoration: underline' : '',
+          st.fontSize ? `font-size: ${st.fontSize}pt` : '',
+          st.color ? `color: #${String(st.color).replace('#', '')}` : '',
+        ].filter(Boolean).join('; ')
+        return ['div', { class: 'footnote-item', style: 'margin: 2px 0' },
+          ['sup', { class: 'footnote-num', style: 'color: #4f46e5; margin-right: 4px', contenteditable: 'false' }, `${node.attrs.num}.`],
+          ['span', { class: 'footnote-body', style: bodyStyle || undefined }, 0]]
+      },
       parseDOM: [{ tag: 'div.footnote-item' }],
-      attrs: { num: { default: 1 } },
+      attrs: {
+        num: { default: 1 },
+        bold: { default: false },
+        italic: { default: false },
+        underline: { default: false },
+        fontSize: { default: 0 },
+        color: { default: '' },
+      },
     },
 
     // === 目录条目（可点击跳转 + 点线引导符 + 页码，对齐 MS Word 目录外观） ===

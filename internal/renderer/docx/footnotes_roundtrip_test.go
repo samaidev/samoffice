@@ -190,3 +190,69 @@ func itoa(n int) string {
         }
         return string(b[i:])
 }
+
+// TestFootnoteStyleWriterRoundTrip（round55 脚注样式编辑）：脚注区条目带样式 →
+// footnotes.xml 正文 run 携带 w:rPr（b/i/u/sz/color）；且【条目文本覆盖引用旧文本】
+//（编辑持久化的关键）。解析回读：脚注区条目带同值 Style。
+func TestFootnoteStyleWriterRoundTrip(t *testing.T) {
+	doc := &core.Document{
+		Meta: core.Meta{Title: "FNStyle"},
+		Blocks: []core.Block{
+			&core.Paragraph{Inline: []core.Inline{
+				core.Text{Content: "正文"},
+				core.FootnoteRef{Type: "footnote", Num: 1, Content: "旧文本"},
+			}},
+			&core.FootnoteSection{Type: "footnote_section", Items: []core.FootnoteItem{
+				{Num: 1, Inline: []core.Inline{core.Text{Content: "新样式脚注"}},
+					Style: &core.FootnoteStyle{Bold: true, Italic: true, Underline: true, FontSize: 12, Color: "C02121"}},
+			}},
+		},
+	}
+	data, err := New().Render(doc)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("zip: %v", err)
+	}
+	fnXML := zipEntry(t, zr, "word/footnotes.xml")
+	// 条目文本覆盖引用旧文本
+	if !bytes.Contains([]byte(fnXML), []byte("新样式脚注")) {
+		t.Errorf("footnotes.xml should carry edited item text, got: %s", fnXML)
+	}
+	if bytes.Contains([]byte(fnXML), []byte("旧文本")) {
+		t.Errorf("footnotes.xml should NOT keep stale ref text: %s", fnXML)
+	}
+	// rPr：b/i/u + sz=24（12pt 半磅）+ color
+	for _, want := range []string{"<w:b/>", "<w:i/>", `<w:u w:val="single"/>`, `<w:sz w:val="24"/>`, `<w:color w:val="C02121"/>`} {
+		if !bytes.Contains([]byte(fnXML), []byte(want)) {
+			t.Errorf("footnotes.xml missing rPr %s in: %s", want, fnXML)
+		}
+	}
+	// 解析回读：脚注区条目样式 + 文本
+	pdoc, warns, err := docxparser.New().Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("parse: %v (warns=%v)", err, warns)
+	}
+	var got *core.FootnoteItem
+	for _, b := range pdoc.Blocks {
+		if fs, ok := b.(*core.FootnoteSection); ok {
+			for i := range fs.Items {
+				if fs.Items[i].Num == 1 {
+					got = &fs.Items[i]
+				}
+			}
+		}
+	}
+	if got == nil {
+		t.Fatalf("parsed doc missing footnote item 1")
+	}
+	if text := inlineText(got.Inline); text != "新样式脚注" {
+		t.Errorf("round trip text = %q, want 新样式脚注", text)
+	}
+	st := got.Style
+	if st == nil || !st.Bold || !st.Italic || !st.Underline || st.FontSize != 12 || st.Color != "C02121" {
+		t.Errorf("round trip style = %+v, want bold/italic/underline/12pt/C02121", st)
+	}
+}

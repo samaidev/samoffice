@@ -6,7 +6,7 @@ interface PrintDialogProps {
   open: boolean
   onClose: () => void
   /** 编辑器类型 — 决定显示哪些选项 */
-  editorType: 'word' | 'ppt' | 'excel'
+  editorType: 'word' | 'ppt' | 'excel' | 'pdf'
   /** Excel：工作表已设置的打印标题行数（用于初始化"标题行数"输入框） */
   excelTitleRows?: number
   /** 预览内容渲染函数 (返回 HTML 字符串或 ReactNode) */
@@ -586,7 +586,7 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
                 width: `${previewW * 1.5}px`,
                 // excel：多页预览由 renderPreview 自带每页"纸张"卡片（重复标题行），
                 // 外层改为透明自适应容器；word/ppt 保持单张固定纸页。
-                ...(editorType === 'excel' ? { background: 'transparent', boxShadow: 'none', height: 'auto', padding: 0 } : { height: `${previewH * 1.5}px`, padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px` }),
+                ...((editorType === 'excel' || editorType === 'ppt' || editorType === 'pdf') ? { background: 'transparent', boxShadow: 'none', height: 'auto', padding: 0 } : { height: `${previewH * 1.5}px`, padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px` }),
                 transform: `scale(${settings.scale / 100})`,
                 transformOrigin: 'top center',
                 filter: settings.color === 'color' ? 'none' : 'grayscale(1)',

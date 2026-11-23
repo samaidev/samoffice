@@ -128,7 +128,7 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
                                         fid := ntf[num]
                                         items = append(items, core.FootnoteItem{
                                                 Num:    num,
-                                                Inline: []core.Inline{core.Text{Content: footnotes[fid]}},
+                                                Inline: []core.Inline{core.Text{Content: footnotes[fid].text}}, Style: footnotes[fid].style,
                                         })
                                 }
                                 doc.Blocks = append(doc.Blocks, &core.FootnoteSection{Type: "footnote_section", Items: items})
@@ -246,13 +246,13 @@ func atoiSafe(s string) int {
 }
 
 // parseDocumentXML 宽松解析 document.xml，提取块级内容（无图片/列表上下文的兼容入口）
-func parseDocumentXML(r io.Reader, footnotes map[string]string) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
+func parseDocumentXML(r io.Reader, footnotes map[string]footnoteParsed) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
         return parseDocumentXMLCtx(r, footnotes, nil, nil)
 }
 
 // parseDocumentXMLCtx 同上，另带图片资源（media）与列表编号格式（numFmt）上下文：
 // media 供 run 内 w:drawing 读取嵌入图片；numFmt 供连续段落聚合为 Word 列表。
-func parseDocumentXMLCtx(r io.Reader, footnotes map[string]string, media *docMedia, numFmt map[int]map[int]string) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
+func parseDocumentXMLCtx(r io.Reader, footnotes map[string]footnoteParsed, media *docMedia, numFmt map[int]map[int]string) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
         levels := map[int]map[int]numLevel{}
         for nid, m := range numFmt {
                 lm := map[int]numLevel{}
@@ -266,7 +266,7 @@ func parseDocumentXMLCtx(r io.Reader, footnotes map[string]string, media *docMed
 
 // parseDocumentXMLCtxLevels round47：带完整编号级别（numFmt + lvlText 模板）的入口。
 // lvlText 是 Word 序号的真实外观（[%1]/(%1)/%1）等括号模板与圈号样式的来源。
-func parseDocumentXMLCtxLevels(r io.Reader, footnotes map[string]string, media *docMedia, numLevels map[int]map[int]numLevel) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
+func parseDocumentXMLCtxLevels(r io.Reader, footnotes map[string]footnoteParsed, media *docMedia, numLevels map[int]map[int]numLevel) ([]core.Block, []core.Warning, map[string]int, map[int]string) {
         dec := xml.NewDecoder(r)
         dec.Strict = false
         dec.AutoClose = xml.HTMLAutoClose
@@ -399,10 +399,19 @@ func parseProtect(r io.Reader) (*core.DocumentProtect, error) {
         return &core.DocumentProtect{Enabled: enabled, Hash: strings.TrimSpace(hash.String())}, nil
 }
 
-// parseFootnotes 从 word/footnotes.xml 提取脚注 id -> 文本。
+// footnoteParsed 单条脚注的解析结果：文本 + 条目样式（round55 脚注样式编辑，
+// 来自正文 run 的 w:rPr：b/i/u/sz/color）。
+type footnoteParsed struct {
+        text  string
+        style *core.FootnoteStyle
+}
+
+// parseFootnotes 从 word/footnotes.xml 提取脚注 id -> 文本与样式。
 // 分隔符脚注（id 为 -1 / 0）会被跳过。
-func parseFootnotes(files map[string]*zip.File) map[string]string {
-        result := map[string]string{}
+// 样式取【正文文本 run】（跳过 FootnoteReference 上标 run —— 其 rPr 带
+// vertAlign/上标，误并入会把编号样式算进条目）中第一个携带 rPr 的 run。
+func parseFootnotes(files map[string]*zip.File) map[string]footnoteParsed {
+        result := map[string]footnoteParsed{}
         f, ok := files["word/footnotes.xml"]
         if !ok {
                 return result
@@ -418,6 +427,12 @@ func parseFootnotes(files map[string]*zip.File) map[string]string {
         dec.Entity = xml.HTMLEntity
         var curID string
         var curText strings.Builder
+        var curStyle *core.FootnoteStyle
+        var inRPr bool
+        var rPrBold, rPrItalic, rPrUnder bool
+        var rPrSz, rPrColor string
+        var styleTaken bool
+        var seenFootnoteRef bool
         inFootnote := false
         for {
                 tok, err := dec.Token()
@@ -437,14 +452,61 @@ func parseFootnotes(files map[string]*zip.File) map[string]string {
                                         }
                                 }
                                 curText.Reset()
+                                curStyle = nil
+                                styleTaken = false
+                                seenFootnoteRef = false
                                 inFootnote = true
+                        } else if t.Name.Local == "r" && inFootnote {
+                                rPrBold, rPrItalic, rPrUnder = false, false, false
+                                rPrSz, rPrColor = "", ""
+                        } else if t.Name.Local == "footnoteRef" && inFootnote {
+                                seenFootnoteRef = true
+                        } else if t.Name.Local == "rPr" && inFootnote {
+                                inRPr = true
+                        } else if inRPr && inFootnote {
+                                switch t.Name.Local {
+                                case "b":
+                                        rPrBold = true
+                                case "i":
+                                        rPrItalic = true
+                                case "u":
+                                        rPrUnder = true
+                                case "sz":
+                                        for _, a := range t.Attr {
+                                                if a.Name.Local == "val" {
+                                                        rPrSz = a.Value
+                                                }
+                                        }
+                                case "color":
+                                        for _, a := range t.Attr {
+                                                if a.Name.Local == "val" {
+                                                        rPrColor = a.Value
+                                                }
+                                        }
+                                }
                         } else if t.Name.Local == "t" && inFootnote {
                                 curText.WriteString(readCharData(dec))
                         }
                 case xml.EndElement:
-                        if t.Name.Local == "footnote" && inFootnote {
+                        if t.Name.Local == "rPr" && inFootnote {
+                                inRPr = false
+                                // 样式只取正文文本 run：跳过 footnoteRef 上标 run
+                                if inFootnote && seenFootnoteRef && !styleTaken {
+                                        styleTaken = true
+                                        st := &core.FootnoteStyle{Bold: rPrBold, Italic: rPrItalic, Underline: rPrUnder}
+                                        if v, e := strconv.ParseFloat(rPrSz, 64); e == nil && v > 0 {
+                                                st.FontSize = v / 2 // 半磅 → 磅
+                                        }
+                                        if rPrColor != "" && rPrColor != "auto" {
+                                                st.Color = strings.TrimPrefix(rPrColor, "#")
+                                        }
+                                        if st.Bold || st.Italic || st.Underline || st.FontSize > 0 || st.Color != "" {
+                                                curStyle = st
+                                        }
+                                }
+                        } else if t.Name.Local == "footnote" && inFootnote {
                                 if curID != "-1" && curID != "0" {
-                                        result[curID] = strings.TrimSpace(curText.String())
+                                        result[curID] = footnoteParsed{text: strings.TrimSpace(curText.String()), style: curStyle}
                                 }
                                 inFootnote = false
                         }
@@ -1038,7 +1100,7 @@ func headingLevel(style string) int {
 
 // parseParagraph 解析 <w:p> 段落。若段落内含 OMML 公式，则返回 *core.Math 块。
 // 返回 []core.Block：可能包含其前/后的分页符块（pageBreakBefore / w:br type=page）。
-func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string]int, ntf map[int]string, media *docMedia, numOut *numPrInfo) []core.Block {
+func parseParagraph(dec *xml.Decoder, footnotes map[string]footnoteParsed, fn map[string]int, ntf map[int]string, media *docMedia, numOut *numPrInfo) []core.Block {
         para := &core.Paragraph{Inline: []core.Inline{}}
         var inRun bool
         var curText core.Text
@@ -1111,7 +1173,7 @@ func parseParagraph(dec *xml.Decoder, footnotes map[string]string, fn map[string
                                 ntf[fn[fid]] = fid
                         }
                         num := fn[fid]
-                        para.Inline = append(para.Inline, &core.FootnoteRef{Type: "footnote", Num: num, Content: footnotes[fid]})
+                        para.Inline = append(para.Inline, &core.FootnoteRef{Type: "footnote", Num: num, Content: footnotes[fid].text})
                         case "b": // bold
                                 if inRun {
                                         curText.Bold = readOnOffAttr(t)
@@ -1816,7 +1878,7 @@ type cellBorderExplicit struct {
 }
 
 // parseTable 解析 <w:tbl>，返回 *core.Table。容错：未知或残缺元素跳过。
-func parseTable(dec *xml.Decoder, footnotes map[string]string, fn map[string]int, ntf map[int]string, media *docMedia) core.Block {
+func parseTable(dec *xml.Decoder, footnotes map[string]footnoteParsed, fn map[string]int, ntf map[int]string, media *docMedia) core.Block {
         tbl := &core.Table{Rows: [][]core.TableCell{}}
         var curRow []core.TableCell
         var curCell core.TableCell

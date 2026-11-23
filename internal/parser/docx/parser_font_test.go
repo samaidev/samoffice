@@ -27,7 +27,7 @@ func TestParseRunFont(t *testing.T) {
   </w:body>
 </w:document>`
 
-        blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]string{})
+        blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]footnoteParsed{})
         if len(blocks) != 2 {
                 t.Fatalf("expected 2 blocks, got %d (warns=%v)", len(blocks), warns)
         }
@@ -70,7 +70,7 @@ func TestParseRunVertAlignStrikeColorHighlight(t *testing.T) {
   </w:body>
 </w:document>`
 
-        blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]string{})
+        blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]footnoteParsed{})
         if len(blocks) != 1 {
                 t.Fatalf("expected 1 block, got %d (warns=%v)", len(blocks), warns)
         }

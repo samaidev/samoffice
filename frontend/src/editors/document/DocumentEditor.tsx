@@ -898,7 +898,7 @@ function extractComments(doc: any): { id: string; author: string; text: string; 
 // 从 PM 文档中提取脚注数据（脚注区在编辑器内隐藏渲染，这里仅取数据用于页底脚注区展示/编辑）。
 // sectionPos：隐藏脚注区中 footnote_item 的位置（用于编辑/删除）；
 // refPos：正文中 footnote 引用标记的位置（用于判断脚注应显示在哪一页）。
-type FootnoteData = { num: number; text: string; sectionPos: number; refPos: number }
+type FootnoteData = { num: number; text: string; sectionPos: number; refPos: number; bold?: boolean; italic?: boolean; underline?: boolean; fontSize?: number; color?: string }
 function extractFootnotes(doc: any): FootnoteData[] {
   const refs: Record<number, number> = {}
   doc.descendants((node: any, pos: number) => {
@@ -913,7 +913,12 @@ function extractFootnotes(doc: any): FootnoteData[] {
       node.forEach((child: any, offset: number) => {
         if (child.type.name === 'footnote_item') {
           const num = Number(child.attrs.num) || 1
-          out.push({ num, text: child.textContent || '', sectionPos: pos + 1 + offset, refPos: refs[num] ?? -1 })
+          // round55：携带条目样式 attrs（页底脚注区渲染粗/斜/下划线/字号/颜色）
+          out.push({
+            num, text: child.textContent || '', sectionPos: pos + 1 + offset, refPos: refs[num] ?? -1,
+            bold: !!child.attrs.bold, italic: !!child.attrs.italic, underline: !!child.attrs.underline,
+            fontSize: Number(child.attrs.fontSize) || 0, color: String(child.attrs.color || ''),
+          })
         }
       })
     }
@@ -1132,17 +1137,35 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
 
   const editFootnote = (f: FootnoteData) => {
     // 打开应用内编辑弹窗（不依赖 window.prompt —— 桌面 WebView 里不可靠）
-    setFootnoteEdit({ num: f.num, text: f.text || '', sectionPos: f.sectionPos })
+    // round55：带上节点样式 attrs（粗/斜/下划线/字号/颜色）
+    const n = viewRef.current?.state.doc.nodeAt(f.sectionPos)
+    const a: any = (n && n.type.name === 'footnote_item' && n.attrs) || {}
+    setFootnoteEdit({ num: f.num, text: f.text || '', sectionPos: f.sectionPos, bold: !!a.bold, italic: !!a.italic, underline: !!a.underline, fontSize: Number(a.fontSize) || 0, color: String(a.color || '') })
   }
-  // 弹窗确认：写回 footnote_item 节点
+  // 弹窗确认：写回 footnote_item 节点（round55：含样式 attrs）
   const saveFootnoteEdit = () => {
     const v = viewRef.current
     const fe = footnoteEdit
     if (!v || !fe) return
     const node = v.state.doc.nodeAt(fe.sectionPos)
     if (!node || node.type.name !== 'footnote_item') { setFootnoteEdit(null); return }
-    const item = schema.nodes.footnote_item.create({ num: fe.num }, fe.text.trim() ? schema.text(fe.text) : null)
-    v.dispatch(v.state.tr.replaceWith(fe.sectionPos, fe.sectionPos + node.nodeSize, item))
+    const attrs = {
+      num: fe.num, bold: !!fe.bold, italic: !!fe.italic, underline: !!fe.underline,
+      fontSize: Number(fe.fontSize) || 0, color: String(fe.color || '').replace('#', ''),
+    }
+    const item = schema.nodes.footnote_item.create(attrs, fe.text.trim() ? schema.text(fe.text) : null)
+    let tr = v.state.tr.replaceWith(fe.sectionPos, fe.sectionPos + node.nodeSize, item)
+    // round55 关键：同步更新正文中同编号的脚注引用的 content ——
+    // docx 保存（footnotes.xml）以脚注区条目为权威，但引用 attrs.content
+    // 也随事务外流（UDM），不同步会在旧链路（.doc 解析回填等）读到旧文。
+    v.state.doc.descendants((n2: any, p2: number) => {
+      if (n2.type.name === 'footnote' && Number(n2.attrs.num) === fe.num) {
+        tr = tr.setNodeMarkup(p2, undefined, { ...n2.attrs, content: fe.text })
+        return false
+      }
+      return true
+    })
+    v.dispatch(tr)
     setFootnoteEdit(null)
   }
   const deleteFootnote = (f: FootnoteData) => {
@@ -1547,7 +1570,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [showHFDialog, setShowHFDialog] = useState<null | { target: 'header' | 'footer' }>(null)
   // 脚注编辑弹窗：WebView(桌面端)对 window.prompt 支持不可靠（无弹窗/无返回值），
   // 用户报告"无法编辑角注文本内容"。改用应用内 modal 输入框。
-  const [footnoteEdit, setFootnoteEdit] = useState<null | { num: number; text: string; sectionPos: number }>(null)
+  // round55：脚注编辑弹窗状态 —— 增加样式字段（bold/italic/underline/fontSize/color）
+  const [footnoteEdit, setFootnoteEdit] = useState<null | { num: number; text: string; sectionPos: number; bold?: boolean; italic?: boolean; underline?: boolean; fontSize?: number; color?: string }>(null)
   // 打开文档时从 UDM 初始化页眉/页脚（含样式），无则保持空
   useEffect(() => {
     const h = (document as any)?.header as HeaderFooterContent | undefined
@@ -2148,7 +2172,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         // 永远到不了行上。改为内容不变时保留旧引用（setComments 同理）。
         try {
           const fn = extractFootnotes(ns.doc)
-          setFootnotes(prev => (prev.length === fn.length && prev.every((p, i) => p.num === fn[i].num && p.text === fn[i].text && p.sectionPos === fn[i].sectionPos && p.refPos === fn[i].refPos)) ? prev : fn)
+          // round55：比较含样式字段（否则改样式后被判"相同"，页底行不刷新）
+          setFootnotes(prev => (prev.length === fn.length && prev.every((p, i) => p.num === fn[i].num && p.text === fn[i].text && p.sectionPos === fn[i].sectionPos && p.refPos === fn[i].refPos && !!p.bold === !!fn[i].bold && !!p.italic === !!fn[i].italic && !!p.underline === !!fn[i].underline && (p.fontSize || 0) === (fn[i].fontSize || 0) && (p.color || '') === (fn[i].color || ''))) ? prev : fn)
         } catch (e) { /* ignore */ }
         try {
           const cm = extractComments(ns.doc)
@@ -2164,17 +2189,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         const num = Number(node.attrs.num) || 0
         if (num <= 0) return false
         // 在脚注区（footnote_section）里找同一编号的 footnote_item，取其文本与位置
-        let found: { text: string; sectionPos: number } | null = null
+        let found: { text: string; sectionPos: number; node: any } | null = null
         view.state.doc.descendants((n2: any, p2: number) => {
           if (found) return false
           if (n2.type.name === 'footnote_item' && (Number(n2.attrs.num) || 1) === num) {
-            found = { text: n2.textContent || '', sectionPos: p2 }
+            found = { text: n2.textContent || '', sectionPos: p2, node: n2 }
             return false
           }
           return true
         })
         if (!found) return false
-        setFootnoteEdit({ num, text: (found as any).text, sectionPos: (found as any).sectionPos })
+        const itemNode = (found as any).node
+        const ia: any = (itemNode && itemNode.attrs) || {}
+        setFootnoteEdit({ num, text: (found as any).text, sectionPos: (found as any).sectionPos, bold: !!ia.bold, italic: !!ia.italic, underline: !!ia.underline, fontSize: Number(ia.fontSize) || 0, color: String(ia.color || '') })
         return true // 已处理，阻止默认 caret 放置
       },
       handleDOMEvents: {
@@ -2204,16 +2231,21 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
           if (fnRef) {
             const fnum = parseInt(fnRef.getAttribute('data-footnote-num') || '0')
             if (fnum > 0) {
-              let hit: { text: string; sectionPos: number } | null = null
+              let hit: { text: string; sectionPos: number; node: any } | null = null
               _view.state.doc.descendants((n2: any, p2: number) => {
                 if (hit) return false
                 if (n2.type.name === 'footnote_item' && (Number(n2.attrs.num) || 1) === fnum) {
-                  hit = { text: n2.textContent || '', sectionPos: p2 }
+                  hit = { text: n2.textContent || '', sectionPos: p2, node: n2 }
                   return false
                 }
                 return true
               })
-              if (hit) { setFootnoteEdit({ num: fnum, text: (hit as any).text, sectionPos: (hit as any).sectionPos }); return true }
+              if (hit) {
+                const hn = (hit as any).node
+                const ha: any = (hn && hn.attrs) || {}
+                setFootnoteEdit({ num: fnum, text: (hit as any).text, sectionPos: (hit as any).sectionPos, bold: !!ha.bold, italic: !!ha.italic, underline: !!ha.underline, fontSize: Number(ha.fontSize) || 0, color: String(ha.color || '') })
+                return true
+              }
             }
           }
           const link = el?.closest?.('.sam-toc-link') as HTMLElement | null
@@ -4913,7 +4945,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                   <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
                        onDoubleClick={(e) => { e.stopPropagation(); editFootnote(f) }} onClick={(e) => e.stopPropagation()}
                        title={t('doc.prompt.footnote') || '双击编辑脚注'}>
-                    <span style={{ flex: 1, wordBreak: 'break-word' }}>
+                    <span style={{ flex: 1, wordBreak: 'break-word', fontWeight: f.bold ? 700 : undefined, fontStyle: f.italic ? 'italic' : undefined, textDecoration: f.underline ? 'underline' : undefined, fontSize: f.fontSize ? `${f.fontSize}pt` : undefined, color: f.color ? `#${String(f.color).replace('#', '')}` : undefined }}>
                       <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
                     </span>
                     <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); copyFootnote(f) }}
@@ -5047,7 +5079,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
                      onDoubleClick={(e) => { e.stopPropagation(); editFootnote(f) }} onClick={(e) => e.stopPropagation()}
                      title={t('doc.prompt.footnote') || '双击编辑脚注'}>
-                  <span style={{ flex: 1, wordBreak: 'break-word', lineHeight: 1.5 }}>
+                  <span style={{ flex: 1, wordBreak: 'break-word', lineHeight: 1.5, fontWeight: f.bold ? 700 : undefined, fontStyle: f.italic ? 'italic' : undefined, textDecoration: f.underline ? 'underline' : undefined, fontSize: f.fontSize ? `${f.fontSize}pt` : undefined, color: f.color ? `#${String(f.color).replace('#', '')}` : undefined }}>
                     <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
                   </span>
                   <button type="button" onClick={(e) => { e.stopPropagation(); copyFootnote(f) }}
@@ -5191,7 +5223,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       {/* 脚注内容编辑弹窗：替代 window.prompt（桌面 WebView 对 JS 原生对话框支持不可靠） */}
       {footnoteEdit && (
         <div className="modal-overlay" onMouseDown={() => setFootnoteEdit(null)}>
-          <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 420 }}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 460 }}>
             <div className="modal-title">{(t('doc.prompt.footnote') || '编辑脚注内容：').replace(/[:：]\s*$/, '')} #{footnoteEdit.num}</div>
             <textarea
               autoFocus
@@ -5199,12 +5231,48 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
               onChange={(e) => setFootnoteEdit({ ...footnoteEdit, text: e.target.value })}
               rows={4}
               className="text-xs px-2 py-1 rounded border w-full"
-              style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}
+              style={{
+                background: 'var(--color-bg-alt)',
+                color: footnoteEdit.color ? `#${String(footnoteEdit.color).replace('#', '')}` : 'var(--color-text)',
+                borderColor: 'var(--color-border)',
+                fontWeight: footnoteEdit.bold ? 700 : 400,
+                fontStyle: footnoteEdit.italic ? 'italic' : undefined,
+                textDecoration: footnoteEdit.underline ? 'underline' : undefined,
+                fontSize: footnoteEdit.fontSize ? `${footnoteEdit.fontSize}pt` : undefined,
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveFootnoteEdit() }}
             />
+            {/* round55：脚注样式编辑 —— 粗/斜/下划线 + 字号 + 颜色，随文本实时预览。
+                样式随 footnote_item attrs 持久化，docx 往返（footnotes.xml w:rPr）保真。 */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap" data-testid="fn-style-bar">
+              <button type="button" onClick={() => setFootnoteEdit({ ...footnoteEdit, bold: !footnoteEdit.bold })}
+                className="btn btn-sm px-2.5 py-1 font-bold" style={{ background: footnoteEdit.bold ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: footnoteEdit.bold ? '#fff' : 'var(--color-text)' }}
+                title={t('doc.bold') || '加粗'}>B</button>
+              <button type="button" onClick={() => setFootnoteEdit({ ...footnoteEdit, italic: !footnoteEdit.italic })}
+                className="btn btn-sm px-2.5 py-1 italic" style={{ background: footnoteEdit.italic ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: footnoteEdit.italic ? '#fff' : 'var(--color-text)' }}
+                title={t('doc.italic') || '斜体'}>I</button>
+              <button type="button" onClick={() => setFootnoteEdit({ ...footnoteEdit, underline: !footnoteEdit.underline })}
+                className="btn btn-sm px-2.5 py-1 underline" style={{ background: footnoteEdit.underline ? 'var(--color-primary)' : 'var(--color-bg-alt)', color: footnoteEdit.underline ? '#fff' : 'var(--color-text)' }}
+                title={t('doc.underline') || '下划线'}>U</button>
+              <span style={{ width: 8 }} />
+              <label className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.fontSizeLabel') || '字号'}</label>
+              <input type="number" min={6} max={72} value={footnoteEdit.fontSize || ''} placeholder="9"
+                onChange={(e) => setFootnoteEdit({ ...footnoteEdit, fontSize: Math.max(6, Math.min(72, parseInt(e.target.value) || 0)) })}
+                className="w-14 text-xs text-center rounded border px-1 py-1"
+                style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }} />
+              <span style={{ width: 8 }} />
+              <label className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('doc.colorLabel') || '颜色'}</label>
+              <input type="color" value={`#${String(footnoteEdit.color || '1f2937').replace('#', '')}`}
+                onChange={(e) => setFootnoteEdit({ ...footnoteEdit, color: e.target.value.replace('#', '') })}
+                className="w-8 h-7 rounded border p-0"
+                style={{ borderColor: 'var(--color-border)' }} />
+              <button type="button" onClick={() => setFootnoteEdit({ ...footnoteEdit, bold: false, italic: false, underline: false, fontSize: 0, color: '' })}
+                className="btn btn-sm px-2 py-1 text-xs" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text-secondary)' }}
+                title={t('doc.clearStyle') || '清除样式'}>✕ {t('doc.clearStyle') || '清除样式'}</button>
+            </div>
             <div className="flex justify-end gap-2 mt-2">
               <button className="btn btn-sm" style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)' }} onClick={() => setFootnoteEdit(null)}>{t('doc.cancel') || '取消'}</button>
-              <button className="btn btn-primary btn-sm" onClick={saveFootnoteEdit} disabled={!footnoteEdit.text.trim()}>{t('doc.ok') || '确定'}</button>
+              <button className="btn btn-primary btn-sm" onClick={saveFootnoteEdit} disabled={!footnoteEdit.text.trim()} data-testid="fn-save">{t('doc.ok') || '确定'}</button>
             </div>
           </div>
         </div>
@@ -5375,7 +5443,11 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           clone.classList.add('ProseMirror', 'pm-nocaret')
           // 内容区宽 = 纸宽 - 左右边距（预览容器已按 1.5 倍缩放纸尺寸，内容同坐标系）；
           // 文档实际以 pageWidthPx 渲染，横向等比压缩到预览内容宽。
-          const contentW = Math.max(50, (PAPER_SIZES[settings.paperSize]?.w || 210) - settings.margins.left - settings.margins.right)
+          // round55：横版取宽边（paper.h 是 mm 宽边）—— 之前横竖切换后内容宽
+          // 仍按竖版短边算，纸张变横、内容不变，用户观感「横竖切换无效」。
+          const paper = PAPER_SIZES[settings.paperSize] || PAPER_SIZES.A4
+          const paperWmm = settings.orientation === 'landscape' ? paper.h : paper.w
+          const contentW = Math.max(50, paperWmm - settings.margins.left - settings.margins.right)
           const scaleW = (contentW * 1.5) / pageWidthPx
           return (
             <div style={{ width: '100%', height: '100%', overflow: 'hidden', color: '#000' }}>

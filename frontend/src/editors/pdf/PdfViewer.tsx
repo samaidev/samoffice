@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useI18n } from '../../i18n'
-import { PrintDialog } from '../../components/PrintDialog'
+import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
 
 // 声明全局 pdfjsLib (通过 vendor/pdf.min.js 加载)
 declare global {
@@ -30,6 +30,9 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
   const [showThumbs, setShowThumbs] = useState(true)
   const [thumbnails, setThumbnails] = useState<{ page: number; dataUrl: string }[]>([])
   const [thumbsLoading, setThumbsLoading] = useState(false)
+  // round55：打印预览页图（比侧栏缩略图更清晰，400px 宽；对话框打开时生成）
+  const [printThumbs, setPrintThumbs] = useState<{ page: number; dataUrl: string; w: number; h: number }[]>([])
+  const printThumbsReqRef = useRef(0)
   const thumbsPanelRef = useRef<HTMLDivElement>(null)
 
   // 加载 PDF.js 库 (如果尚未加载)
@@ -138,6 +141,51 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
       setThumbsLoading(false)
     }
   }, [])
+
+  // round55：打印预览 —— 打开对话框时按 400px 宽渲染真实页面图（≤24 页），
+  // 预览不再是硬编码灰条骨架；纸张大小/横竖/边距/缩放/页码全部真实响应。
+  useEffect(() => {
+    if (!printDialogOpen || !pdfDoc) { setPrintThumbs([]); return }
+    const req = ++printThumbsReqRef.current
+    let cancelled = false
+    ;(async () => {
+      try {
+        // 让位：主渲染/缩略图任务先跑，避免同一 page 并发 render 冲突
+        await new Promise<void>(r => setTimeout(r, 120))
+        const total = Math.min(pdfDoc.numPages, 24)
+        const out: { page: number; dataUrl: string; w: number; h: number }[] = []
+        for (let i = 1; i <= total; i++) {
+          if (cancelled || req !== printThumbsReqRef.current) return
+          const pg = await pdfDoc.getPage(i)
+          const base = pg.getViewport({ scale: 1 })
+          const sc = 400 / base.width
+          const canvas = document.createElement('canvas')
+          const dpr = Math.min(2, window.devicePixelRatio || 1)
+          canvas.width = Math.ceil(400 * dpr)
+          canvas.height = Math.ceil(base.height * sc * dpr)
+          const ctx = canvas.getContext('2d')
+          if (!ctx) continue
+          let ok = false
+          for (let attempt = 0; attempt < 4 && !ok; attempt++) {
+            try {
+              await pg.render({ canvasContext: ctx, viewport: pg.getViewport({ scale: sc * dpr }) }).promise
+              ok = true
+            } catch (err: any) {
+              if (err?.name === 'RenderingCancelledException') break
+              await new Promise<void>(r => setTimeout(r, 120))
+            }
+          }
+          if (!ok) continue
+          out.push({ page: i, dataUrl: canvas.toDataURL('image/jpeg', 0.82), w: 400, h: Math.round(base.height * sc) })
+          if (i % 3 === 0 || i === total) setPrintThumbs([...out])
+        }
+        if (!cancelled && req === printThumbsReqRef.current) setPrintThumbs(out)
+      } catch (e) {
+        console.error('[PdfViewer] print thumbs failed:', e)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [printDialogOpen, pdfDoc])
 
   // ==== 连续滚动模式 ====
   // 页面尺寸（第 1 页基准，仅用于占位高度；渲染后按各自实际尺寸修正）
@@ -610,29 +658,72 @@ export function PdfViewer({ initialUrl, pdfOpenSignal }: PdfViewerProps) {
         </div>
       )}
 
-      {/* 打印对话框 */}
+      {/* 打印对话框（round55：真实页面预览 —— 之前是硬编码灰条骨架，
+          纸张/横竖/边距/缩放按钮对预览全部无效） */}
       <PrintDialog
         open={printDialogOpen}
         onClose={() => setPrintDialogOpen(false)}
-        editorType="word"
+        editorType="pdf"
         printSelector="canvas"
-        renderPreview={(settings) => (
-          <div className="w-full h-full flex flex-col items-center justify-center" style={{ color: '#000' }}>
-            <div className="text-[10px] font-bold mb-2">{fileName || 'document.pdf'}</div>
-            <div className="border-2 border-gray-300 p-3 bg-gray-50" style={{ width: '80%', aspectRatio: '1/1.414' }}>
-              <div className="text-[7px] text-gray-400 text-center mt-1/2">{t('pdf.previewPageN', { n: pageNum })}</div>
-              <div className="text-[7px] mt-1 leading-tight">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="h-1 bg-gray-200 rounded mb-0.5" style={{ width: `${70 + Math.random() * 25}%` }} />
-                ))}
+        renderPreview={(settings) => {
+          const PAPER = (PAPER_SIZES as any)[settings.paperSize] || PAPER_SIZES.A4
+          const pageWpx = (settings.orientation === 'landscape' ? PAPER.h : PAPER.w) * 1.5
+          const pageHpx = (settings.orientation === 'landscape' ? PAPER.w : PAPER.h) * 1.5
+          const pad = `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`
+          // 页码范围：current → 仅当前页；custom → 解析 "1-3,5"；all → 全部（≤24）
+          let showPages = printThumbs
+          if (settings.pageRange === 'current') showPages = printThumbs.filter(p => p.page === pageNum)
+          else if (settings.pageRange === 'custom' && settings.customPages.trim()) {
+            const want = new Set<number>()
+            for (const part of settings.customPages.split(',')) {
+              const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/)
+              if (m) {
+                const a = parseInt(m[1]), b = m[2] ? parseInt(m[2]) : a
+                for (let k2 = Math.min(a, b); k2 <= Math.max(a, b); k2++) want.add(k2)
+              }
+            }
+            showPages = printThumbs.filter(p => want.has(p.page))
+          }
+          const landscape = settings.orientation === 'landscape'
+          return (
+            <div style={{ color: '#000' }}>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+                {fileName || 'document.pdf'} · {numPages} {t('pdf.pages') || '页'} · {settings.pageRange === 'all' ? t('print.allPages') : settings.pageRange === 'current' ? t('print.currentPage') : settings.customPages} · {settings.copies} {t('print.copies')}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+                {showPages.length === 0 && (
+                  <div style={{ fontSize: 11, color: '#94a3b8', padding: '40px 0' }}>
+                    {printThumbs.length === 0 ? (t('print.previewEmpty') || '正在生成预览…') : (t('print.noPagesInRange') || '所选页码范围无页面')}
+                  </div>
+                )}
+                {showPages.map((p) => {
+                  // 页图放进纸张内容区：竖版直接缩放适配；横版旋转 90°
+                  const innerW = pageWpx - (settings.margins.left + settings.margins.right) * 1.5
+                  const innerH = pageHpx - (settings.margins.top + settings.margins.bottom) * 1.5
+                  if (!landscape) {
+                    const k = Math.min(innerW / p.w, innerH / p.h)
+                    return (
+                      <div key={p.page} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box' }}>
+                        <img src={p.dataUrl} alt={`page ${p.page}`} style={{ width: p.w * k, height: p.h * k, display: 'block', margin: '0 auto' }} draggable={false} />
+                        <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>{p.page} / {numPages}</div>
+                      </div>
+                    )
+                  }
+                  const k = Math.min(innerW / p.h, innerH / p.w)
+                  return (
+                    <div key={p.page} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box' }}>
+                      <img src={p.dataUrl} alt={`page ${p.page}`} style={{ width: p.h * k, height: p.w * k, display: 'block', margin: '0 auto', transform: 'rotate(90deg)' }} draggable={false} />
+                      <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>{p.page} / {numPages}</div>
+                    </div>
+                  )
+                })}
+                {printThumbs.length >= 24 && numPages > 24 && (
+                  <div style={{ fontSize: 10, color: '#94a3b8' }}>{t('print.previewCapped') || '预览最多显示前 24 页'}</div>
+                )}
               </div>
             </div>
-            <div className="text-[8px] text-gray-500 mt-2">
-              {settings.pageRange === 'all' ? t('print.allPages') : settings.pageRange === 'current' ? t('print.currentPage') : settings.customPages} · {settings.copies} {t('print.copies')}
-            </div>
-          </div>
-        )}
-      />
-    </div>
+          )
+        }}
+      />    </div>
   )
 }

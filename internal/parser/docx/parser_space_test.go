@@ -33,7 +33,7 @@ func TestParseChineseSpacePreserve(t *testing.T) {
   </w:body>
 </w:document>`
 
-	blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]string{})
+	blocks, warns, _, _ := parseDocumentXML(strings.NewReader(xml), map[string]footnoteParsed{})
 	if len(blocks) != 6 {
 		t.Fatalf("expected 6 blocks, got %d (warns=%v)", len(blocks), warns)
 	}

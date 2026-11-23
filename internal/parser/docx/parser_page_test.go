@@ -52,7 +52,7 @@ func TestParsePageBreaks(t *testing.T) {
   </w:body>
 </w:document>`
 
-	blocks, warns, _, _ := parseDocumentXML(strings.NewReader(docXML), map[string]string{})
+	blocks, warns, _, _ := parseDocumentXML(strings.NewReader(docXML), map[string]footnoteParsed{})
 	if len(blocks) != 5 {
 		t.Fatalf("expected 5 blocks (p, p, pageBreak, pageBreak, p), got %d (warns=%v)", len(blocks), warns)
 	}

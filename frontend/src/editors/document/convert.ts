@@ -102,10 +102,18 @@ function blockToPM(b: Block, schema: Schema, comments?: Comment[]): Node {
     }
     case 'footnote_section': {
       const fs = b as any
+      // round55：条目样式（items[].style）→ footnote_item attrs
       const items = (fs.items || []).map((item: any) =>
         schema.node(
           'footnote_item',
-          { num: Number(item.num) || 1 },
+          {
+            num: Number(item.num) || 1,
+            bold: !!(item.style && item.style.bold),
+            italic: !!(item.style && item.style.italic),
+            underline: !!(item.style && item.style.underline),
+            fontSize: Number(item.style && item.style.fontSize) || 0,
+            color: (item.style && item.style.color) || '',
+          },
           inlineToPM(Array.isArray(item.inline) ? item.inline : (item.inline ? [item.inline] : []), schema, comments),
         ),
       )
@@ -348,10 +356,24 @@ function pmToBlock(node: Node): Block | null {
     case 'footnote':
       return { type: 'footnote', num: Number(node.attrs.num) || 1, content: node.attrs.content || '' } as any
     case 'footnote_section': {
-      const items = node.children.map((item: any) => ({
-        num: Number(item.attrs.num) || 1,
-        inline: item.childCount > 0 ? pmToInline(item) : [],
-      }))
+      // round55：样式 attrs → items[].style（docx 写器输出 footnotes.xml w:rPr）
+      const items = node.children.map((item: any) => {
+        const a = item.attrs || {}
+        const hasStyle = a.bold || a.italic || a.underline || Number(a.fontSize) > 0 || a.color
+        return {
+          num: Number(a.num) || 1,
+          inline: item.childCount > 0 ? pmToInline(item) : [],
+          ...(hasStyle ? {
+            style: {
+              bold: !!a.bold,
+              italic: !!a.italic,
+              underline: !!a.underline,
+              fontSize: Number(a.fontSize) || 0,
+              color: String(a.color || '').replace('#', ''),
+            },
+          } : {}),
+        }
+      })
       return { type: 'footnote_section', items } as any
     }
     case 'table': {

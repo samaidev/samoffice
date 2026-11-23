@@ -93,10 +93,21 @@ type FootnoteRef struct {
 func (FootnoteRef) isInline()          {}
 func (FootnoteRef) InlineType() string { return "footnote" }
 
+// FootnoteStyle 脚注条目级样式（round55：脚注样式编辑）。零值 = 继承默认样式。
+// 序列化为 UDM items[].style，docx 往返经 footnotes.xml 的 w:rPr 保真。
+type FootnoteStyle struct {
+	Bold      bool    `json:"bold,omitempty"`
+	Italic    bool    `json:"italic,omitempty"`
+	Underline bool    `json:"underline,omitempty"`
+	FontSize  float64 `json:"fontSize,omitempty"` // 磅；0=默认
+	Color     string  `json:"color,omitempty"`    // 十六进制（不带 #）；""=默认
+}
+
 // FootnoteItem 单条脚注内容。
 type FootnoteItem struct {
-        Num    int      `json:"num"`
-        Inline []Inline `json:"inline"`
+	Num    int           `json:"num"`
+	Inline []Inline      `json:"inline"`
+	Style  *FootnoteStyle `json:"style,omitempty"`
 }
 
 // FootnoteSection 文档底部的脚注区，通常位于所有正文块之后。
