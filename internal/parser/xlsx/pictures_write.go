@@ -427,9 +427,20 @@ func buildPic(b *strings.Builder, im *imageJSON, id int, p picPlan, mode string,
 	b.WriteString(`</xdr:pic>`)
 }
 
-// reuseBlipFill 原样复用原始 blipFill（未编辑裁剪/颜色时），仅替换关系 id。
+// reuseBlipFill 原样复用原始 blipFill 内容（未编辑裁剪/颜色时），仅替换关系 id。
+// RawBlipFill 存的是【整个】<xdr:blipFill>…</xdr:blipFill> 元素，而 buildPic 已经
+// 打开了自己的 <xdr:blipFill> —— 这里必须剥掉外层标签（曾导致双层嵌套、Excel 报错）。
 func reuseBlipFill(im *imageJSON, p picPlan) string {
-	s := im.RawBlipFill
+	s := strings.TrimSpace(im.RawBlipFill)
+	if strings.HasPrefix(s, "<xdr:blipFill") {
+		if i := strings.Index(s, ">"); i >= 0 {
+			s = s[i+1:]
+		}
+	}
+	if j := strings.LastIndex(s, "</xdr:blipFill>"); j >= 0 {
+		s = s[:j]
+	}
+	s = strings.TrimSpace(s)
 	if p.svgRID != "" && im.SVGRel != "" {
 		s = strings.ReplaceAll(s, `r:embed="`+im.SVGRel+`"`, `r:embed="`+p.svgRID+`"`)
 	} else {

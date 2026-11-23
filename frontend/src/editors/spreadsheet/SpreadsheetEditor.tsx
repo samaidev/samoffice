@@ -2,6 +2,14 @@ import { useState, useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES } from '../../lib/cnFontSizes'
 import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
+import PictureLayer from './PictureLayer'
+import PictureRibbon, { PicCommand } from './PictureRibbon'
+import PicturePane from './PicturePane'
+import IconLibrary from './IconLibrary'
+import {
+  SheetPicture, SheetPictureJSON, PicGeometry, picFromJSON, picToJSON, picRect, setPicRect,
+  defaultPicture, newPicId, touchPic, cropFill, cropFit, naturalRectSize, PICTURE_STYLES,
+} from './pictures'
 
 interface Cell {
   value: string; formula?: string
@@ -34,19 +42,19 @@ interface SortLevel { col: number; asc: boolean }
 interface AutoFilterState { headerRow: number; filters: Record<number, string[]> }
 // 空白值在筛选集合里的特殊键
 const BLANK_KEY = '\u0000blank'
-// 浮动图片（前端态）：src 为 dataURL；快照回传时转为 base64/ext（与 io.go imageJSON 对应）
-interface SheetImage { row: number; col: number; src: string; width: number; height: number }
-// 单个 sheet 快照（与后端 io.go sheetJSON 对应：列宽 / 冻结 / 浮动图片）
+// 单个 sheet 快照（与后端 io.go sheetJSON 对应：列宽 / 行高 / 冻结 / 浮动图片）
 interface SheetSnapshot {
   name: string; rows?: number; cols?: number; cells: Record<string, Cell>
   // colWidths：0 基列号 → 像素宽（默认 80px 不写入）
   colWidths?: Record<number, number>
+  // rowHeights：0 基行号 → 像素高（round60：行高持久化，图片锚点保真）
+  rowHeights?: Record<number, number>
   // freeze：冻结窗格锚点单元格名（如 "C3"），空表示未冻结
   freeze?: string
   // round54：打印标题行数（每页顶端重复的标题行数，来自 _xlnm.Print_Titles；0=不重复）
   printTitleRows?: number
-  // images：浮动图片（base64 不含 data: 前缀）
-  images?: { row: number; col: number; base64: string; ext: string; width: number; height: number }[]
+  // images：浮动图片（round60 完整模型，与 io.go imageJSON 对应）
+  images?: SheetPictureJSON[]
 }
 // 快照回传类型（rows/cols 必填，另带 sheet 级元数据）
 interface SheetSnapshotOut extends SheetSnapshot { rows: number; cols: number }
@@ -60,7 +68,7 @@ interface Props {
   onSheetsChange?: (snapshot: SheetSnapshotOut[]) => void
 }
 
-type RibbonTab = 'home' | 'insert' | 'data' | 'view'
+type RibbonTab = 'home' | 'insert' | 'data' | 'view' | 'picture'
 
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
@@ -99,6 +107,28 @@ function dataURLToBase64(src: string): { base64: string; ext: string } {
   if (!m) return { base64: '', ext: 'png' }
   const ext = m[1] === 'jpg' ? 'jpeg' : m[1]
   return { base64: m[2], ext }
+}
+// round60：图片工具 —— UTF-8 文本/二进制 → base64，blob → dataURL
+function utf8ToBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text)
+  let bin = ''
+  bytes.forEach(b => { bin += String.fromCharCode(b) })
+  return btoa(bin)
+}
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)) as number[])
+  return btoa(bin)
+}
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((res, rej) => {
+    const r = new FileReader()
+    r.onload = () => res(String(r.result))
+    r.onerror = () => rej(r.error)
+    r.readAsDataURL(blob)
+  })
 }
 
 // === 筛选下拉面板（对齐 MS Excel 列头筛选）===
@@ -742,9 +772,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const rowAnchorRef = useRef(0)
   const colAnchorRef = useRef(0)
   const [colorMode, setColorMode] = useState<'font' | 'fill' | 'border'>('font')
-  // round53（问题1）：右键菜单来源 —— cell=单元格 / col=列标头 / row=行标头。
+  // round53（问题1）：右键菜单来源 —— cell=单元格 / col=列标头 / row=行标头 / pic=浮动图片。
   // 标头右键对齐 MS Excel：先选中整列/整行（已在选区内则保留多选），再弹对应菜单。
-  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number; kind?: 'cell' | 'col' | 'row' } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number; kind?: 'cell' | 'col' | 'row' | 'pic'; picId?: string } | null>(null)
   const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
   const [sheets, setSheets] = useState(initialSheetList)
   const activeId = sheets.find(s => s.active)?.id ?? 1
@@ -754,12 +784,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (initialSheets) initialSheets.forEach((s, i) => { if (s.colWidths && Object.keys(s.colWidths).length) init[i + 1] = { ...s.colWidths } })
     return init
   })
-  const [rowHeights, setRowHeights] = useState<Record<number, Record<number, number>>>({})
-  const [sheetImages, setSheetImages] = useState<Record<number, SheetImage[]>>(() => {
-    const init: Record<number, SheetImage[]> = {}
+  const [rowHeights, setRowHeights] = useState<Record<number, Record<number, number>>>(() => {
+    const init: Record<number, Record<number, number>> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => { if (s.rowHeights && Object.keys(s.rowHeights).length) init[i + 1] = { ...s.rowHeights } })
+    return init
+  })
+  // round60：浮动图片完整模型（picFromJSON 兼容旧快照的 row/col/width/height）
+  const [sheetImages, setSheetImages] = useState<Record<number, SheetPicture[]>>(() => {
+    const init: Record<number, SheetPicture[]> = {}
     if (initialSheets) initialSheets.forEach((s, i) => {
-      const imgs = (s.images || []).filter(im => im && im.base64).map(im => ({ row: im.row, col: im.col, src: `data:image/${im.ext || 'png'};base64,${im.base64}`, width: im.width, height: im.height }))
-      if (imgs.length) init[i + 1] = imgs
+      const pics = (s.images || []).filter(im => im && im.base64).map(im => picFromJSON(im))
+      if (pics.length) init[i + 1] = pics
     })
     return init
   })
@@ -774,8 +809,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (initialSheets) initialSheets.forEach((s, i) => { if (s.printTitleRows) init[i + 1] = s.printTitleRows })
     return init
   })
-  // 当前选中的浮动图片索引（Delete 键删除）
-  const [selImage, setSelImage] = useState<number | null>(null)
+  // 当前选中的浮动图片 id 列表 / 焦点图片 / 裁剪模式图片 / 格式窗格
+  const [selPics, setSelPics] = useState<string[]>([])
+  const [focusPic, setFocusPic] = useState<string | null>(null)
+  const [cropPic, setCropPic] = useState<string | null>(null)
+  const [picPaneOpen, setPicPaneOpen] = useState(false)
+  const [iconLibOpen, setIconLibOpen] = useState(false)
+  // 图片内部剪贴板（跨表粘贴用；系统剪贴板图像优先级在它之后）
+  const picClipRef = useRef<{
+    pics: SheetPicture[]
+    rel: { dx: number; dy: number; w: number; h: number }[]
+    baseX: number; baseY: number
+    isCut: boolean; fromSheet: number
+  } | null>(null)
   // === Excel 标准交互：单元格编辑态 / 公式引用选择 / 网格键盘焦点 ===
   // editCell 非空表示正在编辑该单元格（Excel 模型：单击只选中，输入/F2/双击才进入编辑）
   const [editCell, setEditCell] = useState<{ r: number; c: number; buf: string } | null>(null)
@@ -861,16 +907,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       cells: sheetData[s.id] || {},
       // 列宽只回传与默认 80px 不同的列，空表不携带该字段
       colWidths: Object.fromEntries(Object.entries(colWidths[s.id] || {}).filter(([, w]) => w !== 80)),
+      // 行高（round60 持久化；与默认 28px 相同的不回传，保持快照简洁）
+      rowHeights: Object.fromEntries(Object.entries(rowHeights[s.id] || {}).filter(([, h]) => h !== 28)),
       freeze: sheetFreeze[s.id] || undefined,
       printTitleRows: sheetPrintTitles[s.id] || 0,
-      images: (sheetImages[s.id] || []).map(im => {
-        const { base64, ext } = dataURLToBase64(im.src)
-        return { row: im.row, col: im.col, base64, ext, width: im.width, height: im.height }
-      }).filter(im => im.base64),
+      // 浮动图片：完整模型（锚点/效果/裁剪/透传片段）
+      images: (sheetImages[s.id] || []).map(p => picToJSON(p)).filter(p => p.base64),
     }))
     onSheetsChange(snapshot)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetData, sheets, rows, cols, colWidths, sheetImages, sheetFreeze, sheetPrintTitles])
+  }, [sheetData, sheets, rows, cols, colWidths, rowHeights, sheetImages, sheetFreeze, sheetPrintTitles])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [showChartPanel, setShowChartPanel] = useState(false)
@@ -894,11 +940,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const closeAllPanels = () => {
     setShowChartPanel(false); setShowShapePanel(false); setShowFuncPanel(false)
     setShowCondPanel(false); setShowValidPanel(false); setShowColorPopup(false)
-    setShowFreezePanel(false)
+    setShowFreezePanel(false); setShowPicInsertPanel(false)
   }
   // round54：冻结窗格下拉菜单（对齐 MS Excel 视图→冻结窗格：首行/首列/到当前格/取消）
   const [showFreezePanel, setShowFreezePanel] = useState(false)
-  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel || showColorPopup || showFreezePanel
+  // round60：插入图片下拉（此设备/图标库/剪贴板）
+  const [showPicInsertPanel, setShowPicInsertPanel] = useState(false)
+  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel || showColorPopup || showFreezePanel || showPicInsertPanel
   const [validList, setValidList] = useState('')
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   // round56：打印选定区域 —— 打开前把当前选区渲染成 HTML 表格快照
@@ -1100,17 +1148,24 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (findBar) { setFindBar(null); e.preventDefault(); return }
+      if (cropPic) { setCropPic(null); e.preventDefault(); return }
+      if (selPics.length) { selectPics([]); e.preventDefault(); return }
       if (anyPanelOpen) { closeAllPanels(); e.preventDefault() }
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [anyPanelOpen, findBar])
+  }, [anyPanelOpen, findBar, cropPic, selPics])
 
   // === 全局快捷键：撤销/重做、复制/剪切/粘贴、字体、清除、创建表、导航 ===
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (document.activeElement?.tagName || '').toUpperCase()
-      const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
+      // ★ round60 修复：隐藏 IME 宿主（data-ime-host）不算输入框 —— 它只是中文输入的
+      // 中转，焦点常驻于此；若按输入框处理，Ctrl+Z/C/X/V、Delete 等全部被跳过（失灵）。
+      // 真正编辑单元格时焦点在编辑输入框（无此标记），快捷键照常让位给输入框。
+      const ae = document.activeElement as HTMLElement | null
+      const isImeHost = !!ae?.dataset?.imeHost
+      const inInput = (tag === 'INPUT' || tag === 'TEXTAREA') && !isImeHost
       const mod = e.ctrlKey || e.metaKey
       const key = e.key.toLowerCase()
 
@@ -1123,19 +1178,30 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if (mod && key === 'h') { e.preventDefault(); setFindBar({ find: '', replace: '' }); return }
 
       // 复制 / 剪切 / 粘贴（输入框内使用原生复制，便于复制单元格内文本与公式）
-      if (!inInput && mod && key === 'c') { e.preventDefault(); copyCells(false); return }
-      if (!inInput && mod && key === 'x') { e.preventDefault(); copyCells(true); return }
+      // round60：选中浮动图片时优先操作图片（Excel：图片与单元格剪贴板互斥）
+      if (!inInput && mod && key === 'c') { e.preventDefault(); if (selPics.length) { copyPics(false); return } copyCells(false); return }
+      if (!inInput && mod && key === 'x') { e.preventDefault(); if (selPics.length) { copyPics(true); return } copyCells(true); return }
       if (!inInput && mod && key === 'v') {
         e.preventDefault()
-        // 对齐 Excel：优先粘贴系统剪贴板的 TSV 文本（可从外部 Excel/记事本粘贴），
-        // 失败（无权限/非文本）时回退到内部剪贴板（保留样式与公式）
+        // 对齐 Excel：内部图片剪贴板 → 粘贴图片；否则系统剪贴板 TSV 文本（可从外部
+        // Excel/记事本粘贴）→ 系统剪贴板图像（截图粘贴）→ 内部单元格剪贴板
+        if (selPics.length || picClipRef.current?.pics?.length) { pastePics(); return }
         ;(async () => {
           try {
             const txt = await navigator.clipboard?.readText?.()
             if (txt && txt.length && pasteText(txt)) return
-          } catch { /* 无系统剪贴板读取权限，走内部剪贴板 */ }
+          } catch { /* 无系统剪贴板读取权限 */ }
+          if (await pasteSystemImage()) return
           pasteCells()
         })()
+        return
+      }
+      // round60：Ctrl+D 复制选中图片（无图片选中时保持 Excel 的“向下填充”由网格键盘处理）
+      if (!inInput && mod && key === 'd' && selPics.length) { e.preventDefault(); duplicatePics(); return }
+      // round60：Ctrl+A 选中图片时全选本表所有图片
+      if (!inInput && mod && key === 'a' && selPics.length) {
+        e.preventDefault()
+        selectPics((sheetImages[activeId] || []).map(p => p.id))
         return
       }
 
@@ -1150,8 +1216,28 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       // 清除内容（Delete / Backspace，仅在非输入框时）；选中浮动图片时优先删图
       if (!mod && (key === 'delete' || key === 'backspace') && !inInput) {
         e.preventDefault()
-        if (selImage !== null) { removeImage(selImage); return }
+        if (selPics.length) { removePics(); return }
         clearCellsContent(); return
+      }
+
+      // round60：图片选中时的方向键 = 微移图片（1px；Shift=10px；Ctrl=吸附格线），
+      // 不再移动单元格选区（Excel 行为）
+      if (!mod && !inInput && selPics.length && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault()
+        const step = e.shiftKey ? 10 : 1
+        if (e.key === 'ArrowUp') nudgePics(0, -step)
+        if (e.key === 'ArrowDown') nudgePics(0, step)
+        if (e.key === 'ArrowLeft') nudgePics(-step, 0)
+        if (e.key === 'ArrowRight') nudgePics(step, 0)
+        return
+      }
+      if (mod && !inInput && selPics.length && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault()
+        if (e.key === 'ArrowUp') nudgePics(0, -1, true)
+        if (e.key === 'ArrowDown') nudgePics(0, 1, true)
+        if (e.key === 'ArrowLeft') nudgePics(-1, 0, true)
+        if (e.key === 'ArrowRight') nudgePics(1, 0, true)
+        return
       }
 
       // 单元格导航（方向键 / Tab / Enter），仅在非输入框时拦截
@@ -1177,7 +1263,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, selection, clipboard, rows, cols, data, sheets, past, future, selImage])
+  }, [active, selection, clipboard, rows, cols, data, sheets, past, future, selPics, sheetImages, activeId, cropPic])
 
   // 鼠标在表格外松开时也结束选区拖拽（并结束公式引用/多区域/行列头拖拽）
   useEffect(() => {
@@ -1676,6 +1762,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setFreezeAt(parseFreeze(sheetFreeze[id]))
     setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
     setExtraAreas([])
+    setSelPics([]); setFocusPic(null); setCropPic(null)
   }
   // === 网格键盘处理（容器持有焦点时；对齐 MS Excel 快捷键）===
   const onGridKeyDown = (e: React.KeyboardEvent) => {
@@ -1783,12 +1870,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
 
   // === 撤销 / 重做 ===
   // 在用户编辑动作前调用：记录当前数据快照
+  // round60：图片撤销栈与单元格撤销栈并行推进（pushHistory 同时压两边；图片对象
+  // 不可变，浅拷贝数组即可，不深拷贝 base64）
+  const picPastRef = useRef<Record<number, SheetPicture[]>[]>([])
+  const picFutureRef = useRef<Record<number, SheetPicture[]>[]>([])
+  const picSnapshot = () => Object.fromEntries(Object.entries(sheetImages).map(([k, v]) => [Number(k), [...v]])) as Record<number, SheetPicture[]>
   const pushHistory = () => {
     setPast(p => {
       const np = [...p, JSON.parse(JSON.stringify(data))]
       if (np.length > HISTORY_LIMIT) np.shift()
       return np
     })
+    picPastRef.current = [...picPastRef.current, picSnapshot()].slice(-HISTORY_LIMIT)
+    picFutureRef.current = []
     setFuture([])
   }
   const undo = () => {
@@ -1797,6 +1891,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setFuture(f => [...f, JSON.parse(JSON.stringify(data))])
     setPast(past.slice(0, -1))
     setData(prev)
+    if (picPastRef.current.length) {
+      picFutureRef.current = [...picFutureRef.current, picSnapshot()]
+      setSheetImages(picPastRef.current.pop()!)
+    }
   }
   const redo = () => {
     if (future.length === 0) return
@@ -1804,6 +1902,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setPast(p => [...p, JSON.parse(JSON.stringify(data))])
     setFuture(future.slice(0, -1))
     setData(next)
+    if (picFutureRef.current.length) {
+      picPastRef.current = [...picPastRef.current, picSnapshot()]
+      setSheetImages(picFutureRef.current.pop()!)
+    }
   }
   // 清除选区内容（保留格式）：Delete / Backspace 快捷键；作用于全部选中区域
   const clearCellsContent = () => {
@@ -1902,10 +2004,429 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       return nd
     })
   }
-  // 删除浮动图片（选中后 Delete 或点 ×）
-  const removeImage = (idx: number) => {
-    setSheetImages(m => ({ ...m, [activeId]: (m[activeId] || []).filter((_, i) => i !== idx) }))
-    setSelImage(null)
+  // ================= round60：浮动图片（完整交互套件） =================
+  const curPics = curImages
+  // 工作表几何（不含行/列标头偏移）：图片层用工作表坐标，锚点换算集中在这里
+  const picGeom: PicGeometry = {
+    colLeft: (c: number) => { let x = 0; for (let i = 0; i < c; i++) x += curColWidths[i] || 80; return x },
+    rowTop: (r: number) => { let y = 0; for (let i = 0; i < r; i++) y += curRowHeights[i] || 28; return y },
+    colW: (c: number) => curColWidths[c] || 80,
+    rowH: (r: number) => curRowHeights[r] || 28,
+  }
+  const updatePics = (fn: (list: SheetPicture[]) => SheetPicture[]) => {
+    setSheetImages(m => {
+      const cur = m[activeId] || []
+      const out = fn(cur)
+      if (out === cur) return m
+      return { ...m, [activeId]: out }
+    })
+  }
+  // 选中图片：自动切到「图片格式」上下文选项卡（对齐 Excel），清空时回到「开始」
+  const selectPics = (ids: string[], focusId?: string) => {
+    setSelPics(ids)
+    setFocusPic(focusId ?? ids[ids.length - 1] ?? null)
+    if (!ids.length) setCropPic(null)
+    if (ids.length) { if (ribbonTab !== 'picture') setRibbonTab('picture') } else if (ribbonTab === 'picture') setRibbonTab('home')
+  }
+  const picBeginEdit = () => pushHistory()
+  // 补丁式更新选中图片（touch 决定丢弃哪些原始 XML 透传片段；history 用于离散操作）
+  const patchSelPics = (patch: Partial<SheetPicture>, touch: 'ln' | 'fx' | 'color' | 'geom' | 'meta' | 'crop' | 'style', history = false) => {
+    if (history) pushHistory()
+    updatePics(list => list.map(p => selPics.includes(p.id) ? touchPic({ ...p, ...patch }, touch) : p))
+  }
+  const nextPicName = () => {
+    const list = sheetImages[activeId] || []
+    const names = new Set(list.map(p => p.name))
+    let i = list.length + 1, name = `图片 ${i}`
+    while (names.has(name)) { i++; name = `图片 ${i}` }
+    return name
+  }
+  const removePics = (ids: string[] = selPics) => {
+    if (!ids.length) return
+    pushHistory()
+    updatePics(list => list.filter(p => !ids.includes(p.id)))
+    selectPics([])
+  }
+  const addPicFromDataURL = (src: string, base64: string, ext: string, natW: number, natH: number, svgSrc?: string) => {
+    const b64 = base64 || src.split(',')[1] || ''
+    if (!b64) return
+    const p = defaultPicture(src, b64, ext, Math.max(1, natW), Math.max(1, natH))
+    p.name = nextPicName()
+    if (svgSrc) { p.svgSrc = svgSrc; p.svgB64 = svgSrc.split(',')[1] || '' }
+    // 显示尺寸 = 原始尺寸，最长边限 420px（大图自动缩小，对齐 Excel 插入体验）
+    const s = Math.min(1, 420 / Math.max(p.natW, p.natH, 1))
+    const w = Math.max(8, Math.round(p.natW * s)), h = Math.max(8, Math.round(p.natH * s))
+    const x = picGeom.colLeft(active.c), y = picGeom.rowTop(active.r)
+    const q = setPicRect(p, picGeom, { x, y, w, h })
+    pushHistory()
+    updatePics(list => [...list, q])
+    selectPics([q.id], q.id)
+    ensureGrid(active.r + Math.ceil(h / 28) + 2, active.c + Math.ceil(w / 80) + 2, true)
+  }
+  // 插入 SVG：保留矢量源（svgB64 → Excel svgBlip）+ 高分辨率 PNG 兜底
+  const insertSvgSource = (svgText: string, recolor?: string) => {
+    let text = svgText
+    if (recolor) text = text.replace(/currentColor/gi, recolor)
+    const b64 = utf8ToBase64(text)
+    const url = `data:image/svg+xml;base64,${b64}`
+    const img = new Image()
+    img.onload = () => {
+      const nw = Math.max(16, img.naturalWidth || 128), nh = Math.max(16, img.naturalHeight || 128)
+      const scale = Math.min(4, 512 / Math.max(nw, nh))
+      const cv = document.createElement('canvas')
+      cv.width = Math.round(nw * scale); cv.height = Math.round(nh * scale)
+      const ctx = cv.getContext('2d')
+      if (ctx) ctx.drawImage(img, 0, 0, cv.width, cv.height)
+      const png = cv.toDataURL('image/png')
+      addPicFromDataURL(png, png.split(',')[1] || '', 'png', nw, nh, url)
+    }
+    img.onerror = () => addPicFromDataURL(url, b64, 'svg', 128, 128, url)
+    img.src = url
+  }
+  const insertPicFile = (file: File) => {
+    if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) {
+      const r = new FileReader()
+      r.onload = () => insertSvgSource(String(r.result))
+      r.readAsText(file)
+      return
+    }
+    const r = new FileReader()
+    r.onload = () => {
+      const src = String(r.result)
+      const img = new Image()
+      img.onload = () => {
+        // 统一转 PNG：webp/bmp/avif 等浏览器能显示但 Excel 不认的格式
+        try {
+          const cv = document.createElement('canvas')
+          cv.width = img.naturalWidth; cv.height = img.naturalHeight
+          cv.getContext('2d')!.drawImage(img, 0, 0)
+          addPicFromDataURL(cv.toDataURL('image/png'), '', 'png', img.naturalWidth, img.naturalHeight)
+        } catch {
+          addPicFromDataURL(src, '', 'png', img.naturalWidth, img.naturalHeight)
+        }
+      }
+      img.onerror = () => {
+        // EMF/WMF 等浏览器无法解码：按字节插入占位框，保存时原样写回 xlsx
+        const rb = new FileReader()
+        rb.onload = () => {
+          const b64 = arrayBufferToBase64(rb.result as ArrayBuffer)
+          const ext = (file.name.split('.').pop() || 'png').toLowerCase()
+          addPicFromDataURL('', b64, ext, 120, 90)
+        }
+        rb.readAsArrayBuffer(file)
+      }
+      img.src = src
+    }
+    r.readAsDataURL(file)
+  }
+  // 文件选择（挂到 DOM 再 click —— round59 教训：游离 input 在 WebView2 不弹选择框）
+  const pickPicFile = (onFile: (f: File) => void, multiple = false) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*,.svg,.emf,.wmf'
+    input.multiple = multiple
+    input.style.display = 'none'
+    input.onchange = () => {
+      input.remove()
+      const files = Array.from(input.files || [])
+      files.forEach(onFile)
+    }
+    document.body.appendChild(input)
+    input.click()
+    setTimeout(() => input.isConnected && input.remove(), 60_000)
+  }
+  // 系统剪贴板图像粘贴（Ctrl+V 且内部图片剪贴板为空时）
+  const pasteSystemImage = async (): Promise<boolean> => {
+    try {
+      const nav = navigator as Navigator & { clipboard?: Clipboard & { read?: () => Promise<ClipboardItem[]> } }
+      const items = await nav.clipboard?.read?.()
+      for (const it of items || []) {
+        const type = it.types.find(t => t.startsWith('image/'))
+        if (!type) continue
+        const blob = await it.getType(type)
+        const src = await blobToDataURL(blob)
+        const img = new Image()
+        await new Promise<void>(res => { img.onload = () => res(); img.onerror = () => res(); img.src = src })
+        if (!img.naturalWidth) return false
+        const cv = document.createElement('canvas')
+        cv.width = img.naturalWidth; cv.height = img.naturalHeight
+        cv.getContext('2d')?.drawImage(img, 0, 0)
+        addPicFromDataURL(cv.toDataURL('image/png'), '', 'png', img.naturalWidth, img.naturalHeight)
+        return true
+      }
+    } catch { /* 无权限/无图像 */ }
+    return false
+  }
+  const copyPics = (cut: boolean) => {
+    const sel = curPics.filter(p => selPics.includes(p.id))
+    if (!sel.length) return
+    // 相对位移（跨表粘贴时按活动单元格重定位）
+    let minX = Infinity, minY = Infinity
+    const rects = sel.map(p => picRect(p, picGeom))
+    rects.forEach(r => { minX = Math.min(minX, r.x); minY = Math.min(minY, r.y) })
+    picClipRef.current = {
+      pics: sel.map((p, i) => ({ ...p })),
+      rel: rects.map(r => ({ dx: r.x - minX, dy: r.y - minY, w: r.w, h: r.h })),
+      baseX: minX, baseY: minY,
+      isCut: cut, fromSheet: activeId,
+    }
+    // 同步 PNG 到系统剪贴板（能贴到其他应用；失败静默）
+    try {
+      const p0 = sel[0]
+      const src = p0.svgSrc || p0.src
+      if (src.startsWith('data:image/')) {
+        const img = new Image()
+        img.onload = () => {
+          try {
+            const cv = document.createElement('canvas')
+            cv.width = img.naturalWidth || 300; cv.height = img.naturalHeight || 200
+            cv.getContext('2d')?.drawImage(img, 0, 0)
+            cv.toBlob(b => {
+              if (b) navigator.clipboard?.write?.([new ClipboardItem({ 'image/png': b })]).catch(() => {})
+            }, 'image/png')
+          } catch { /* ClipboardItem 不可用 */ }
+        }
+        img.src = src
+      }
+    } catch { /* 忽略 */ }
+  }
+  const pastePics = async () => {
+    const clip = picClipRef.current
+    if (!clip?.pics?.length) { await pasteSystemImage(); return }
+    pushHistory()
+    const sameSheet = clip.fromSheet === activeId
+    const baseX = sameSheet ? clip.baseX + 24 : picGeom.colLeft(active.c)
+    const baseY = sameSheet ? clip.baseY + 24 : picGeom.rowTop(active.r)
+    if (clip.isCut && sameSheet) {
+      // 剪切后粘回同一表 = 移动原对象（保留对象身份与名称）
+      updatePics(list => list.map(p => {
+        const i = clip.pics.findIndex(q => q.id === p.id)
+        if (i < 0) return p
+        return setPicRect(touchPic(p, 'pos'), picGeom, { x: baseX + clip.rel[i].dx, y: baseY + clip.rel[i].dy, w: clip.rel[i].w, h: clip.rel[i].h })
+      }))
+      picClipRef.current = null
+      return
+    }
+    const copies = clip.pics.map((p, i) => ({
+      ...setPicRect({ ...p, id: newPicId(), raw: '', name: nextPicName() }, picGeom, { x: baseX + clip.rel[i].dx, y: baseY + clip.rel[i].dy, w: clip.rel[i].w, h: clip.rel[i].h }),
+    }))
+    if (clip.isCut) {
+      // 跨表剪切：原表删除
+      setSheetImages(m => ({ ...m, [clip.fromSheet]: (m[clip.fromSheet] || []).filter(p => !clip.pics.some(q => q.id === p.id)) }))
+      picClipRef.current = null
+    }
+    updatePics(list => [...list, ...copies])
+    selectPics(copies.map(c => c.id))
+    const maxR = copies.reduce((a, c) => Math.max(a, c.to.row), 0), maxC = copies.reduce((a, c) => Math.max(a, c.to.col), 0)
+    ensureGrid(maxR + 2, maxC + 2, true)
+  }
+  const duplicatePics = () => {
+    const clip = picClipRef.current
+    const sel = curPics.filter(p => selPics.includes(p.id))
+    if (!sel.length) return
+    pushHistory()
+    const copies = sel.map(p => {
+      const r = picRect(p, picGeom)
+      return setPicRect({ ...p, id: newPicId(), raw: '', name: nextPicName() }, picGeom, { x: r.x + 24, y: r.y + 24, w: r.w, h: r.h })
+    })
+    updatePics(list => [...list, ...copies])
+    selectPics(copies.map(c => c.id))
+    void clip
+  }
+  // 大小（锁定纵横比时联动）
+  const picSetSize = (w: number | null, h: number | null) => {
+    updatePics(list => list.map(p => {
+      if (!selPics.includes(p.id)) return p
+      const r = picRect(p, picGeom)
+      let nw = w ?? r.w, nh = h ?? r.h
+      if (p.lockAspect && r.w > 0 && r.h > 0) {
+        if (w != null) nh = (w / r.w) * r.h
+        else nw = (h! / r.h) * r.w
+      }
+      return setPicRect(touchPic(p, 'pos'), picGeom, { x: r.x, y: r.y, w: Math.max(4, nw), h: Math.max(4, nh) })
+    }))
+  }
+  const picSetRot = (deg: number) => patchSelPics({ rot: ((deg % 360) + 360) % 360 }, 'meta')
+  // 行列增删后平移/收缩图片锚点（moveSize/move/fixed 全部按像素映射后重锚）
+  const shiftPicAnchors = (axis: 'row' | 'col', at: number, count: number) => {
+    if (!count) return
+    const line = axis === 'row' ? picGeom.rowTop : picGeom.colLeft
+    const size = axis === 'row' ? picGeom.rowH : picGeom.colW
+    let spanPx = 0
+    for (let i = 0; i < Math.abs(count); i++) spanPx += size(at + i)
+    const base = line(at)
+    const map = (v: number) => {
+      if (count > 0) return v >= base - 0.01 ? v + spanPx : v
+      if (v >= base + spanPx - 0.01) return v - spanPx
+      if (v >= base - 0.01) return base
+      return v
+    }
+    updatePics(list => {
+      const out: SheetPicture[] = []
+      for (const p of list) {
+        const r = picRect(p, picGeom)
+        const x1 = axis === 'col' ? map(r.x) : r.x
+        const x2 = axis === 'col' ? map(r.x + r.w) : r.x + r.w
+        const y1 = axis === 'row' ? map(r.y) : r.y
+        const y2 = axis === 'row' ? map(r.y + r.h) : r.y + r.h
+        const w = x2 - x1, h = y2 - y1
+        if (count < 0 && ((axis === 'row' && h < 1) || (axis === 'col' && w < 1))) continue // 完全落在删除区
+        out.push(setPicRect(touchPic(p, 'pos'), picGeom, { x: x1, y: y1, w: Math.max(4, w), h: Math.max(4, h) }))
+      }
+      return out
+    })
+  }
+  // 「图片格式」选项卡 / 窗格命令分发
+  const picCommand = (cmd: PicCommand) => {
+    const sel = curPics.filter(p => selPics.includes(p.id))
+    const p0 = sel[0]
+    if (cmd === 'pane:open') { setPicPaneOpen(v => !v); return }
+    if (cmd === 'pane:props') { setPicPaneOpen(true); return }
+    if (!p0) return
+    if (cmd === 'replace') {
+      pickPicFile(file => {
+        const r = new FileReader()
+        r.onload = () => {
+          const src = String(r.result)
+          const img = new Image()
+          img.onload = () => {
+            pushHistory()
+            updatePics(list => list.map(p => selPics.includes(p.id)
+              ? { ...p, src, base64: src.split(',')[1] || p.base64, ext: 'png', natW: img.naturalWidth, natH: img.naturalHeight, svgSrc: undefined, svgB64: '', raw: '', rawBlipFill: '', srcRel: '' }
+              : p))
+          }
+          img.onerror = () => { /* 保持原样 */ }
+          img.src = src
+        }
+        r.readAsDataURL(file)
+      })
+      return
+    }
+    if (cmd === 'resetPic') {
+      pushHistory()
+      updatePics(list => list.map(p => selPics.includes(p.id)
+        ? { ...touchPic(touchPic(touchPic(p, 'color'), 'fx'), 'crop'), color: null, shadow: null, glow: null, softEdge: 0, reflection: 0, bevel: null, cam: '', camLat: 0, camLon: 0, camRev: 0, crop: { l: 0, t: 0, r: 0, b: 0 }, stylePreset: '' }
+        : p))
+      return
+    }
+    if (cmd === 'resetSize') {
+      pushHistory()
+      updatePics(list => list.map(p => {
+        if (!selPics.includes(p.id)) return p
+        const r = picRect(p, picGeom)
+        const nat = naturalRectSize(p)
+        return { ...setPicRect(touchPic(touchPic(p, 'crop'), 'pos'), picGeom, { x: r.x, y: r.y, w: nat.w, h: nat.h }), crop: { l: 0, t: 0, r: 0, b: 0 }, rot: 0 }
+      }))
+      return
+    }
+    if (cmd === 'crop:start') { setCropPic(p0.id); selectPics([p0.id], p0.id); return }
+    if (cmd === 'crop:reset') { patchSelPics({ crop: { l: 0, t: 0, r: 0, b: 0 } }, 'crop', true); return }
+    if (cmd === 'crop:fill') {
+      pushHistory()
+      updatePics(list => list.map(p => selPics.includes(p.id) ? { ...touchPic(cropFill(p), 'crop') } : p))
+      return
+    }
+    if (cmd === 'crop:fit') {
+      pushHistory()
+      updatePics(list => list.map(p => {
+        if (!selPics.includes(p.id)) return p
+        const r = picRect(p, picGeom)
+        const q = cropFit(p)
+        return setPicRect(touchPic(q, 'crop'), picGeom, { x: r.x, y: r.y, w: q.size.w, h: q.size.h })
+      }))
+      return
+    }
+    if (cmd.startsWith('crop:shape:')) {
+      patchSelPics({ geom: cmd.slice('crop:shape:'.length), stylePreset: '' }, 'geom', true)
+      return
+    }
+    if (cmd.startsWith('crop:ratio:')) {
+      pushHistory()
+      const [a, b] = cmd.slice('crop:ratio:'.length).split(':').map(Number)
+      if (!a || !b) return
+      updatePics(list => list.map(p => {
+        if (!selPics.includes(p.id)) return p
+        const r = picRect(p, picGeom)
+        const ratio = a / b
+        let w = r.w, h = r.h
+        if (w / h > ratio) w = h * ratio
+        else h = w / ratio
+        const cx = r.x + r.w / 2, cy = r.y + r.h / 2
+        const q = setPicRect(touchPic(cropFill(p), 'crop'), picGeom, { x: cx - w / 2, y: cy - h / 2, w, h })
+        return cropFill(q)
+      }))
+      return
+    }
+    if (cmd.startsWith('arrange:')) {
+      const op = cmd.slice('arrange:'.length)
+      pushHistory()
+      updatePics(list => {
+        const selIds = sel.map(p => p.id)
+        const kept = list.filter(p => !selIds.includes(p.id))
+        if (op === 'front') return [...kept, ...sel]
+        if (op === 'back') return [...sel, ...kept]
+        const out = [...list]
+        if (op === 'forward') {
+          for (let i = out.length - 2; i >= 0; i--) {
+            if (selIds.includes(out[i].id) && !selIds.includes(out[i + 1].id)) { const t = out[i]; out[i] = out[i + 1]; out[i + 1] = t }
+          }
+        } else if (op === 'backward') {
+          for (let i = 1; i < out.length; i++) {
+            if (selIds.includes(out[i].id) && !selIds.includes(out[i - 1].id)) { const t = out[i]; out[i] = out[i - 1]; out[i - 1] = t }
+          }
+        }
+        return out
+      })
+      return
+    }
+    if (cmd.startsWith('align:')) {
+      if (sel.length < 2) return
+      pushHistory()
+      const rects = sel.map(p => picRect(p, picGeom))
+      const minX = Math.min(...rects.map(r => r.x)), maxX = Math.max(...rects.map(r => r.x + r.w))
+      const minY = Math.min(...rects.map(r => r.y)), maxY = Math.max(...rects.map(r => r.y + r.h))
+      const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2
+      const kind = cmd.slice('align:'.length)
+      updatePics(list => list.map(p => {
+        const i = sel.findIndex(q => q.id === p.id)
+        if (i < 0) return p
+        const r = rects[i]
+        let x = r.x, y = r.y
+        if (kind === 'left') x = minX
+        if (kind === 'right') x = maxX - r.w
+        if (kind === 'center') x = midX - r.w / 2
+        if (kind === 'top') y = minY
+        if (kind === 'bottom') y = maxY - r.h
+        if (kind === 'middle') y = midY - r.h / 2
+        return setPicRect(touchPic(p, 'pos'), picGeom, { x, y, w: r.w, h: r.h })
+      }))
+      return
+    }
+    if (cmd === 'rotate:right') { patchSelPics({ rot: (p0.rot + 90) % 360 }, 'meta', true); return }
+    if (cmd === 'rotate:left') { patchSelPics({ rot: (p0.rot + 270) % 360 }, 'meta', true); return }
+    if (cmd === 'rotate:flipH') { patchSelPics({ flipH: !p0.flipH }, 'meta', true); return }
+    if (cmd === 'rotate:flipV') { patchSelPics({ flipV: !p0.flipV }, 'meta', true); return }
+  }
+  // 键盘：方向键微移（1px，Shift=10px，Ctrl=吸附到下一格边线）
+  const nudgePics = (dx: number, dy: number, snap = false) => {
+    updatePics(list => list.map(p => {
+      if (!selPics.includes(p.id)) return p
+      const r = picRect(p, picGeom)
+      let x = r.x + dx, y = r.y + dy
+      if (snap) {
+        if (dx > 0) x = picGeom.colLeft(Math.floor(x / 80) + 1)
+        if (dx < 0) x = picGeom.colLeft(Math.max(0, Math.ceil(x / 80) - 1))
+        if (dy > 0) y = picGeom.rowTop(Math.floor(y / 28) + 1)
+        if (dy < 0) y = picGeom.rowTop(Math.max(0, Math.ceil(y / 28) - 1))
+      }
+      return setPicRect(touchPic(p, 'pos'), picGeom, { x, y, w: r.w, h: r.h })
+    }))
+  }
+  const onPicNativeSize = (id: string, w: number, h: number) => {
+    updatePics(list => list.map(p => p.id === id && (p.natW !== w || p.natH !== h) ? { ...p, natW: w, natH: h } : p))
+  }
+  const onPicMenu = (x: number, y: number, picId: string) => {
+    setMenu({ x, y, r: active.r, c: active.c, kind: 'pic', picId })
   }
   // 表头右缘拖拽调整列宽（mousemove 实时更新，40~600px）
   const colResizeRef = useRef<{ c: number; startX: number; startW: number } | null>(null)
@@ -2019,6 +2540,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }
   }
   const copyCells = (cut: boolean) => {
+    picClipRef.current = null
     const { r1, c1, r2, c2 } = selRect()
     const cells: Record<string, Cell> = {}
     let txt = ''
@@ -2188,6 +2710,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setData(d => rebuildRows(d, at, count))
     setRows(r => r + count)
     setRowHeights(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, count) }))
+    shiftPicAnchors('row', at, count)
     commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
     setActive({ r: at, c: active.c })
   }
@@ -2196,6 +2719,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setData(d => rebuildRows(d, at, -count))
     setRows(r => Math.max(1, r - count))
     setRowHeights(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, -count) }))
+    shiftPicAnchors('row', at, -count)
     commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
     setActive({ r: at, c: active.c })
   }
@@ -2204,6 +2728,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setData(d => rebuildCols(d, at, count))
     setCols(c => c + count)
     setColWidths(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, count) }))
+    shiftPicAnchors('col', at, count)
     commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
     setActive({ r: active.r, c: at })
   }
@@ -2212,6 +2737,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setData(d => rebuildCols(d, at, -count))
     setCols(c => Math.max(1, c - count))
     setColWidths(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, -count) }))
+    shiftPicAnchors('col', at, -count)
     commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
     setActive({ r: active.r, c: at })
   }
@@ -2324,8 +2850,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setData(sheetData[id] || {})
     setSheets(s => s.map(x => ({ ...x, active: x.id === id })))
     setPast([]); setFuture([])
+    picPastRef.current = []; picFutureRef.current = []
     setFreezeAt(parseFreeze(sheetFreeze[id]))
-    setSelImage(null)
+    setSelPics([]); setFocusPic(null); setCropPic(null)
     // 筛选/排序对话框/多区域是工作表级状态，切换时重置
     setAutoFilter(null); setFilterMenuCol(null); setSortDialog(null); setExtraAreas([])
   }
@@ -2348,7 +2875,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       setData(sheetData[next.id] || {})
       setFreezeAt(parseFreeze(sheetFreeze[next.id]))
     }
-    setPast([]); setFuture([]); setSelImage(null)
+    setPast([]); setFuture([]); picPastRef.current = []; picFutureRef.current = []
+    setSelPics([]); setFocusPic(null); setCropPic(null)
   }
   const activeSheet = sheets.find(s => s.active) || sheets[0]
 
@@ -2530,6 +3058,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('sheet.ribbon.home') }, { id: 'insert', label: t('sheet.ribbon.insert') }, { id: 'data', label: t('sheet.ribbon.data') }, { id: 'view', label: t('sheet.ribbon.view') },
+    // round60：图片格式上下文选项卡（选中浮动图片时出现，对齐 Excel Picture Format）
+    ...(selPics.length ? [{ id: 'picture' as RibbonTab, label: tf('sheet.ribbon.picture', '图片格式') }] : []),
   ]
 
   // 查找匹配集合（查找条打开且有关键词时高亮所有匹配单元格）
@@ -2757,38 +3287,20 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.illustration')}>
-            {/* 真实浮动图片：选中文件后锚定当前活动格，网格上绝对定位渲染，可选中删除，保存时写回 xlsx */}
-            <RibbonButton icon="🖼" label={t('sheet.image')} data-testid="sheet-btn-image" onClick={() => {
-              // ★ round59 修复：input 必须【挂到 DOM】再 click() —— 游离节点在
-              // Chromium/WebView2 里不弹文件选择框（点击被静默吞掉），图片功能完全无法用。
-              // 用完（选中或 60s 超时）移除，避免残留隐藏节点。
-              const input = document.createElement('input')
-              input.type = 'file'
-              input.accept = 'image/*'
-              input.style.display = 'none'
-              input.onchange = () => {
-                input.remove()
-                const file = input.files?.[0]
-                if (!file) return
-                const reader = new FileReader()
-                reader.onload = () => {
-                  const src = String(reader.result)
-                  const img = new Image()
-                  img.onload = () => {
-                    // 显示尺寸上限 320px（最长边），保持比例
-                    let w = img.width || 200, h = img.height || 150
-                    const scale = Math.min(1, 320 / Math.max(w, h))
-                    w = Math.round(w * scale); h = Math.round(h * scale)
-                    setSheetImages(m => ({ ...m, [activeId]: [...(m[activeId] || []), { row: active.r, col: active.c, src, width: w, height: h }] }))
-                  }
-                  img.src = src
-                }
-                reader.readAsDataURL(file)
-              }
-              document.body.appendChild(input)
-              input.click()
-              setTimeout(() => input.isConnected && input.remove(), 60_000)
-            }} title={tf('sheet.imageTitle', '插入浮动图片（锚定当前单元格）')} />
+            {/* round60：插入图片下拉 —— 此设备… / 图标库 / 剪贴板（对齐 Excel 插入→插图） */}
+            <div className="relative">
+              <RibbonButton icon="🖼" label={t('sheet.image')} data-testid="sheet-btn-image" onClick={() => setShowPicInsertPanel(v => !v)} title={tf('sheet.imageTitle', '插入浮动图片（锚定当前单元格）')} />
+              {showPicInsertPanel && (
+                <div className="absolute top-full ribbon-popup ribbon-popup_compact" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+                  <button onClick={() => { setShowPicInsertPanel(false); pickPicFile(insertPicFile, true) }} data-testid="pic-insert-device"
+                    className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>💻 {tf('sheet.picInsertDevice', '此设备…')}</button>
+                  <button onClick={() => { setShowPicInsertPanel(false); setIconLibOpen(true) }} data-testid="pic-insert-icons"
+                    className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>🧩 {tf('sheet.picInsertIcons', '图标库')}</button>
+                  <button onClick={() => { setShowPicInsertPanel(false); pasteSystemImage() }} data-testid="pic-insert-clipboard"
+                    className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>📋 {tf('sheet.picInsertClipboard', '来自剪贴板')}</button>
+                </div>
+              )}
+            </div>
           </RibbonGroup>
           <RibbonGroup label={t('sheet.function')}>
             <div className="relative">
@@ -2806,6 +3318,17 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             </div>
           </RibbonGroup>
         </>)}
+        {ribbonTab === 'picture' && (
+          <PictureRibbon
+            pics={curPics.filter(p => selPics.includes(p.id))}
+            allCount={curPics.length}
+            geom={picGeom}
+            onCommand={picCommand}
+            onPatch={patchSelPics}
+            onSize={picSetSize}
+            onRot={picSetRot}
+          />
+        )}
         {ribbonTab === 'data' && (<>
           <RibbonGroup label={t('sheet.sortFilter')}>
             <RibbonButton icon="↑" label={t('sheet.sortAsc')} onClick={() => quickSort(true)} title={tf('sheet.sortAscTitle', '按当前列升序（保留样式）')} />
@@ -3090,7 +3613,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       {/* round54：去掉容器 padding —— sticky 阈值以 scrollport 为基准，容器 padding
           会让冻结格的 left/top 阈值与自然位置相差 pad 像素，冻结列/行整条错位 12px
           （用户报告"第一列/第一行边框错乱"的组成部分）。表格改为贴边铺放。 */}
-      <div className="flex-1 overflow-auto relative" ref={scrollRef} style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
+      <div className="flex flex-1 min-h-0" data-testid="sheet-body">
+      <div className="flex-1 min-w-0 overflow-auto relative" ref={scrollRef} onDragOver={e => { e.preventDefault() }} onDrop={e => {
+        e.preventDefault()
+        const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|gif|bmp|webp|svg|emf|wmf)$/i.test(f.name))
+        if (files.length) files.forEach(insertPicFile)
+      }} style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
         ...(viewMode === 'pageBreak' ? {
           backgroundImage: 'repeating-linear-gradient(to right, transparent 0, transparent calc(7 * 80px - 1px), #f59e0b calc(7 * 80px - 1px), #f59e0b calc(7 * 80px), transparent calc(7 * 80px)), repeating-linear-gradient(to bottom, transparent 0, transparent calc(46 * 28px - 1px), #f59e0b calc(46 * 28px - 1px), #f59e0b calc(46 * 28px), transparent calc(46 * 28px))',
           backgroundRepeat: 'no-repeat',
@@ -3111,6 +3639,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             ref={imeHostRef}
             aria-hidden="true"
             tabIndex={-1}
+            data-ime-host="1"
             onChange={e => {
               const ne = e.nativeEvent as any
               if (ne && ne.isComposing) return // 组合期间不提交，等 compositionend 后的 input
@@ -3410,7 +3939,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         if (e.shiftKey) { e.preventDefault(); extendTo(r, c); focusGrid(); return }
                         // 阻止浏览器原生文本选择（MS Excel 框选时不会选中文字）；焦点显式回到网格
                         e.preventDefault()
-                        selectCell(r, c); setSelImage(null); setDragging(true); focusGrid()
+                        selectCell(r, c); if (selPics.length) selectPics([]); setDragging(true); focusGrid()
                         clickEditRef.current = { r, c } // 纯单击（无拖拽）时 mouseup 进入编辑
                       }}
                       onMouseEnter={() => {
@@ -3501,29 +4030,48 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             })}
           </tbody>
         </table>
-        {/* 浮动图片层：锚定单元格，随列宽/行高定位；点击选中，Delete 删除 */}
-        {curImages.map((im, idx) => (
-          <img key={idx} src={im.src} alt="" draggable={false}
-            style={{
-              position: 'absolute',
-              left: colLeft(im.col) + 2,
-              // ★ round59：纵向要加表头高度 —— rowTop 只累加了数据行，而图片层定位
-              // 基准（gridRef div）里 thead 占 32px（列标头行，同 sticky 冻结用的
-              // frozenTop = 32 + rowTop(r) 约定）。缺这 32px 图片整体上移一格高度，
-              // 锚定 A1 的图直接画到列标头上 —— 用户报告"图片显示在表格外面"。
-              top: rowTop(im.row) + (showHeadings ? 32 : 0) + 2,
-              width: im.width || 'auto',
-              height: im.height || 'auto',
-              maxWidth: 'none',
-              outline: selImage === idx ? '2px solid var(--color-primary)' : 'none',
-              cursor: 'pointer',
-              zIndex: 35,
-            }}
-            onMouseDown={e => { e.stopPropagation(); setSelImage(idx) }}
-            title={tf('sheet.imageSelectedHint', '点击选中，Delete 删除')} />
-        ))}
+        {/* round60：浮动图片层 —— 完整模型渲染与交互。
+            坐标系 = 工作表坐标（A1 原点，不含行/列标头），这里整体平移标头宽高；
+            round59 的 32px 表头偏移教训由统一坐标系解决。 */}
+        <div style={{ position: 'absolute', left: showHeadings ? 48 : 0, top: showHeadings ? 32 : 0, width: 0, height: 0, zIndex: 35 }}>
+          <PictureLayer
+            pics={curPics}
+            sel={selPics}
+            cropId={cropPic}
+            geom={picGeom}
+            zoom={zoom}
+            onChange={updatePics}
+            onSelect={selectPics}
+            onActivate={focusGrid}
+            onMenu={onPicMenu}
+            onNativeSize={onPicNativeSize}
+            onBeginEdit={picBeginEdit}
+            onEndCrop={() => setCropPic(null)}
+          />
+        </div>
         </div>
       </div>
+      {/* round60：设置图片格式窗格（选中图片时可用；Excel 的 Format Picture 侧栏） */}
+      {picPaneOpen && (
+        <PicturePane
+          pics={curPics.filter(p => selPics.includes(p.id))}
+          geom={picGeom}
+          onClose={() => setPicPaneOpen(false)}
+          onPatch={patchSelPics}
+          onCommand={picCommand}
+          onSize={picSetSize}
+          onRot={picSetRot}
+        />
+      )}
+      </div>
+
+      {/* round60：图标库（插入 → 图标库） */}
+      {iconLibOpen && (
+        <IconLibrary
+          onPick={(svgText, color) => insertSvgSource(svgText, color)}
+          onClose={() => setIconLibOpen(false)}
+        />
+      )}
 
       {/* 多级排序对话框（MS Excel 风格） */}
       {sortDialog && (
@@ -3596,6 +4144,43 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         const sep = <div key={'sep' + Math.random()} className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
         // round53（问题1）：列标头 / 行标头右键菜单（对齐 MS Excel 标头菜单：
         // 剪切/复制 + 插入/删除 + 清除内容 + 列宽/行高；选区即右键时选中的整列/整行）
+        // round60：浮动图片右键菜单（对齐 Excel 图片右键）
+        if (kind === 'pic') {
+          const picId = menu.picId || ''
+          const picList = curPics
+          const target = picList.find(q => q.id === picId)
+          const multiSel = selPics.length > 1
+          return (
+            <div className="fixed z-[100] py-1 rounded-lg shadow-xl border" style={{ left: menu.x, top: menu.y, background: 'var(--color-surface)', borderColor: 'var(--color-border)' }} onContextMenu={e => e.preventDefault()} onMouseDown={e => e.stopPropagation()}>
+              {ctxItem(tf('sheet.cut', '剪切'), '✂', () => { copyPics(true) })}
+              {ctxItem(tf('sheet.copy', '复制'), '⧉', () => { copyPics(false) })}
+              {ctxItem(tf('sheet.paste', '粘贴'), '📋', () => { pastePics() })}
+              {sep}
+              {ctxItem(tf('sheet.picMenuDelete', '删除'), '🗑', () => { removePics() })}
+              {sep}
+              {ctxItem(tf('sheet.picMenuSizeProp', '大小和属性…'), '📐', () => { setPicPaneOpen(true); setRibbonTab('picture') })}
+              {ctxItem(tf('sheet.picPaneTitle', '设置图片格式…'), '🎨', () => { setPicPaneOpen(true); setRibbonTab('picture') })}
+              {sep}
+              {ctxItem(tf('sheet.picFront', '置于顶层'), '⬆', () => { picCommand('arrange:front') })}
+              {ctxItem(tf('sheet.picForward', '上移一层'), '↥', () => { picCommand('arrange:forward') })}
+              {ctxItem(tf('sheet.picBackward', '下移一层'), '↧', () => { picCommand('arrange:backward') })}
+              {ctxItem(tf('sheet.picBack', '置于底层'), '⬇', () => { picCommand('arrange:back') })}
+              {sep}
+              {ctxItem(tf('sheet.cropStart', '裁剪'), '✂️', () => { picCommand('crop:start') }, multiSel)}
+              {ctxItem(tf('sheet.picMenuChange', '更改图片…'), '🔄', () => { picCommand('replace') })}
+              {ctxItem(tf('sheet.picResetPic', '重置图片'), '↩️', () => { picCommand('resetPic') })}
+              {sep}
+              {target && ctxItem(target.hidden ? tf('sheet.picMenuShow', '显示图片') : tf('sheet.picMenuHide', '隐藏图片'), '👁', () => {
+                pushHistory()
+                updatePics(list => list.map(q => q.id === picId ? { ...q, hidden: !q.hidden } : q))
+              })}
+              {target && !multiSel && ctxItem(tf('sheet.picMenuAnchor', '对象定位…'), '📌', () => { setPicPaneOpen(true); setRibbonTab('picture') })}
+              <div className="px-3 py-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                {target ? `${target.name || '图片'} · ${Math.round(picRect(target, picGeom).w)}×${Math.round(picRect(target, picGeom).h)}px${multiSel ? ` · ${tf('sheet.picMultiN', '已选')} ${selPics.length}` : ''}` : ''}
+              </div>
+            </div>
+          )
+        }
         if (kind === 'col' || kind === 'row') {
           const isCol = kind === 'col'
           return (

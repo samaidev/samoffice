@@ -62,11 +62,19 @@ try {
   await page.waitForTimeout(300)
   await page.click('[data-testid="ribbon-tab-insert"]')
   await page.waitForTimeout(200)
-  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-testid="sheet-btn-image"]')])
+  // round60 起「图片」按钮为下拉菜单（此设备/图标库/剪贴板），图片渲染为 SVG 而非 <img>
+  await page.click('[data-testid="sheet-btn-image"]')
+  await page.waitForSelector('[data-testid="pic-insert-device"]')
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-testid="pic-insert-device"]')])
   await fc.setFiles(path.join(FIXTURES, 'r59.png'))
-  await page.waitForSelector('img[src^="data:image"]', { timeout: 30000 })
+  await page.waitForSelector('svg[data-pic-id]', { timeout: 30000 })
   await page.waitForTimeout(300)
-  const img = await bbox('img[src^="data:image"]')
+  const img = await page.evaluate(() => {
+    const el = document.querySelector('svg[data-pic-id]')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { y: r.y, x: r.x, height: r.height, width: r.width }
+  })
   const anchor = await bbox('td[data-cell="3-4"]')
   const dTop = img ? img.y - anchor.y : null
   const dLeft = img ? img.x - anchor.x : null

@@ -592,3 +592,39 @@ func TestRegisterPictureMedia(t *testing.T) {
 		t.Errorf("media=%v drawing=%v, want both", hasMedia, hasDrawing)
 	}
 }
+
+// ---- 7. 移动过的图片 + 未编辑的 blipFill（回归：曾写出双层 <xdr:blipFill>）----
+
+func TestPicturesMovedKeepsRawBlipFill(t *testing.T) {
+	// 读回 Excel 风格文件（带颜色变换），仅改锚点（丢弃 raw 锚点、保留 rawBlipFill）再保存
+	wb := readBack(t, excelStyleWorkbook(t, excelStyleDrawing))
+	im := &wb.Sheets[0].Images[0]
+	im.From = &picPointJSON{Col: 3, Row: 3, Dx: 1, Dy: 1}
+	im.To = &picPointJSON{Col: 6, Row: 8, Dx: 2, Dy: 2}
+	im.Raw = "" // 锚点动过
+	if im.RawBlipFill == "" {
+		t.Fatal("前置失败：rawBlipFill 未透传")
+	}
+	out, err := WriteXLSXBytes(mustJSONMarshal(t, wb))
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	dx := drawingOf(t, out)
+	if n := strings.Count(dx, "<xdr:blipFill>"); n != 1 {
+		t.Errorf("blipFill 开标签数 = %d, want 1（双层嵌套会让图片读不回）\n%s", n, dx)
+	}
+	if !strings.Contains(dx, "<a:duotone>") {
+		t.Errorf("颜色变换透传丢失")
+	}
+	// 读回：图片必须还在且颜色保留
+	back := readBack(t, out)
+	if len(back.Sheets[0].Images) != 1 {
+		t.Fatalf("读回图片数 = %d, want 1", len(back.Sheets[0].Images))
+	}
+	if back.Sheets[0].Images[0].Color == nil || len(back.Sheets[0].Images[0].Color.Duotone) != 2 {
+		t.Errorf("duotone 丢失: %+v", back.Sheets[0].Images[0].Color)
+	}
+	if back.Sheets[0].Images[0].From.Col != 3 {
+		t.Errorf("新锚点丢失: %+v", back.Sheets[0].Images[0].From)
+	}
+}
