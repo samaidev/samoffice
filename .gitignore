@@ -71,3 +71,12 @@ frontend/dist-web/
 scripts/e2e-web/out/
 scripts/e2e-web/results.json
 scripts/e2e-web/fail-shot.png
+
+# round58 逐页对比生成的产物（可再生成，不入库）
+scripts/e2e/ppt-cmp/cmp/
+scripts/e2e/ppt-cmp/ours/
+scripts/e2e/ppt-cmp/ref/
+scripts/e2e/ppt-cmp/ref.pptx
+scripts/e2e/ppt-cmp/zoom-*.png
+scripts/e2e/ppt-cmp/probe.mjs
+scripts/patches/
