@@ -19,6 +19,7 @@ import { createTableClickBridge } from './tableClickBridge'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES, resolveFontSizeInput } from '../../lib/cnFontSizes'
 import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
+import PageFlow from '../../components/PageFlow'
 import { Dropdown } from '../../components/Dropdown'
 import { Ruler } from '../../components/Ruler'
 import { MathEditorModal } from './MathEditorModal'
@@ -927,7 +928,7 @@ function extractFootnotes(doc: any): FootnoteData[] {
 }
 
 export function DocumentEditor({ document, spellErrors = [], onChange, onManualSpellCheck, spellChecking, zoom: zoomProp, onZoomChange, backend, onToast, initialUnlockHash, onUnlockChange }: Props) {
-  const { t, lang } = useI18n()
+  const { t, tf, lang } = useI18n()
 
   // 系统字体库 — 通过 queryLocalFonts() 补充系统已安装字体。
   // 注意：queryLocalFonts 在 WebView2 下返回的 family 多为英文/音译名（如 SimSun），
@@ -1448,6 +1449,14 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   // round56：打印选定区域 —— 打开对话框时对当前选区做快照（HTML 片段）
   const [printSelectionHTML, setPrintSelectionHTML] = useState<string | null>(null)
+
+  // ── round57：多页预览视图 + 打印克隆共享构建 ──
+  // 视图模式：'edit' 编辑 | 'pages' 多页预览（覆盖层常驻 display 切换，
+  // 避免 pm-host 兄弟条件渲染触发 React/ProseMirror removeChild 冲突）
+  const [viewMode, setViewMode] = useState<'edit' | 'pages'>('edit')
+  const [pagesViewCount, setPagesViewCount] = useState(1)
+
+
   const [inTable, setInTable] = useState(false)
   // 表格边框工具（对齐 MS Word 表格工具“边框”预设）：预设下拉 + 线色 + 线宽
   const [showTableBorderMenu, setShowTableBorderMenu] = useState(false)
@@ -1604,6 +1613,91 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [docMargins, setDocMargins] = useState({ top: 96, bottom: 96, left: 120, right: 120 })
   const [pageSize, setPageSize] = useState<'A4'|'A3'|'A5'|'B5'|'Letter'|'Legal'>('A4')
   const [orientation, setOrientation] = useState<'portrait'|'landscape'>('portrait')
+  // 文档自身页面设置 → 打印坐标（预览 px = mm×1.5；编辑器 docMargins 是 px，换算 mm）
+  const docPrintMargins = { top: docMargins.top * 25.4 / 96, bottom: docMargins.bottom * 25.4 / 96, left: docMargins.left * 25.4 / 96, right: docMargins.right * 25.4 / 96 }
+  const printPaperW = (st: any) => { const pp = PAPER_SIZES[st.paperSize] || PAPER_SIZES.A4; return (st.orientation === 'landscape' ? pp.h : pp.w) * 1.5 }
+  const printPaperH = (st: any) => { const pp = PAPER_SIZES[st.paperSize] || PAPER_SIZES.A4; return (st.orientation === 'landscape' ? pp.w : pp.h) * 1.5 }
+  const printContentH = (st: any) => Math.max(60, printPaperH(st) - (st.margins.top + st.margins.bottom) * 1.5)
+  const printPad = (st: any) => ({ top: st.margins.top * 1.5, right: st.margins.right * 1.5, bottom: st.margins.bottom * 1.5, left: st.margins.left * 1.5 })
+
+  // 克隆 .ProseMirror DOM → 带清理的预览内容节点（打印预览/拼版打印/多页预览共用）。
+  // round57 从 renderPreview 抽出：逻辑不变（清理编辑态装饰/分页位移/补 ProseMirror 类）。
+  const buildPrintClone = (st: any): React.ReactNode => {
+          // round56：打印选定区域 —— 页码范围选「选定区域」时只渲染选区快照，
+          // 实际打印也只打印该片段（PrintDialog 选区打印容器）
+          // 真实文档预览：克隆 .ProseMirror DOM（保留字号/加粗/表格/图片/公式/脚注等
+          // 全部真实格式）。旧版手工拼前 6 段纯文本，与真实文档毫无关系 ——
+          // 用户报告"打印预览格式完全是错的"。
+          // 克隆时机：renderPreview 在对话框打开时渲染一次，此时读取编辑器实时 DOM。
+          const src = editorRef.current?.querySelector('.ProseMirror') as HTMLElement | null
+          if (!src) return <div className="h-full flex items-center justify-center text-gray-400 text-sm">{t('print.previewEmpty') || '无预览内容'}</div>
+          const clone = src.cloneNode(true) as HTMLElement
+          // 清理编辑态装饰：分页占位/手柄/选中高亮等不进预览
+          clone.querySelectorAll('.pm-table-handle, .selectedCell, .spell-error, .pg-linebreak, .ProseMirror-selectednode').forEach(n => {
+            n.classList.remove('pm-shown', 'selectedCell', 'spell-error', 'ProseMirror-selectednode')
+            if (n.classList.contains('pm-table-handle') || n.classList.contains('pg-linebreak')) n.remove()
+          })
+          // round23 修复（用户报告：打印预览表格样式错乱）：
+          // 克隆会把分页装饰的位移样式一起带进预览 ——
+          // .pg-brk 的 margin-top: 312px（块级断页下推）、.pg-brk-row 的
+          // transform:translateY（跨页表格行位移）、.pg-brk-table 的
+          // margin-bottom 补高、.pg-brk-cell 的边框透明化 —— 这些只在编辑器
+          // 的“页间留白”模型里有意义；预览容器是连续纸面，带入后表格被推到
+          // 预览页之外/边框错乱。预览应展示自然布局流。
+          clone.querySelectorAll('.pg-brk, .pg-brk-row, .pg-brk-table, .pg-brk-cell').forEach(n => {
+            const st = (n.getAttribute('style') || '')
+              .replace(/(^|;)\s*margin-top\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*margin-bottom\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*transform\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*position\s*:\s*relative\s*(;|$)/gi, '$1')
+              .replace(/(^|;)\s*top\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*border-(top|right|bottom|left)-color\s*:\s*transparent\s*(;|$)/gi, '$1')
+              .replace(/^\s*;\s*|\s*;\s*$/g, '')
+            if (st.trim()) n.setAttribute('style', st)
+            else n.removeAttribute('style')
+            n.classList.remove('pg-brk', 'pg-brk-row', 'pg-brk-table', 'pg-brk-cell')
+          })
+          // 表格 wrapper 的位置样式（分页用 relative top）同步清理
+          clone.querySelectorAll('.tableWrapper').forEach(n => {
+            const st = (n.getAttribute('style') || '')
+              .replace(/(^|;)\s*margin-bottom\s*:[^;]*/gi, '')
+              .replace(/(^|;)\s*transform\s*:[^;]*/gi, '')
+            if (st.trim()) n.setAttribute('style', st)
+            else n.removeAttribute('style')
+          })
+          clone.removeAttribute('contenteditable')
+          clone.style.padding = '0'
+          clone.style.background = 'transparent'
+          // round28：预览容器没有 .ProseMirror 祖先，表格/列表/脚注等
+          // 编辑器作用域样式（.ProseMirror table { width:100% } 等）全部
+          // 失效 —— 表格退化为 auto 布局（410px≠554px、边框丢失、
+          // 居中 margin:auto 失效，用户报告"打印预览表格没按实际样式
+          // 居中"）。给克隆根补 ProseMirror 类让作用域样式生效；
+          // 编辑态副作用（caret/outline/hover 手柄）由下方 pm-nocaret
+          // 与既有清理（selectedCell/handle 移除）抑制。
+          clone.classList.add('ProseMirror', 'pm-nocaret')
+          // 内容区宽 = 纸宽 - 左右边距（预览容器已按 1.5 倍缩放纸尺寸，内容同坐标系）；
+          // 文档实际以 pageWidthPx 渲染，横向等比压缩到预览内容宽。
+          // round55：横版取宽边（paper.h 是 mm 宽边）—— 之前横竖切换后内容宽
+          // 仍按竖版短边算，纸张变横、内容不变，用户观感「横竖切换无效」。
+          const paper = PAPER_SIZES[st.paperSize] || PAPER_SIZES.A4
+          const paperWmm = st.orientation === 'landscape' ? paper.h : paper.w
+          const contentW = Math.max(50, paperWmm - st.margins.left - st.margins.right)
+          const scaleW = (contentW * 1.5) / pageWidthPx
+          return (
+            <div style={{ width: '100%', height: '100%', overflow: 'hidden', color: '#000' }}>
+              {/* 类必须放在【消费 innerHTML 的容器】上（clone 根类不会随
+               * innerHTML 输出）—— ProseMirror 作用域样式（表格宽度/边框/
+               * 居中）靠它生效（round28）。 */}
+              <div
+                className={'ProseMirror pm-nocaret ' + (clone.className || '')}
+                style={{ transform: `scale(${Math.min(1, scaleW)})`, transformOrigin: 'top left', width: pageWidthPx + 'px', margin: 0, padding: 0 }}
+                dangerouslySetInnerHTML={{ __html: clone.innerHTML }}
+              />
+            </div>
+          )
+  }
+
   const [docColumns, setDocColumns] = useState(1)
   // 纸张物理尺寸（mm）→ 屏幕像素（96dpi: 1mm ≈ 3.7795px）
   const PAGE_SIZES_MM: Record<string, [number, number]> = {
@@ -4555,7 +4649,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
             } catch { /* 选区快照失败不阻塞打印 */ }
             setPrintSelectionHTML(html)
             setPrintDialogOpen(true)
-          }} data-testid="word-print-btn" /></RibbonGroup>
+          }} data-testid="word-print-btn" /><RibbonButton icon="📄" label={t('view.multiPagePreview')} onClick={() => setViewMode('pages')} data-testid="word-pages-btn" title={t('view.multiPagePreview')} /></RibbonGroup>
         </>)}
       </div>
       )}
@@ -5413,6 +5507,19 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         editorType="word"
         selectionPrintHTML={printSelectionHTML}
         printSelector=".ProseMirror"
+        renderPrint={(settings) => settings.perPage > 1 ? (
+          // round57：拼版打印（每版 2/4/6/8 页）—— PageFlow 全量挂载纸张卡流，
+          // PrintDialog 注入打印容器（zoom 校准 + 分卡分页）
+          <PageFlow
+            mountAll
+            renderContent={() => buildPrintClone(settings)}
+            contentH={printContentH(settings)}
+            paperW={printPaperW(settings)}
+            paperH={printPaperH(settings)}
+            pad={printPad(settings)}
+            perPage={settings.perPage}
+          />
+        ) : null}
         renderPreview={(settings) => {
           // round56：打印选定区域 —— 页码范围选「选定区域」时只渲染选区快照，
           // 实际打印也只打印该片段（PrintDialog 选区打印容器）
@@ -5421,79 +5528,45 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
               <div className="ProseMirror" style={{ padding: '8px 12px', color: '#000', minHeight: 60 }} dangerouslySetInnerHTML={{ __html: printSelectionHTML }} />
             )
           }
-          // 真实文档预览：克隆 .ProseMirror DOM（保留字号/加粗/表格/图片/公式/脚注等
-          // 全部真实格式）。旧版手工拼前 6 段纯文本，与真实文档毫无关系 ——
-          // 用户报告"打印预览格式完全是错的"。
-          // 克隆时机：renderPreview 在对话框打开时渲染一次，此时读取编辑器实时 DOM。
-          const src = editorRef.current?.querySelector('.ProseMirror') as HTMLElement | null
-          if (!src) return <div className="h-full flex items-center justify-center text-gray-400 text-sm">{t('print.previewEmpty') || '无预览内容'}</div>
-          const clone = src.cloneNode(true) as HTMLElement
-          // 清理编辑态装饰：分页占位/手柄/选中高亮等不进预览
-          clone.querySelectorAll('.pm-table-handle, .selectedCell, .spell-error, .pg-linebreak, .ProseMirror-selectednode').forEach(n => {
-            n.classList.remove('pm-shown', 'selectedCell', 'spell-error', 'ProseMirror-selectednode')
-            if (n.classList.contains('pm-table-handle') || n.classList.contains('pg-linebreak')) n.remove()
-          })
-          // round23 修复（用户报告：打印预览表格样式错乱）：
-          // 克隆会把分页装饰的位移样式一起带进预览 ——
-          // .pg-brk 的 margin-top: 312px（块级断页下推）、.pg-brk-row 的
-          // transform:translateY（跨页表格行位移）、.pg-brk-table 的
-          // margin-bottom 补高、.pg-brk-cell 的边框透明化 —— 这些只在编辑器
-          // 的“页间留白”模型里有意义；预览容器是连续纸面，带入后表格被推到
-          // 预览页之外/边框错乱。预览应展示自然布局流。
-          clone.querySelectorAll('.pg-brk, .pg-brk-row, .pg-brk-table, .pg-brk-cell').forEach(n => {
-            const st = (n.getAttribute('style') || '')
-              .replace(/(^|;)\s*margin-top\s*:[^;]*/gi, '')
-              .replace(/(^|;)\s*margin-bottom\s*:[^;]*/gi, '')
-              .replace(/(^|;)\s*transform\s*:[^;]*/gi, '')
-              .replace(/(^|;)\s*position\s*:\s*relative\s*(;|$)/gi, '$1')
-              .replace(/(^|;)\s*top\s*:[^;]*/gi, '')
-              .replace(/(^|;)\s*border-(top|right|bottom|left)-color\s*:\s*transparent\s*(;|$)/gi, '$1')
-              .replace(/^\s*;\s*|\s*;\s*$/g, '')
-            if (st.trim()) n.setAttribute('style', st)
-            else n.removeAttribute('style')
-            n.classList.remove('pg-brk', 'pg-brk-row', 'pg-brk-table', 'pg-brk-cell')
-          })
-          // 表格 wrapper 的位置样式（分页用 relative top）同步清理
-          clone.querySelectorAll('.tableWrapper').forEach(n => {
-            const st = (n.getAttribute('style') || '')
-              .replace(/(^|;)\s*margin-bottom\s*:[^;]*/gi, '')
-              .replace(/(^|;)\s*transform\s*:[^;]*/gi, '')
-            if (st.trim()) n.setAttribute('style', st)
-            else n.removeAttribute('style')
-          })
-          clone.removeAttribute('contenteditable')
-          clone.style.padding = '0'
-          clone.style.background = 'transparent'
-          // round28：预览容器没有 .ProseMirror 祖先，表格/列表/脚注等
-          // 编辑器作用域样式（.ProseMirror table { width:100% } 等）全部
-          // 失效 —— 表格退化为 auto 布局（410px≠554px、边框丢失、
-          // 居中 margin:auto 失效，用户报告"打印预览表格没按实际样式
-          // 居中"）。给克隆根补 ProseMirror 类让作用域样式生效；
-          // 编辑态副作用（caret/outline/hover 手柄）由下方 pm-nocaret
-          // 与既有清理（selectedCell/handle 移除）抑制。
-          clone.classList.add('ProseMirror', 'pm-nocaret')
-          // 内容区宽 = 纸宽 - 左右边距（预览容器已按 1.5 倍缩放纸尺寸，内容同坐标系）；
-          // 文档实际以 pageWidthPx 渲染，横向等比压缩到预览内容宽。
-          // round55：横版取宽边（paper.h 是 mm 宽边）—— 之前横竖切换后内容宽
-          // 仍按竖版短边算，纸张变横、内容不变，用户观感「横竖切换无效」。
-          const paper = PAPER_SIZES[settings.paperSize] || PAPER_SIZES.A4
-          const paperWmm = settings.orientation === 'landscape' ? paper.h : paper.w
-          const contentW = Math.max(50, paperWmm - settings.margins.left - settings.margins.right)
-          const scaleW = (contentW * 1.5) / pageWidthPx
-          return (
-            <div style={{ width: '100%', height: '100%', overflow: 'hidden', color: '#000' }}>
-              {/* 类必须放在【消费 innerHTML 的容器】上（clone 根类不会随
-               * innerHTML 输出）—— ProseMirror 作用域样式（表格宽度/边框/
-               * 居中）靠它生效（round28）。 */}
-              <div
-                className={'ProseMirror pm-nocaret ' + (clone.className || '')}
-                style={{ transform: `scale(${Math.min(1, scaleW)})`, transformOrigin: 'top left', width: pageWidthPx + 'px', margin: 0, padding: 0 }}
-                dangerouslySetInnerHTML={{ __html: clone.innerHTML }}
-              />
-            </div>
-          )
+          // round57：克隆构建抽为 buildPrintClone（打印预览/拼版打印/多页视图共用）
+          return buildPrintClone(settings)
         }}
       />
+      {/* round57：多页预览视图 —— 全屏覆盖层。常驻 + display 切换（不条件渲染，
+          避免 pm-host 兄弟结构变化触发 React/Prose removeChild 冲突）。 */}
+      <div
+        key="doc-pages-view"
+        style={{
+          display: viewMode === 'pages' ? 'flex' : 'none',
+          position: 'fixed', inset: 0, zIndex: 60, background: 'var(--color-bg)',
+          flexDirection: 'column',
+        }}
+        data-testid="word-pages-view"
+      >
+        <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>📄 {t('view.multiPagePreview')}</span>
+            <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{tf('view.pagesTotal', `共 ${pagesViewCount} 页`, { n: pagesViewCount })}</span>
+          </div>
+          <button
+            data-testid="word-pages-back"
+            onClick={() => setViewMode('edit')}
+            className="px-3 py-1.5 text-xs rounded-md font-medium"
+            style={{ background: 'var(--color-primary)', color: 'white' }}
+          >← {t('view.backToEdit')}</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 flex justify-center" data-testid="word-pages-wrap">
+          <PageFlow
+            testId="word-pages-flow"
+            renderContent={() => buildPrintClone({ paperSize: pageSize, orientation, margins: docPrintMargins } as any)}
+            contentH={printContentH({ paperSize: pageSize, orientation, margins: docPrintMargins } as any)}
+            paperW={printPaperW({ paperSize: pageSize, orientation, margins: docPrintMargins } as any)}
+            paperH={printPaperH({ paperSize: pageSize, orientation, margins: docPrintMargins } as any)}
+            pad={printPad({ paperSize: pageSize, orientation, margins: docPrintMargins } as any)}
+            onCount={setPagesViewCount}
+          />
+        </div>
+      </div>
       {showMathModal && (
         <MathEditorModal
           initialLatex={mathEdit.latex}

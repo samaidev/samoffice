@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { createRoot } from 'react-dom/client'
+import PageFlow from './PageFlow'
 import { useI18n } from '../i18n'
 import { Dropdown } from './Dropdown'
 
@@ -17,6 +19,11 @@ interface PrintDialogProps {
    *  提供非空值时页码范围出现「选定区域」选项，实际打印走专用打印容器。
    *  round56：用户报告打印选定区域无效。 */
   selectionPrintHTML?: string | null
+  /** 拼版/多页打印内容（round57）：返回预览坐标系纸张卡片流（.print-paper），
+   *  PrintDialog 注入专用打印容器（zoom 校准预览 px→物理 mm + 每卡分页）。
+   *  返回 null/undefined 则走传统 printSelector 直印。word/excel 在
+   *  perPage>1 时提供；ppt 提供全套幻灯片纸张流。 */
+  renderPrint?: (settings: PrintSettings) => React.ReactNode | null
 }
 
 /** 打印设置 (对标 MS Office 打印对话框) */
@@ -38,6 +45,8 @@ export interface PrintSettings {
   // 缩放
   scale: number            // 百分比, 100=实际大小
   scaleFit: 'actual' | 'fit' | 'shrink'  // 实际大小/适应/缩小
+  // 每版打印页数（round57，对标 MS Word/Excel「每版打印页数」1版N页）
+  perPage: 1 | 2 | 4 | 6 | 8
   // 双面
   duplex: 'none' | 'long' | 'short'  // 无/长边翻转/短边翻转
   // 装订
@@ -70,6 +79,7 @@ export const defaultPrintSettings: PrintSettings = {
   margins: { top: 25, bottom: 25, left: 25, right: 25 },
   scale: 100,
   scaleFit: 'actual',
+  perPage: 1,
   duplex: 'none',
   binding: 'none',
   color: 'color',
@@ -93,7 +103,7 @@ export const PAPER_SIZES: Record<string, { w: number; h: number }> = {
   Legal: { w: 216, h: 356 },
 }
 
-export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderPreview, printSelector, selectionPrintHTML }: PrintDialogProps) {
+export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderPreview, printSelector, selectionPrintHTML, renderPrint }: PrintDialogProps) {
   const { t } = useI18n()
   // round54：标题行数初值来自工作表已设置的打印标题（_xlnm.Print_Titles）
   const [settings, setSettings] = useState<PrintSettings>({ ...defaultPrintSettings, printTitleRows: excelTitleRows && excelTitleRows > 0 ? excelTitleRows : defaultPrintSettings.printTitleRows })
@@ -150,24 +160,38 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
   const effScaleRef = useRef(100)
   effScaleRef.current = effScale
 
-  // 文档内容实际高度 → 页数。open/settings/renderPreview 变化后重测；
-  // 另测一次延迟值兜底图片等异步加载导致的首次测量偏矮。
-  useLayoutEffect(() => {
-    if (!open || editorType !== 'word') return
-    const measure = () => {
-      const paper = PAPER_SIZES[settings.paperSize]
-      const ph = settings.orientation === 'landscape' ? paper.w : paper.h
-      const ch = Math.max(60, ph * 1.5 - (settings.margins.top + settings.margins.bottom) * 1.5)
-      const el = previewContentRef.current
-      if (!el) return
-      const pages = Math.max(1, Math.ceil((el.scrollHeight - 2) / ch))
-      setPageCount(prev => (prev === pages ? prev : pages))
-      setCurrentPage(p => (p > pages ? pages : p))
+  // round57：页数由 PageFlow 测量上报（onCount）。旧测量挂在单页窗口的
+  // translateY 包裹层上，多页流重构后该节点不存在；保留 currentPage 钳制。
+  const handleCount = (n: number) => {
+    setPageCount(prev => (prev === n ? prev : n))
+    setCurrentPage(p => (p > n ? n : p))
+  }
+  // 页码范围 → 显示页集合（word 多页流）：当前页 / 自定义区间展开
+  const parseCustom = (spec: string): number[] => {
+    const out: number[] = []
+    for (const part of String(spec || '').split(/[,，;\s]+/).filter(Boolean)) {
+      const m = part.match(/^(\d+)(?:\s*[-–]\s*(\d+))?$/)
+      if (!m) continue
+      const a = parseInt(m[1]), b = m[2] ? parseInt(m[2]) : a
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(i)
     }
-    measure()
-    const id = setTimeout(measure, 400)
+    return out.sort((x, y) => x - y)
+  }
+  const wordSelMode = editorType === 'word' && settings.pageRange === 'selection' && !!selectionPrintHTML
+  const wordPages = editorType === 'word' && settings.pageRange === 'current'
+    ? [currentPage]
+    : editorType === 'word' && settings.pageRange === 'custom'
+      ? (parseCustom(settings.customPages).length ? parseCustom(settings.customPages) : [1])
+      : undefined
+  // 翻页/换范围后滚动到当前页卡片
+  useEffect(() => {
+    if (!open || editorType !== 'word' || wordSelMode) return
+    const id = setTimeout(() => {
+      const card = document.querySelector(`[data-testid="print-flow"] [data-page="${currentPage}"]`) as HTMLElement | null
+      card?.scrollIntoView({ block: 'start' })
+    }, 80)
     return () => clearTimeout(id)
-  }, [open, settings, editorType, renderPreview])
+  }, [open, currentPage, settings.pageRange, editorType, wordSelMode])
 
   // 实际执行打印
   const doPrint = () => {
@@ -176,6 +200,24 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
     // scaleFit 更是写入了 'fit'/'shrink' 这种非法 CSS（用户报告：缩放/适应无效）。
     const eff = Math.round(effScaleRef.current)
     const selMode = settings.pageRange === 'selection' && !!selectionPrintHTML
+
+    // round57：拼版/多页打印 —— renderPrint 返回预览坐标纸张卡片流
+    //（.print-paper），注入专用容器 React 渲染后打印：
+    //  - zoom 校准：预览坐标 = mm×1.5px，物理 = mm×96/25.4px → zoom = 96/25.4/1.5 ≈ 2.5197
+    //  - 每张纸卡 break-after:page → 一卡一页；@page 边距置 0（边距在卡内 padding）
+    // word perPage>1 拼版 / excel perPage>1 / ppt 全套幻灯片走此路径。
+    const TILED_ID = 'print-dialog-tiled-holder'
+    let tiledRoot: { unmount: () => void } | null = null
+    const tiled = !selMode && renderPrint ? renderPrint(settings) : null
+    if (tiled) {
+      document.getElementById(TILED_ID)?.remove()
+      const holder = document.createElement('div')
+      holder.id = TILED_ID
+      document.body.appendChild(holder)
+      const root = createRoot(holder)
+      tiledRoot = root
+      root.render(tiled)
+    }
 
     // 选定区域打印：把选区 HTML 注入专用打印容器（body 直挂、屏上移出视口），
     // 打印 CSS 只显示它 —— 旧版对选定区域毫无处理，点打印仍是整篇文档。
@@ -202,20 +244,24 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
     const orient = settings.orientation === 'landscape' ? 'landscape' : 'portrait'
     const colorCss = settings.color === 'color' ? '' : 'filter: grayscale(1);'
     const zoomCss = eff !== 100 ? `zoom: ${eff}%;` : ''
-    const target = selMode ? `#${HOLDER_ID}` : (printSelector || '.print-content')
+    // 拼版：预览 px（mm×1.5）→ 物理 px（mm×96/25.4），叠加用户有效缩放
+    const tiledZoom = `zoom: ${((96 / 25.4 / 1.5) * effScaleRef.current).toFixed(3)}%;`
+    const target = selMode ? `#${HOLDER_ID}` : tiled ? `#${TILED_ID}` : (printSelector || '.print-content')
 
     style.textContent = `
       @media print {
         @page {
           size: ${paper.w}mm ${paper.h}mm ${orient};
-          margin: ${settings.margins.top}mm ${settings.margins.right}mm ${settings.margins.bottom}mm ${settings.margins.left}mm;
+          margin: ${tiled ? '0' : `${settings.margins.top}mm ${settings.margins.right}mm ${settings.margins.bottom}mm ${settings.margins.left}mm`};
         }
         body * { visibility: hidden; }
-        ${target} { visibility: visible; position: absolute; left: 0; top: 0; width: 100%; ${colorCss} ${zoomCss} }
+        ${target} { visibility: visible; position: absolute; left: 0; top: 0; width: 100%; ${colorCss} ${tiled ? tiledZoom : zoomCss} }
         ${target} * { visibility: visible; }
+        ${tiled ? `#${TILED_ID} .print-paper { break-after: page; } #${TILED_ID} .print-paper:last-child { break-after: auto; }` : ''}
         .no-print { display: none !important; }
       }
       ${selMode ? `#${HOLDER_ID} { position: fixed; left: -10000px; top: 0; }` : ''}
+      ${tiled ? `#${TILED_ID} { position: fixed; left: -10000px; top: 0; width: ${paper.w * 1.5}px; }` : ''}
     `
 
     // 添加打印内容类
@@ -227,12 +273,15 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
     setTimeout(() => {
       window.print()
       onClose()
-      // 打印结束后清理选区容器（留在 DOM 也无碍，但保持干净）
+      // 打印结束后清理选区/拼版容器（留在 DOM 也无碍，但保持干净）
       setTimeout(() => {
-        const h = document.getElementById(HOLDER_ID)
-        if (h) h.remove()
+        document.getElementById(HOLDER_ID)?.remove()
+        if (tiledRoot) {
+          tiledRoot.unmount()
+          document.getElementById(TILED_ID)?.remove()
+        }
       }, 800)
-    }, 200)
+    }, tiled ? 260 : 200)
   }
 
   if (!open) return null
@@ -493,6 +542,26 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
                   </div>
                 </div>
 
+                {/* 每版打印页数（round57：word/excel，对标 MS；ppt 用每页幻灯片数） */}
+                {(editorType === 'word' || editorType === 'excel') && (
+                  <div>
+                    <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.pagesPerSheet')}</label>
+                    <div className="grid grid-cols-5 gap-2">
+                      {[1, 2, 4, 6, 8].map(n => (
+                        <button
+                          key={n}
+                          onClick={() => update('perPage', n as any)}
+                          data-testid={`print-perpage-${n}`}
+                          className={`text-xs py-1.5 rounded-md border ${settings.perPage === n ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-gray-200'}`}
+                          style={settings.perPage === n ? {} : { color: 'var(--color-text)' }}
+                        >
+                          {t('print.sheetN', { n })}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* 双面 */}
                 <div>
                   <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--color-text-muted)' }}>{t('print.duplex')}</label>
@@ -650,7 +719,7 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
           </div>
 
           {/* 右侧：预览 */}
-          <div className="w-1/2 overflow-auto p-5 flex flex-col items-center" style={{ background: 'var(--color-bg-alt)' }} ref={previewRef}>
+          <div className="w-1/2 overflow-auto p-5 flex flex-col items-[safe_center]" style={{ background: 'var(--color-bg-alt)' }} ref={previewRef}>
             <div className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
               {t('print.preview')} · {settings.paperSize} · {settings.orientation === 'portrait' ? t('print.portrait') : t('print.landscape')} · {Math.round(effScale)}%
             </div>
@@ -660,15 +729,28 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
               className="bg-white shadow-2xl relative"
               style={{
                 width: `${previewW * 1.5}px`,
-                // excel：多页预览由 renderPreview 自带每页"纸张"卡片（重复标题行），
-                // 外层改为透明自适应容器；word/ppt 保持单张固定纸页。
-                ...((editorType === 'excel' || editorType === 'ppt' || editorType === 'pdf') ? { background: 'transparent', boxShadow: 'none', height: 'auto', padding: 0 } : { height: `${previewH * 1.5}px`, padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px` }),
+                // round57：word 非选区模式改多页卡片流（PageFlow 自带纸张卡），
+                // 外层与 excel/ppt 一致透明自适应；仅 word 选区模式保留
+                // 旧单张固定纸页（选区片段无分页语义）。
+                ...((editorType === 'excel' || editorType === 'ppt' || editorType === 'pdf' || (editorType === 'word' && !wordSelMode)) ? { background: 'transparent', boxShadow: 'none', height: 'auto', padding: 0 } : { height: `${previewH * 1.5}px`, padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px` }),
                 transform: `scale(${effScale / 100})`,
                 transformOrigin: 'top center',
                 filter: settings.color === 'color' ? 'none' : 'grayscale(1)',
               }}
             >
-              {editorType === 'word' ? (
+              {editorType === 'word' && !wordSelMode ? (
+                <PageFlow
+                  testId="print-flow"
+                  renderContent={() => renderPreview ? renderPreview(settings) : <div className="flex items-center justify-center text-gray-400 text-sm" style={{ height: contentH }}>{t('print.previewEmpty')}</div>}
+                  contentH={contentH}
+                  paperW={previewW * 1.5}
+                  paperH={previewH * 1.5}
+                  pad={{ top: settings.margins.top * 1.5, right: settings.margins.right * 1.5, bottom: settings.margins.bottom * 1.5, left: settings.margins.left * 1.5 }}
+                  pages={wordPages}
+                  perPage={settings.perPage}
+                  onCount={handleCount}
+                />
+              ) : editorType === 'word' ? (
                 <div style={{ height: contentH, overflow: 'hidden' }}>
                   <div ref={previewContentRef} style={{ transform: `translateY(${-(currentPage - 1) * contentH}px)` }}>
                     {renderPreview ? renderPreview(settings) : (

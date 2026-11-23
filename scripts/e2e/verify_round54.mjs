@@ -63,22 +63,19 @@ async function main() {
   }
 
   // T1d: 点击正文脚注引用 → 弹窗
-  const refPos = await p.evaluate(() => {
-    const refs = document.querySelectorAll('sup.footnote-ref')
-    for (const rf of refs) {
-      const q = rf.getBoundingClientRect()
-      if (q.width > 0 && q.height > 0) return { x: q.x + q.width / 2, y: q.y + q.height / 2 }
-    }
-    return null
-  })
-  if (refPos) {
-    await p.mouse.click(refPos.x, refPos.y)
+  // round57 修：手动量坐标 + mouse.click 在编辑保存后的重排时机下点到别处；
+  // 改用 Playwright locator（自动滚动入视口 + 可点击性等待）点击第一个引用。
+  const refCount = await p.evaluate(() => document.querySelectorAll('sup.footnote-ref').length)
+  if (refCount > 0) {
+    await p.locator('sup.footnote-ref').first().click({ force: true })
     await p.waitForTimeout(600)
     const t1d = await p.evaluate(() => !!document.querySelector('.modal-title'))
     ok('T1 点击正文脚注引用打开弹窗', t1d)
-    await p.keyboard.press('Escape')
+    // 脚注弹窗不监听 Escape —— 用「取消」按钮关闭（否则后续菜单点击被弹窗吞掉）
+    await p.locator('button:has-text("取消")').last().click()
+    await p.waitForTimeout(500)
   } else {
-    ok('T1 点击正文脚注引用打开弹窗', false, 'no visible ref')
+    ok('T1 点击正文脚注引用打开弹窗', false, '无脚注引用')
   }
 
   // ═══ T2: Excel 冻结首行/首列 + 边框 ═══

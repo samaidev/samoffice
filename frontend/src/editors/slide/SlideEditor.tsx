@@ -370,6 +370,76 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     ]
   })
   const [active, setActive] = useState(0)
+
+  // round57：幻灯片浏览视图（概览网格）
+  const [browseMode, setBrowseMode] = useState(false)
+  // round57：PPT 打印视图构建（打印预览 / 实际打印共用）—— 从 renderPreview 原样抽出。
+  // renderPrint 始终提供：实际打印走纸张卡流（每版 slidesPerPage 张 + zoom 校准 + 分卡分页），
+  // 修复此前实际打印永远只打当前画布（MS PPT 默认打印全部幻灯片）。
+  const buildPptPrintView = (settings: any): React.ReactNode => {
+          const per = settings.slidesPerPage || 1
+          const showNotes = settings.pptContent === 'notes'
+          const showOutline = settings.pptContent === 'outline'
+          // 网格列数（对标 MS PPT 讲义布局：2→1列, 3→3列, 4→2列, 6→3列, 9→3列）
+          const cols = per <= 1 ? 1 : per === 2 ? 1 : per === 3 ? 3 : per === 4 ? 2 : per === 6 ? 3 : 3
+          // 单张幻灯片缩略图缩放比（画布 808 宽 → 纸张格宽，见下方 K2）
+          // 单张幻灯片缩略图（复用 SlideThumb，与主画布/左侧面板一致的真实渲染）
+          const aspect = deckH / deckW
+
+          if (showNotes) {
+            return (
+              <div className="space-y-2">
+                {slides.map((s, i) => (
+                  <div key={i} className="p-2 border rounded" style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}>
+                    <div className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{s.title || `Slide ${i + 1}`}</div>
+                    <div className="text-xs mt-1 whitespace-pre-wrap" style={{ color: 'var(--color-text-muted)' }}>{s.notes || '—'}</div>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+          if (showOutline) {
+            return (
+              <div className="space-y-1">
+                {slides.map((s, i) => (
+                  <div key={i} className="text-xs" style={{ color: 'var(--color-text)' }}>{i + 1}. {s.title || `Slide ${i + 1}`}</div>
+                ))}
+              </div>
+            )
+          }
+
+          // 每页纸排 per 张，多页纸纵向堆叠（对标 MS PPT 讲义视图）
+          // round55：纸张卡片按【真实纸张】尺寸渲染（PAPER_SIZES × 方向 × 1.5 预览
+          // 缩放 + settings.margins 边距）—— 之前是固定 padding 的小卡片，纸张
+          // 大小/横竖切换对预览毫无作用（用户报告：打印预览按钮全无效）。
+          // round56：页码范围「当前页」→ 只预览当前幻灯片（MS PPT 打印当前幻灯片）
+          const pslides = (settings.pageRange === 'current' || settings.pageRange === 'selection') && slides[active] ? [slides[active]] : slides
+          const papers: Slide[][] = []
+          for (let i = 0; i < pslides.length; i += per) papers.push(pslides.slice(i, i + per))
+          const paper = PAPER_SIZES[settings.paperSize] || PAPER_SIZES.A4
+          const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
+          const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
+          const pad = `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`
+          const cellW = (pageWpx - (settings.margins.left + settings.margins.right) * 1.5) / cols
+          const thumbW = Math.max(40, cellW - 8)
+          const K2 = thumbW / 808
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '8px 0 16px' }}>
+              {papers.map((paperSlides, pi) => (
+                <div key={pi} className="print-paper" style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box', position: 'relative' }}>
+                  <div className="flex flex-wrap justify-center items-start" style={{ gap: 8 }}>
+                    {paperSlides.map((s, i) => <SlideThumb key={i} slide={s} width={thumbW} aspect={aspect} />)}
+                    {Array.from({ length: per - paperSlides.length }).map((_, k) => (
+                      <div key={'e' + k} style={{ width: thumbW, height: (808 * aspect) * K2, flex: '0 0 auto' }} />
+                    ))}
+                  </div>
+                  <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 6 }}>- {pi + 1} -</div>
+                </div>
+              ))}
+            </div>
+          )
+  }
+
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   // Ribbon 折叠（对齐 MS Office：仅保留选项卡栏；三编辑器共享同一持久化键）
   const [ribbonCollapsed, setRibbonCollapsed] = useState<boolean>(() => {
@@ -1797,7 +1867,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           {/* MS Office 风格打印 */}
           <RibbonGroup label={t('print.title')}>
             <RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="ppt-print-btn" title={t('print.title')} />
-          </RibbonGroup>
+          <RibbonButton icon="▦" label={t('view.slideSorter')} onClick={() => setBrowseMode(true)} data-testid="ppt-browse-btn" title={t('view.slideSorter')} /></RibbonGroup>
         </>)}
       </div>
       )}
@@ -1808,71 +1878,55 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         onClose={() => setPrintDialogOpen(false)}
         editorType="ppt"
         printSelector=".slide-canvas"
-        renderPreview={(settings) => {
-          const per = settings.slidesPerPage || 1
-          const showNotes = settings.pptContent === 'notes'
-          const showOutline = settings.pptContent === 'outline'
-          // 网格列数（对标 MS PPT 讲义布局：2→1列, 3→3列, 4→2列, 6→3列, 9→3列）
-          const cols = per <= 1 ? 1 : per === 2 ? 1 : per === 3 ? 3 : per === 4 ? 2 : per === 6 ? 3 : 3
-          // 单张幻灯片缩略图缩放比（画布 808 宽 → 纸张格宽，见下方 K2）
-          // 单张幻灯片缩略图（复用 SlideThumb，与主画布/左侧面板一致的真实渲染）
-          const aspect = deckH / deckW
-
-          if (showNotes) {
-            return (
-              <div className="space-y-2">
-                {slides.map((s, i) => (
-                  <div key={i} className="p-2 border rounded" style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}>
-                    <div className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{s.title || `Slide ${i + 1}`}</div>
-                    <div className="text-xs mt-1 whitespace-pre-wrap" style={{ color: 'var(--color-text-muted)' }}>{s.notes || '—'}</div>
-                  </div>
-                ))}
-              </div>
-            )
-          }
-          if (showOutline) {
-            return (
-              <div className="space-y-1">
-                {slides.map((s, i) => (
-                  <div key={i} className="text-xs" style={{ color: 'var(--color-text)' }}>{i + 1}. {s.title || `Slide ${i + 1}`}</div>
-                ))}
-              </div>
-            )
-          }
-
-          // 每页纸排 per 张，多页纸纵向堆叠（对标 MS PPT 讲义视图）
-          // round55：纸张卡片按【真实纸张】尺寸渲染（PAPER_SIZES × 方向 × 1.5 预览
-          // 缩放 + settings.margins 边距）—— 之前是固定 padding 的小卡片，纸张
-          // 大小/横竖切换对预览毫无作用（用户报告：打印预览按钮全无效）。
-          // round56：页码范围「当前页」→ 只预览当前幻灯片（MS PPT 打印当前幻灯片）
-          const pslides = (settings.pageRange === 'current' || settings.pageRange === 'selection') && slides[active] ? [slides[active]] : slides
-          const papers: Slide[][] = []
-          for (let i = 0; i < pslides.length; i += per) papers.push(pslides.slice(i, i + per))
-          const paper = PAPER_SIZES[settings.paperSize] || PAPER_SIZES.A4
-          const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
-          const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
-          const pad = `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`
-          const cellW = (pageWpx - (settings.margins.left + settings.margins.right) * 1.5) / cols
-          const thumbW = Math.max(40, cellW - 8)
-          const K2 = thumbW / 808
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '8px 0 16px' }}>
-              {papers.map((paperSlides, pi) => (
-                <div key={pi} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box', position: 'relative' }}>
-                  <div className="flex flex-wrap justify-center items-start" style={{ gap: 8 }}>
-                    {paperSlides.map((s, i) => <SlideThumb key={i} slide={s} width={thumbW} aspect={aspect} />)}
-                    {Array.from({ length: per - paperSlides.length }).map((_, k) => (
-                      <div key={'e' + k} style={{ width: thumbW, height: (808 * aspect) * K2, flex: '0 0 auto' }} />
-                    ))}
-                  </div>
-                  <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 6 }}>- {pi + 1} -</div>
-                </div>
-              ))}
-            </div>
-          )
-        }}
+        renderPrint={(settings) => buildPptPrintView(settings)}
+        renderPreview={(settings) => buildPptPrintView(settings)}
       />
 
+      {/* round57：幻灯片浏览视图 —— 覆盖层（常驻 display 切换）。
+          MS PPT 幻灯片浏览：概览网格，点击卡片跳转该页并返回编辑。 */}
+      <div
+        key="ppt-browse-view"
+        style={{
+          display: browseMode ? 'flex' : 'none',
+          position: 'fixed', inset: 0, zIndex: 60, background: 'var(--color-bg)',
+          flexDirection: 'column',
+        }}
+        data-testid="ppt-browse-view"
+      >
+        <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>▦ {t('view.slideSorter')}</span>
+            <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{tf('view.slidesTotal', `共 ${slides.length} 张`, { n: slides.length })}</span>
+          </div>
+          <button
+            data-testid="ppt-browse-back"
+            onClick={() => setBrowseMode(false)}
+            className="px-3 py-1.5 text-xs rounded-md font-medium"
+            style={{ background: 'var(--color-primary)', color: 'white' }}
+          >← {t('view.backToEdit')}</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6" data-testid="ppt-browse-wrap">
+          <div className="grid gap-6" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
+            {slides.map((sl, i) => (
+              <div
+                key={sl.id}
+                data-testid={`ppt-browse-card-${i}`}
+                onClick={() => { switchSlide(i); setBrowseMode(false) }}
+                className="cursor-pointer rounded-lg overflow-hidden border-2 transition-all hover:shadow-lg"
+                style={{ borderColor: i === active ? 'var(--color-primary)' : 'var(--color-border)', background: 'var(--color-surface)' }}
+              >
+                <div style={{ background: sl.bg }}>
+                  <SlideThumb slide={sl} width={240} aspect={deckH / deckW} />
+                </div>
+                <div className="flex items-center justify-between px-2 py-1">
+                  <span className="text-xs" style={{ color: 'var(--color-text)' }}>{i + 1}. {sl.title || `Slide ${i + 1}`}</span>
+                  {sl.notes ? <span className="text-[10px]" style={{ color: 'var(--color-text-muted)' }}>🗒</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
       {/* 主体 */}
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* 左侧缩略图 */}

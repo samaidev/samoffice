@@ -3,7 +3,7 @@ import { chromium } from 'playwright'
 
 const OFFICE = 'http://localhost:18400'
 const DOC = '/home/z/my-project/upload/中国区域碳排放影响因素研究20160509.doc'
-const PDF = '/tmp/r55-test.pdf'
+const PDF = '/home/z/my-project/samoffice/scripts/e2e/fixtures/r55-test.pdf'  // round57：/tmp 沙箱回收丢失，改仓库内 fixture
 const results = []
 const ok = (name, pass, info = '') => { results.push([name, !!pass, info]); console.log(`${pass ? 'PASS' : 'FAIL'} | ${name} | ${info}`) }
 
@@ -29,10 +29,14 @@ async function firstCardInfo(p) {
 }
 
 async function previewPaperInfo(p) {
+  // round57：word 预览改多页卡片流 —— 几何量纸张卡（print-flow-card），
+  // 缩放 transform 仍在外层 preview 包装（卡片无 transform）。
   return await p.evaluate(() => {
-    const pv = document.querySelector('[data-testid="print-preview"]')
+    const card = document.querySelector('[data-testid="print-flow-card"]')
+    const wrap = document.querySelector('[data-testid="print-preview"]')
+    const pv = card || wrap
     const r = pv.getBoundingClientRect()
-    return { w: Math.round(r.width), h: Math.round(r.height), transform: pv.style.transform, pad: getComputedStyle(pv).paddingTop, bg: getComputedStyle(pv).backgroundColor }
+    return { w: Math.round(r.width), h: Math.round(r.height), transform: wrap.style.transform, pad: getComputedStyle(pv).paddingTop, bg: getComputedStyle(pv).backgroundColor }
   })
 }
 
@@ -88,10 +92,12 @@ async function main() {
   const b1 = await previewPaperInfo(p)
   await p.locator('[data-testid="print-landscape"]').click(); await p.waitForTimeout(300)
   const b2 = await previewPaperInfo(p)
-  ok('B1 Word 横竖切换（纸宽>纸高）', b2.w > b2.h && b1.h > b1.w, `${b1.w}x${b1.h} → ${b2.w}x${b2.h}`)
+  ok('B1 Word 横竖切换（卡片随方向变宽）', b2.w > b1.w && b2.w > b2.h, `${b1.w}x${b1.h} → ${b2.w}x${b2.h}`)
   // 内容宽随横版变宽：克隆内容 transform scale 变大
+  // round57：多页流下先命中的是切片格 wrapper（scale(1) translateY），
+  // 改量克隆根（.ProseMirror）的真实内容缩放
   const contentScale = async () => await p.evaluate(() => {
-    const el = document.querySelector('[data-testid="print-preview"] [style*="scale"]')
+    const el = document.querySelector('[data-testid="print-flow"] .ProseMirror[style*="scale"]') || document.querySelector('[data-testid="print-preview"] [style*="scale"]')
     return el ? el.style.transform : ''
   })
   const sPortrait = await (async () => { await p.locator('[data-testid="print-portrait"]').click(); await p.waitForTimeout(300); return contentScale() })()

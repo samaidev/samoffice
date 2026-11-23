@@ -903,6 +903,166 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   // round56：打印选定区域 —— 打开前把当前选区渲染成 HTML 表格快照
   const [printSelectionHTML, setPrintSelectionHTML] = useState<string | null>(null)
+  // round57：分页预览视图（覆盖层）—— 命名避让既有 viewMode（公式栏/编辑态）
+  const [pbViewMode, setPbViewMode] = useState<'edit' | 'pages'>('edit')
+  // round57：Excel 打印视图构建（打印预览 / 拼版打印 / 分页预览共用）。
+  // 从 renderPreview 回调原样抽出：真实单元格样式 + 分页 + 标题行重复（round51/54），
+  // 每版页数拼版（round57）见函数尾部 papers 分组。
+  const buildExcelPrintView = (settings: any): React.ReactNode => {
+          // round51（问题3）：打印预览应用单元格真实样式。
+          // 旧实现是硬编码骨架表 —— 只取 value.slice(0,10)，加粗/斜体/颜色/填充/边框/
+          // 对齐/字号/合并/换行全部丢失，用户报告"打印预览完全没有应用现有的样式"。
+          // 现按网格同源数据渲染：
+          //  - 样式字段与显示态 span 的 common 对象一致（bold/italic/under/strike/color/
+          //    fontSize/align/valign/wrap），填充色直接用 cell.bg
+          //  - 边框用 cell.border/borderColor（未设置时 printGridlines=true 打浅灰网格线，
+          //    对齐 Excel"打印网格线"选项；否则无边框，即 Excel 默认不打印网格线）
+          //  - 合并单元格按 mergeRange 展开 rowSpan/colSpan，被 hiddenBy 的格子跳过
+          //  - 行列标头（A/B/C… 1/2/3…）不进打印（Excel 打印不含行列标头）；
+          //    列宽按 curColWidths 等比缩放，行数取到数据实际占用行（不为空行浪费纸张）
+          // round54（问题3）：真实分页 + 顶端标题行重复（_xlnm.Print_Titles）——
+          //   勾选"重复打印标题行"后按纸张可用高度把数据行切成多页，
+          //   第 2 页起每页顶端先渲染标题行（$1:$N），每页渲染成独立"纸张"卡片。
+          const bw2 = (b?: string) => b === 'thick' ? '3px' : b === 'medium' ? '2px' : b === 'thin' ? '1px' : undefined
+          // 数据实际占用范围（最后一行/列有内容的格子，兜底 12×8）
+          let maxR = 0, maxC = 0, any = false
+          for (const k of Object.keys(data)) {
+            const [rs, cs] = k.split('-').map(Number)
+            const cell = data[k]
+            if ((cell.value && cell.value.trim()) || cell.formula || cell.bg || (cell.border && cell.border !== 'none')) {
+              any = true
+              if (rs > maxR) maxR = rs
+              if (cs > maxC) maxC = cs
+            }
+          }
+          const pvRows = any ? Math.min(rows, maxR + 1) : Math.min(rows, 12)
+          const pvCols = any ? Math.min(cols, maxC + 1) : Math.min(cols, 8)
+          // round56：打印选定区域 —— 只渲染/打印当前选区（行列偏移 + 收窄范围）
+          const selMode = settings.pageRange === 'selection' && !!printSelectionHTML
+          const rOff = selMode ? Math.min(selection.r1, selection.r2) : 0
+          const cOff = selMode ? Math.min(selection.c1, selection.c2) : 0
+          const pvRowsE = selMode ? Math.max(selection.r1, selection.r2) - rOff + 1 : pvRows
+          const pvColsE = selMode ? Math.max(selection.c1, selection.c2) - cOff + 1 : pvCols
+          const valignMap2: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
+          // 页面几何（预览 1.5px/mm，与 PrintDialog 纸张卡片一致）
+          const paper = PAPER_SIZES[settings.paperSize]
+          const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
+          const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
+          const availH = Math.max(60, pageHpx - (settings.margins.top + settings.margins.bottom) * 1.5)
+          const titleN = !selMode && settings.printTitle ? Math.max(0, Math.min(settings.printTitleRows || 1, pvRowsE - 1)) : 0
+          const heights = Array.from({ length: pvRowsE }, (_, i) => rowH(rOff + i))
+          const titleH = titleN > 0 ? heights.slice(0, titleN).reduce((a, b) => a + b, 0) : 0
+          // 行分页：chunks = [from,to] 数据行区间（首页自然含标题行，后续页另加标题行）
+          const chunks: [number, number][] = []
+          let dataStart = 0
+          while (dataStart < pvRowsE) {
+            let used = dataStart === 0 ? 0 : titleH
+            let end = dataStart
+            for (let r = dataStart; r < pvRowsE; r++) {
+              used += heights[r]
+              if (used > availH && r > dataStart) break
+              end = r
+            }
+            chunks.push([dataStart, end])
+            dataStart = end + 1
+          }
+          const cellTd = (r: number, c: number, keyPrefix: string) => {
+            const cell = getCell(r, c)
+            if (cell.hiddenBy) return null
+            const mr = cell.mergeRange
+            const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
+            const hasBorder = cell.border && cell.border !== 'none'
+            const gridB = settings.printGridlines && !hasBorder ? '1px solid #d0d7de' : undefined
+            return (
+              <td key={`${keyPrefix}-${r}-${c}`} rowSpan={mr?.rowSpan} colSpan={mr?.colSpan}
+                style={{
+                  background: cell.bg || '#ffffff',
+                  color: cell.color || '#000',
+                  fontWeight: cell.bold ? 700 : 400,
+                  fontStyle: cell.italic ? 'italic' : undefined,
+                  textDecoration: decoration || undefined,
+                  fontSize: cell.fontSize ? `${Math.max(8, cell.fontSize * 0.75)}px` : '11px',
+                  fontFamily: cell.fontFamily || undefined,
+                  textAlign: cell.align || (mr ? 'center' : 'left'),
+                  verticalAlign: cell.valign ? valignMap2[cell.valign] : 'middle',
+                  whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  padding: '2px 4px',
+                  border: hasBorder ? `${bw2(cell.border)} solid ${cell.borderColor || '#000'}` : gridB,
+                  width: `${(curColWidths[c] || 80) * 0.6}px`,
+                }}>
+                {fmtDisplay(cell)}
+              </td>
+            )
+          }
+          const renderRow = (r: number, keyPrefix: string) => (
+            <tr key={`${keyPrefix}-r${r}`} style={{ height: rowH(r) }}>
+              {Array.from({ length: pvColsE }).map((_, i) => cellTd(r, cOff + i, keyPrefix))}
+            </tr>
+          )
+          // round57：每版页数（1/2/4/6/8）—— perPage>1 时把分页 chunk 拼到一张纸卡
+          // 的网格格里（对标 MS Word/Excel 每版打印页数；2→2×1、4→2×2、6→2×3、8→2×4）。
+          const per = Math.max(1, Number(settings.perPage) || 1) as 1 | 2 | 4 | 6 | 8
+          const gridCols = per === 1 ? 1 : 2
+          const gridRows = per === 1 ? 1 : per === 2 ? 1 : per === 4 ? 2 : per === 6 ? 3 : 4
+          const innerW = pageWpx - (settings.margins.left + settings.margins.right) * 1.5
+          const innerH = pageHpx - (settings.margins.top + settings.margins.bottom) * 1.5
+          const cellW = innerW / gridCols
+          const cellH = innerH / gridRows
+          const Kc = Math.min(cellW / innerW, cellH / innerH)
+          const padCss = `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`
+          // 单页内容（表格 + 页脚），perPage=1 时直接作为纸卡内容
+          const pageBody = (pi: number, from: number, to: number) => {
+            const rowIdxs = pi === 0
+              ? Array.from({ length: to - from + 1 }, (_, i) => from + i)
+              : [...Array.from({ length: titleN }, (_, i) => i), ...Array.from({ length: to - from + 1 }, (_, i) => from + i)]
+            return (
+              <>
+                <table className="border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
+                  <tbody>
+                    {rowIdxs.map((r, i) => renderRow(rOff + r, `p${pi}i${i}`))}
+                  </tbody>
+                </table>
+                {chunks.length > 1 && (
+                  <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
+                    {t('print.pageOf', { n: pi + 1, total: chunks.length }) || `第 ${pi + 1} 页 / 共 ${chunks.length} 页`}{pi > 0 && titleN > 0 ? ` · ${t('print.titleRepeated') || '标题行已重复'}` : ''}
+                  </div>
+                )}
+              </>
+            )
+          }
+          const groups: [number, number][][] = []
+          for (let g = 0; g < chunks.length; g += per) groups.push(chunks.slice(g, g + per))
+          return (
+            <div style={{ color: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '8px 0 16px' }}>
+              {groups.map((grp, gi) => (
+                <div key={`pp${gi}`} className="print-paper" style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: padCss, boxSizing: 'border-box' }}>
+                  {per === 1 ? (
+                    pageBody(gi, grp[0][0], grp[0][1])
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gridCols}, ${cellW}px)`, gap: 6 }}>
+                      {grp.map(([from, to], k) => (
+                        <div key={k} style={{ width: cellW, height: cellH, overflow: 'hidden' }}>
+                          <div style={{ transform: `scale(${Kc})`, transformOrigin: 'top left', width: innerW }}>
+                            {pageBody(gi * per + k, from, to)}
+                          </div>
+                        </div>
+                      ))}
+                      {Array.from({ length: per - grp.length }).map((_, k) => (
+                        <div key={'e' + k} style={{ width: cellW, height: cellH }} />
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>- {gi + 1} -</div>
+                </div>
+              ))}
+              {settings.printGridlines && !selMode && <div className="text-[8px] text-gray-500">{t('print.excelGridlines')} ✓</div>}
+              {selMode && <div className="text-[8px] text-gray-500">{t('print.selection') || '选定区域'} · {selToRef(selection)}</div>}
+            </div>
+          )
+  }
+
   const [showGrid, setShowGrid] = useState(true)
   const [showHeadings, setShowHeadings] = useState(true)
   const [showFormulaBar, setShowFormulaBar] = useState(true)
@@ -2792,7 +2952,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               setPrintSelectionHTML(html)
               setPrintDialogOpen(true)
             }} data-testid="excel-print-btn" title={t('print.title')} />
-          </RibbonGroup>
+          <RibbonButton icon="📄" label={t('view.pageBreakPreview')} onClick={() => setPbViewMode('pages')} data-testid="excel-pages-btn" title={t('view.pageBreakPreview')} /></RibbonGroup>
         </>)}
       </div>
       )}
@@ -2805,128 +2965,33 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         selectionPrintHTML={printSelectionHTML}
         printSelector="table"
         excelTitleRows={sheetPrintTitles[activeId] || 0}
-        renderPreview={(settings) => {
-          // round51（问题3）：打印预览应用单元格真实样式。
-          // 旧实现是硬编码骨架表 —— 只取 value.slice(0,10)，加粗/斜体/颜色/填充/边框/
-          // 对齐/字号/合并/换行全部丢失，用户报告"打印预览完全没有应用现有的样式"。
-          // 现按网格同源数据渲染：
-          //  - 样式字段与显示态 span 的 common 对象一致（bold/italic/under/strike/color/
-          //    fontSize/align/valign/wrap），填充色直接用 cell.bg
-          //  - 边框用 cell.border/borderColor（未设置时 printGridlines=true 打浅灰网格线，
-          //    对齐 Excel"打印网格线"选项；否则无边框，即 Excel 默认不打印网格线）
-          //  - 合并单元格按 mergeRange 展开 rowSpan/colSpan，被 hiddenBy 的格子跳过
-          //  - 行列标头（A/B/C… 1/2/3…）不进打印（Excel 打印不含行列标头）；
-          //    列宽按 curColWidths 等比缩放，行数取到数据实际占用行（不为空行浪费纸张）
-          // round54（问题3）：真实分页 + 顶端标题行重复（_xlnm.Print_Titles）——
-          //   勾选"重复打印标题行"后按纸张可用高度把数据行切成多页，
-          //   第 2 页起每页顶端先渲染标题行（$1:$N），每页渲染成独立"纸张"卡片。
-          const bw2 = (b?: string) => b === 'thick' ? '3px' : b === 'medium' ? '2px' : b === 'thin' ? '1px' : undefined
-          // 数据实际占用范围（最后一行/列有内容的格子，兜底 12×8）
-          let maxR = 0, maxC = 0, any = false
-          for (const k of Object.keys(data)) {
-            const [rs, cs] = k.split('-').map(Number)
-            const cell = data[k]
-            if ((cell.value && cell.value.trim()) || cell.formula || cell.bg || (cell.border && cell.border !== 'none')) {
-              any = true
-              if (rs > maxR) maxR = rs
-              if (cs > maxC) maxC = cs
-            }
-          }
-          const pvRows = any ? Math.min(rows, maxR + 1) : Math.min(rows, 12)
-          const pvCols = any ? Math.min(cols, maxC + 1) : Math.min(cols, 8)
-          // round56：打印选定区域 —— 只渲染/打印当前选区（行列偏移 + 收窄范围）
-          const selMode = settings.pageRange === 'selection' && !!printSelectionHTML
-          const rOff = selMode ? Math.min(selection.r1, selection.r2) : 0
-          const cOff = selMode ? Math.min(selection.c1, selection.c2) : 0
-          const pvRowsE = selMode ? Math.max(selection.r1, selection.r2) - rOff + 1 : pvRows
-          const pvColsE = selMode ? Math.max(selection.c1, selection.c2) - cOff + 1 : pvCols
-          const valignMap2: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
-          // 页面几何（预览 1.5px/mm，与 PrintDialog 纸张卡片一致）
-          const paper = PAPER_SIZES[settings.paperSize]
-          const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
-          const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
-          const availH = Math.max(60, pageHpx - (settings.margins.top + settings.margins.bottom) * 1.5)
-          const titleN = !selMode && settings.printTitle ? Math.max(0, Math.min(settings.printTitleRows || 1, pvRowsE - 1)) : 0
-          const heights = Array.from({ length: pvRowsE }, (_, i) => rowH(rOff + i))
-          const titleH = titleN > 0 ? heights.slice(0, titleN).reduce((a, b) => a + b, 0) : 0
-          // 行分页：chunks = [from,to] 数据行区间（首页自然含标题行，后续页另加标题行）
-          const chunks: [number, number][] = []
-          let dataStart = 0
-          while (dataStart < pvRowsE) {
-            let used = dataStart === 0 ? 0 : titleH
-            let end = dataStart
-            for (let r = dataStart; r < pvRowsE; r++) {
-              used += heights[r]
-              if (used > availH && r > dataStart) break
-              end = r
-            }
-            chunks.push([dataStart, end])
-            dataStart = end + 1
-          }
-          const cellTd = (r: number, c: number, keyPrefix: string) => {
-            const cell = getCell(r, c)
-            if (cell.hiddenBy) return null
-            const mr = cell.mergeRange
-            const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
-            const hasBorder = cell.border && cell.border !== 'none'
-            const gridB = settings.printGridlines && !hasBorder ? '1px solid #d0d7de' : undefined
-            return (
-              <td key={`${keyPrefix}-${r}-${c}`} rowSpan={mr?.rowSpan} colSpan={mr?.colSpan}
-                style={{
-                  background: cell.bg || '#ffffff',
-                  color: cell.color || '#000',
-                  fontWeight: cell.bold ? 700 : 400,
-                  fontStyle: cell.italic ? 'italic' : undefined,
-                  textDecoration: decoration || undefined,
-                  fontSize: cell.fontSize ? `${Math.max(8, cell.fontSize * 0.75)}px` : '11px',
-                  fontFamily: cell.fontFamily || undefined,
-                  textAlign: cell.align || (mr ? 'center' : 'left'),
-                  verticalAlign: cell.valign ? valignMap2[cell.valign] : 'middle',
-                  whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  padding: '2px 4px',
-                  border: hasBorder ? `${bw2(cell.border)} solid ${cell.borderColor || '#000'}` : gridB,
-                  width: `${(curColWidths[c] || 80) * 0.6}px`,
-                }}>
-                {fmtDisplay(cell)}
-              </td>
-            )
-          }
-          const renderRow = (r: number, keyPrefix: string) => (
-            <tr key={`${keyPrefix}-r${r}`} style={{ height: rowH(r) }}>
-              {Array.from({ length: pvColsE }).map((_, i) => cellTd(r, cOff + i, keyPrefix))}
-            </tr>
-          )
-          return (
-            <div style={{ color: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '8px 0 16px' }}>
-              {chunks.map(([from, to], pi) => {
-                // 第 2 页起：顶端重复标题行（$1:$N）+ 本页数据行
-                const rowIdxs = pi === 0
-                  ? Array.from({ length: to - from + 1 }, (_, i) => from + i)
-                  : [...Array.from({ length: titleN }, (_, i) => i), ...Array.from({ length: to - from + 1 }, (_, i) => from + i)]
-                return (
-                  <div key={`pg${pi}`} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`, boxSizing: 'border-box' }}>
-                    <table className="border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
-                      <tbody>
-                        {rowIdxs.map((r, i) => renderRow(rOff + r, `p${pi}i${i}`))}
-                      </tbody>
-                    </table>
-                    {chunks.length > 1 && (
-                      <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
-                        {t('print.pageOf', { n: pi + 1, total: chunks.length }) || `第 ${pi + 1} 页 / 共 ${chunks.length} 页`}{pi > 0 && titleN > 0 ? ` · ${t('print.titleRepeated') || '标题行已重复'}` : ''}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              {settings.printGridlines && !selMode && <div className="text-[8px] text-gray-500">{t('print.excelGridlines')} ✓</div>}
-              {selMode && <div className="text-[8px] text-gray-500">{t('print.selection') || '选定区域'} · {selToRef(selection)}</div>}
-            </div>
-          )
-        }}
+        renderPrint={(settings) => settings.perPage > 1 ? buildExcelPrintView(settings) : null}
+        renderPreview={(settings) => buildExcelPrintView(settings)}
       />
 
+      {/* round57：分页预览视图 —— 覆盖层（常驻 display 切换） */}
+      <div
+        key="sheet-pages-view"
+        style={{
+          display: pbViewMode === 'pages' ? 'flex' : 'none',
+          position: 'fixed', inset: 0, zIndex: 60, background: 'var(--color-bg)',
+          flexDirection: 'column',
+        }}
+        data-testid="excel-pages-view"
+      >
+        <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}>
+          <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>📄 {t('view.pageBreakPreview')}</span>
+          <button
+            data-testid="excel-pages-back"
+            onClick={() => setPbViewMode('edit')}
+            className="px-3 py-1.5 text-xs rounded-md font-medium"
+            style={{ background: 'var(--color-primary)', color: 'white' }}
+          >← {t('view.backToEdit')}</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6 flex justify-center" data-testid="excel-pages-wrap">
+          {buildExcelPrintView({ paperSize: 'A4', orientation: 'portrait', margins: { top: 20, bottom: 20, left: 18, right: 18 }, printTitle: true, printTitleRows: sheetPrintTitles[activeId] || 1, printGridlines: false, pageRange: 'all', perPage: 1, copies: 1, scale: 100, scaleFit: 'actual' } as any)}
+        </div>
+      </div>
       {/* 公式栏 */}
       {showFormulaBar && (
       <div className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0 text-xs" style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}>
