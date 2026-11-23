@@ -1446,6 +1446,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   trackChangesRef.current = trackChanges
   const [printPreview, setPrintPreview] = useState(false)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
+  // round56：打印选定区域 —— 打开对话框时对当前选区做快照（HTML 片段）
+  const [printSelectionHTML, setPrintSelectionHTML] = useState<string | null>(null)
   const [inTable, setInTable] = useState(false)
   // 表格边框工具（对齐 MS Word 表格工具“边框”预设）：预设下拉 + 线色 + 线宽
   const [showTableBorderMenu, setShowTableBorderMenu] = useState(false)
@@ -4532,7 +4534,28 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           <RibbonGroup label={t('doc.window')}>
             <RibbonButton icon="🪟" label={t('doc.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('doc.newWindowTitle')} />
           </RibbonGroup>
-          <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="word-print-btn" /></RibbonGroup>
+          <RibbonGroup label={t('doc.preview')}><RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => {
+            // round56：打印选定区域 —— 打开前快照当前选区。用 ProseMirror 自身的
+            // selection state（不随 DOM 焦点丢失；点按钮时 window.getSelection
+            // 可能已折叠），slice 内容经 DOMSerializer 还原带格式 HTML 片段。
+            let html: string | null = null
+            try {
+              const v = viewRef.current
+              if (v) {
+                const { from, to, empty } = v.state.selection
+                if (!empty && to > from) {
+                  const slice = v.state.doc.slice(from, to)
+                  const frag = DOMSerializer.fromSchema(v.state.schema).serializeFragment(slice.content)
+                  const wrap = window.document.createElement('div')
+                  wrap.className = 'ProseMirror'
+                  wrap.appendChild(frag)
+                  html = wrap.innerHTML
+                }
+              }
+            } catch { /* 选区快照失败不阻塞打印 */ }
+            setPrintSelectionHTML(html)
+            setPrintDialogOpen(true)
+          }} data-testid="word-print-btn" /></RibbonGroup>
         </>)}
       </div>
       )}
@@ -5388,8 +5411,16 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         open={printDialogOpen}
         onClose={() => setPrintDialogOpen(false)}
         editorType="word"
+        selectionPrintHTML={printSelectionHTML}
         printSelector=".ProseMirror"
         renderPreview={(settings) => {
+          // round56：打印选定区域 —— 页码范围选「选定区域」时只渲染选区快照，
+          // 实际打印也只打印该片段（PrintDialog 选区打印容器）
+          if (settings.pageRange === 'selection' && printSelectionHTML) {
+            return (
+              <div className="ProseMirror" style={{ padding: '8px 12px', color: '#000', minHeight: 60 }} dangerouslySetInnerHTML={{ __html: printSelectionHTML }} />
+            )
+          }
           // 真实文档预览：克隆 .ProseMirror DOM（保留字号/加粗/表格/图片/公式/脚注等
           // 全部真实格式）。旧版手工拼前 6 段纯文本，与真实文档毫无关系 ——
           // 用户报告"打印预览格式完全是错的"。

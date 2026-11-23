@@ -120,7 +120,9 @@ async function main() {
   await p.locator('[data-testid="menu-files"]').click({ force: true }); await p.waitForTimeout(400)
   await p.locator('text=📊').first().click({ force: true }); await p.waitForTimeout(1500)
   await p.locator('[data-cell="0-0"]').click(); await p.waitForTimeout(150)
-  for (const v of ['标题', 'A', 'B', '行1', '1', '2', '行2', '3', '4']) { await p.keyboard.type(v); await p.keyboard.press('Enter'); await p.waitForTimeout(40) }
+  // round56 IME 宿主后：type→Enter 间需让编辑器完成聚焦（setTimeout(0)），
+  // 否则 Enter 落在宿主上只移动不提交，连续值会串格
+  for (const v of ['标题', 'A', 'B', '行1', '1', '2', '行2', '3', '4']) { await p.keyboard.type(v); await p.waitForTimeout(40); await p.keyboard.press('Enter'); await p.waitForTimeout(40) }
   await p.locator('button:has-text("视图")').first().click(); await p.waitForTimeout(300)
   await p.locator('[data-testid="excel-print-btn"]').click(); await p.waitForTimeout(700)
   const c1 = await firstCardInfo(p)

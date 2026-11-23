@@ -781,6 +781,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [editCell, setEditCell] = useState<{ r: number; c: number; buf: string } | null>(null)
   const [formulaBarFocused, setFormulaBarFocused] = useState(false)
   const gridRef = useRef<HTMLDivElement>(null)
+  // round56：隐藏 IME 宿主输入框 —— 网格 DIV 无法接收 insertText/输入法组合
+  //（中文字符无 keydown 事件，只有 insertText；回车提交后焦点回到 DIV，
+  // 后续中文输入全部丢失 —— 用户连续键入中文只有第一格生效）。
+  // 宿主 input 获得焦点后：ASCII 走容器 onKeyDown（preventDefault 阻止宿主插入），
+  // 中文/emoji 走宿主 onChange → startEdit 开格编辑。
+  const imeHostRef = useRef<HTMLInputElement>(null)
+  const focusGrid = () => { try { imeHostRef.current?.focus({ preventScroll: true }) } catch { imeHostRef.current?.focus() } }
   // 表格滚动容器（overflow-auto）：活动单元格/粘贴区域自动滚进可视区用
   const scrollRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLElement | null>(null)
@@ -894,6 +901,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel || showColorPopup || showFreezePanel
   const [validList, setValidList] = useState('')
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
+  // round56：打印选定区域 —— 打开前把当前选区渲染成 HTML 表格快照
+  const [printSelectionHTML, setPrintSelectionHTML] = useState<string | null>(null)
   const [showGrid, setShowGrid] = useState(true)
   const [showHeadings, setShowHeadings] = useState(true)
   const [showFormulaBar, setShowFormulaBar] = useState(true)
@@ -1024,7 +1033,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }, [dragging])
 
   // 挂载后把焦点交给网格容器，方向键/输入即编辑立即可用（Excel 行为）
-  useEffect(() => { gridRef.current?.focus() }, [])
+  useEffect(() => { focusGrid() }, [])
 
   // 点击任意处关闭筛选下拉（面板内部已 stopPropagation；Escape 也关闭）
   useEffect(() => {
@@ -1377,9 +1386,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       ensureGrid(nr + 1, nc + 1)
       selectCell(nr, nc)
     }
-    setTimeout(() => gridRef.current?.focus(), 0)
+    setTimeout(() => focusGrid(), 0)
   }
-  const cancelEdit = () => { setEditCell(null); setTimeout(() => gridRef.current?.focus(), 0) }
+  const cancelEdit = () => { setEditCell(null); setTimeout(() => focusGrid(), 0) }
   // 单元格编辑态按键：Enter/Tab 提交并移动（Shift 反向），Escape 取消还原旧值；
   // 自动换行单元格内 Alt+Enter 手动换行。所有已处理按键 stopPropagation，防止冒泡到网格/全局快捷键。
   const onEditKeyDown = (e: React.KeyboardEvent, isArea: boolean) => {
@@ -2747,7 +2756,42 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </RibbonGroup>
           {/* MS Office 风格打印 */}
           <RibbonGroup label={t('print.title')}>
-            <RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => setPrintDialogOpen(true)} data-testid="excel-print-btn" title={t('print.title')} />
+            <RibbonButton icon="🖨" label={t('doc.printPreview')} onClick={() => {
+              // round56：选区打印快照 —— 单格不算选区（MS Excel 同款判定）
+              const r1 = Math.min(selection.r1, selection.r2), r2 = Math.max(selection.r1, selection.r2)
+              const c1 = Math.min(selection.c1, selection.c2), c2 = Math.max(selection.c1, selection.c2)
+              let html: string | null = null
+              if (selection.mode !== 'cell' || r1 !== r2 || c1 !== c2) {
+                const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                let tb = '<table style="border-collapse:collapse;font-size:11px;color:#000">'
+                for (let r = r1; r <= r2; r++) {
+                  tb += '<tr>'
+                  for (let c = c1; c <= c2; c++) {
+                    const cell = getCell(r, c)
+                    if (cell.hiddenBy) continue
+                    const mr = cell.mergeRange
+                    const span = mr ? ` rowspan="${mr.rowSpan}" colspan="${mr.colSpan}"` : ''
+                    const st = [
+                      cell.bg ? `background:${cell.bg}` : '',
+                      cell.color ? `color:${cell.color}` : '',
+                      cell.bold ? 'font-weight:700' : '',
+                      cell.italic ? 'font-style:italic' : '',
+                      cell.under ? 'text-decoration:underline' : '',
+                      `text-align:${cell.align || (mr ? 'center' : 'left')}`,
+                      'padding:2px 6px',
+                      'border:1px solid #000',
+                      'white-space:nowrap',
+                    ].filter(Boolean).join(';')
+                    tb += `<td${span} style="${st}">${esc(String(fmtDisplay(cell) ?? ''))}</td>`
+                  }
+                  tb += '</tr>'
+                }
+                tb += '</table>'
+                html = tb
+              }
+              setPrintSelectionHTML(html)
+              setPrintDialogOpen(true)
+            }} data-testid="excel-print-btn" title={t('print.title')} />
           </RibbonGroup>
         </>)}
       </div>
@@ -2758,6 +2802,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         open={printDialogOpen}
         onClose={() => setPrintDialogOpen(false)}
         editorType="excel"
+        selectionPrintHTML={printSelectionHTML}
         printSelector="table"
         excelTitleRows={sheetPrintTitles[activeId] || 0}
         renderPreview={(settings) => {
@@ -2789,22 +2834,28 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           }
           const pvRows = any ? Math.min(rows, maxR + 1) : Math.min(rows, 12)
           const pvCols = any ? Math.min(cols, maxC + 1) : Math.min(cols, 8)
+          // round56：打印选定区域 —— 只渲染/打印当前选区（行列偏移 + 收窄范围）
+          const selMode = settings.pageRange === 'selection' && !!printSelectionHTML
+          const rOff = selMode ? Math.min(selection.r1, selection.r2) : 0
+          const cOff = selMode ? Math.min(selection.c1, selection.c2) : 0
+          const pvRowsE = selMode ? Math.max(selection.r1, selection.r2) - rOff + 1 : pvRows
+          const pvColsE = selMode ? Math.max(selection.c1, selection.c2) - cOff + 1 : pvCols
           const valignMap2: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
           // 页面几何（预览 1.5px/mm，与 PrintDialog 纸张卡片一致）
           const paper = PAPER_SIZES[settings.paperSize]
           const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
           const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
           const availH = Math.max(60, pageHpx - (settings.margins.top + settings.margins.bottom) * 1.5)
-          const titleN = settings.printTitle ? Math.max(0, Math.min(settings.printTitleRows || 1, pvRows - 1)) : 0
-          const heights = Array.from({ length: pvRows }, (_, r) => rowH(r))
+          const titleN = !selMode && settings.printTitle ? Math.max(0, Math.min(settings.printTitleRows || 1, pvRowsE - 1)) : 0
+          const heights = Array.from({ length: pvRowsE }, (_, i) => rowH(rOff + i))
           const titleH = titleN > 0 ? heights.slice(0, titleN).reduce((a, b) => a + b, 0) : 0
           // 行分页：chunks = [from,to] 数据行区间（首页自然含标题行，后续页另加标题行）
           const chunks: [number, number][] = []
           let dataStart = 0
-          while (dataStart < pvRows) {
+          while (dataStart < pvRowsE) {
             let used = dataStart === 0 ? 0 : titleH
             let end = dataStart
-            for (let r = dataStart; r < pvRows; r++) {
+            for (let r = dataStart; r < pvRowsE; r++) {
               used += heights[r]
               if (used > availH && r > dataStart) break
               end = r
@@ -2844,7 +2895,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           }
           const renderRow = (r: number, keyPrefix: string) => (
             <tr key={`${keyPrefix}-r${r}`} style={{ height: rowH(r) }}>
-              {Array.from({ length: pvCols }).map((_, c) => cellTd(r, c, keyPrefix))}
+              {Array.from({ length: pvColsE }).map((_, i) => cellTd(r, cOff + i, keyPrefix))}
             </tr>
           )
           return (
@@ -2858,7 +2909,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   <div key={`pg${pi}`} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`, boxSizing: 'border-box' }}>
                     <table className="border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
                       <tbody>
-                        {rowIdxs.map((r, i) => renderRow(r, `p${pi}i${i}`))}
+                        {rowIdxs.map((r, i) => renderRow(rOff + r, `p${pi}i${i}`))}
                       </tbody>
                     </table>
                     {chunks.length > 1 && (
@@ -2869,7 +2920,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   </div>
                 )
               })}
-              {settings.printGridlines && <div className="text-[8px] text-gray-500">{t('print.excelGridlines')} ✓</div>}
+              {settings.printGridlines && !selMode && <div className="text-[8px] text-gray-500">{t('print.excelGridlines')} ✓</div>}
+              {selMode && <div className="text-[8px] text-gray-500">{t('print.selection') || '选定区域'} · {selToRef(selection)}</div>}
             </div>
           )
         }}
@@ -2923,7 +2975,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     setCellFmt(active.r, active.c, { formula: '', value: v })
                   }
                   ;(e.target as HTMLInputElement).blur()
-                  gridRef.current?.focus()
+                  focusGrid()
                 } else if (e.key === 'Escape' && editingHere) {
                   e.preventDefault(); cancelEdit()
                 }
@@ -2971,6 +3023,24 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         )}
         {/* 网格容器持有键盘焦点（Excel 模型）：方向键/回车/输入即编辑等由 onGridKeyDown 统一处理 */}
         <div className="relative" ref={gridRef} tabIndex={0} onKeyDown={onGridKeyDown} style={{ outline: 'none' }}>
+          {/* round56：IME 宿主 —— 焦点落此（focusGrid），中文 insertText/输入法组合文本
+              经 onChange 开启单元格编辑；ASCII keydown 已被容器处理器 preventDefault，
+              不会重复入格。不可见不可点（1px、透明、tab 顺序之外）。 */}
+          <input
+            ref={imeHostRef}
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={e => {
+              const ne = e.nativeEvent as any
+              if (ne && ne.isComposing) return // 组合期间不提交，等 compositionend 后的 input
+              const v = e.target.value
+              e.target.value = ''
+              if (!v) return
+              if (editCell) return // 已在编辑：宿主不应再收文本（编辑输入框自持焦点）
+              startEdit(active.r, active.c, v)
+            }}
+            style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, border: 'none', padding: 0, pointerEvents: 'none' }}
+          />
         {/* round51（问题2）：外层去掉 borderRadius+overflow:hidden —— border-collapse 表格配
             overflow:hidden 会把表格四周 1px 边框裁掉（尤其左上角行列标头交汇处），
             用户看起来就像"行列标头没有边框"。圆角效果由外层 boxShadow 自然勾勒。 */}
@@ -3253,13 +3323,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                           else if (!isPrimarySingle || extraAreas.length) setExtraAreas(arr => [...arr, { r1: r, c1: c, r2: r, c2: c, mode: 'cell' }])
                           ctrlDragRef.current = { r, c }
                           setDragging(true)
-                          gridRef.current?.focus()
+                          focusGrid()
                           return
                         }
-                        if (e.shiftKey) { e.preventDefault(); extendTo(r, c); gridRef.current?.focus(); return }
+                        if (e.shiftKey) { e.preventDefault(); extendTo(r, c); focusGrid(); return }
                         // 阻止浏览器原生文本选择（MS Excel 框选时不会选中文字）；焦点显式回到网格
                         e.preventDefault()
-                        selectCell(r, c); setSelImage(null); setDragging(true); gridRef.current?.focus()
+                        selectCell(r, c); setSelImage(null); setDragging(true); focusGrid()
                         clickEditRef.current = { r, c } // 纯单击（无拖拽）时 mouseup 进入编辑
                       }}
                       onMouseEnter={() => {

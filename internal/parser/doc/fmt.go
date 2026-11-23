@@ -883,8 +883,14 @@ func extractFormattedBlocks(wordDoc, table, dataStrm []byte) (blocks []core.Bloc
 				// 单元格结束：pos..end 是单元格最后一个段落
 				inls := buildInlines(runes, pos, end, istd, defCHP, styles, fonts, &fnNum, chpxAt, dataStrm, fnTexts)
 				cellInls = append(cellInls, inls...)
-				curRow = append(curRow, core.TableCell{Inline: cellInls})
+				// round56：单元格水平对齐取末段落的 jc（MS Word 单元格对齐即其
+				// 段落对齐；学术表格数据列居中，此前全部落空导致与 MS 显示不一致）
 				cellInls = nil
+				c := core.TableCell{Inline: inls}
+				if a := jcToAlignStr(p.jc); a != "" {
+					c.Align = a
+				}
+				curRow = append(curRow, c)
 			}
 			pos = end + 1
 			continue

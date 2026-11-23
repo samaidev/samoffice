@@ -101,6 +101,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'print.preview': { en: 'Preview', zh: '预览' },
   'print.previewEmpty': { en: 'Preview not available', zh: '预览不可用' },
   'print.noPagesInRange': { en: 'No pages in selected range', zh: '所选页码范围无页面' },
+  'print.selection': { en: 'Selection', zh: '选定区域' },
   'print.previewCapped': { en: 'Preview shows first 24 pages', zh: '预览最多显示前 24 页' },
   'pdf.pages': { en: 'pages', zh: '页' },
   'print.summary': { en: '{pages} pages · {copies} copies · {paper}', zh: '{pages} 页 · {copies} 份 · {paper}' },

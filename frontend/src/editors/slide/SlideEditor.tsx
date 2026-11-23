@@ -1844,8 +1844,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           // round55：纸张卡片按【真实纸张】尺寸渲染（PAPER_SIZES × 方向 × 1.5 预览
           // 缩放 + settings.margins 边距）—— 之前是固定 padding 的小卡片，纸张
           // 大小/横竖切换对预览毫无作用（用户报告：打印预览按钮全无效）。
+          // round56：页码范围「当前页」→ 只预览当前幻灯片（MS PPT 打印当前幻灯片）
+          const pslides = (settings.pageRange === 'current' || settings.pageRange === 'selection') && slides[active] ? [slides[active]] : slides
           const papers: Slide[][] = []
-          for (let i = 0; i < slides.length; i += per) papers.push(slides.slice(i, i + per))
+          for (let i = 0; i < pslides.length; i += per) papers.push(pslides.slice(i, i + per))
           const paper = PAPER_SIZES[settings.paperSize] || PAPER_SIZES.A4
           const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
           const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5

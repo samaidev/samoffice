@@ -21,12 +21,20 @@ func strconvPt(v float64) string  { return fmt.Sprintf("%.0fpt", v) }
 
 // ---------- 表格 TAP ----------
 
-// tapDef 是 sprmTDefTable(0xD608) 解析结果：一行的列宽与合并标记。
+// brcCell 是 TC80 内一条边框（BRC）的解码：on=false 表示该边无框。
+type brcCell struct {
+	on  bool
+	dpt float64 // 线宽（pt）
+}
+
+// tapDef 是 sprmTDefTable(0xD608) 解析结果：一行的列宽/合并标记/逐格边框。
 type tapDef struct {
 	widths []int // 每格宽度（twips）
 	hmerge []int // 0=不合并 1=水平合并起点 2/3=被合并（并入前格）
-	vmerge []int // 0=不合并 1=垂直被合并（占位） 3=垂直合并起点
+	vmerge []int // 0=不合并 1=垂直被合并（占位） 2/3=垂直合并起点
 	border float64 // 表格边框线宽（pt），<=0 表示无
+	brds [][]brcCell // 每格四边（上/左/下/右）边框，TC80 rgTc80 解码
+	hasBrd bool // 本行 TC80 携带边框信息（全无线也 true —— 显式无框）
 }
 
 // parseTAP 从表格行结束段（TTP）的 grpprl 中解析 sprmTDefTable。
@@ -67,6 +75,26 @@ func parseTAP(grp []byte) *tapDef {
 			tcgrf := binary.LittleEndian.Uint16(d[off:])
 			t.hmerge[i] = int(tcgrf & 3)
 			t.vmerge[i] = int((tcgrf >> 5) & 3)
+			// TC80：tcgrf(2) + wWidth(2) + BRC×4（上/左/下/右，各 4 字节）。
+			// BRC 首 u16：低字节 = 线宽（1/8 pt），高字节 = 线型；0 与 0xFFFF 均为无框
+			//（round56 实测用户 .doc 三线表：0x0112=2.25pt 单线、0x0104=0.5pt 单线、
+			// 0xFFFF=无）。全零四边也是有效信息（显式无框表）—— hasBrd=true。
+			if off+20 <= len(d) {
+				bs := make([]brcCell, 4)
+				anyOn := false
+				for k := 0; k < 4; k++ {
+					code := binary.LittleEndian.Uint16(d[off+4+4*k:])
+					if code != 0 && code != 0xFFFF {
+						bs[k] = brcCell{on: true, dpt: float64(code&0xFF) / 8}
+						anyOn = true
+					}
+				}
+				t.brds = append(t.brds, bs)
+				t.hasBrd = true
+				_ = anyOn
+			} else {
+				t.brds = append(t.brds, nil)
+			}
 		}
 		td = t
 	})
@@ -86,7 +114,24 @@ func applyTapToRow(row *[]core.TableCell, ttpGrp []byte) *tapDef {
 	cells := *row
 	for i := range cells {
 		if i < len(td.vmerge) {
-			cells[i].VMerge = td.vmerge[i] // 0=不合并 1=占位 3=起点
+			cells[i].VMerge = td.vmerge[i] // 0=不合并 1=占位 2/3=起点
+		}
+		// round56：TC80 逐格边框 → 前端四边开关串（上/右/下/左）+ 线宽/线色。
+		// 对照 MS Office：.doc 单元格边框 auto 色 = 黑；此前完全忽略 TC80 BRC，
+		// 三线表被渲染成默认全网格（用户报告与 MS 有差别）。
+		if td.hasBrd && i < len(td.brds) && td.brds[i] != nil {
+			bs := td.brds[i] // 上/左/下/右
+			cells[i].Borders = encodeCorners(bs[0], bs[3], bs[2], bs[1]) // 上/右/下/左
+			maxW := 0.0
+			for _, b := range bs {
+				if b.on && b.dpt > maxW {
+					maxW = b.dpt
+				}
+			}
+			if maxW > 0 {
+				cells[i].BorderW = maxW
+				cells[i].BorderColor = "000000" // auto = 黑
+			}
 		}
 	}
 	if w, ok := scanTableBorder(ttpGrp); ok {
@@ -95,6 +140,7 @@ func applyTapToRow(row *[]core.TableCell, ttpGrp []byte) *tapDef {
 	// 显式水平合并：TC80 horzMerge 1=起点，2/3=延续（并入前格后删除）
 	out := cells[:0:0]
 	var widths []int
+	var vmerges []int
 	for i, c := range cells {
 		hm, w := 0, 0
 		if i < len(td.hmerge) {
@@ -110,10 +156,27 @@ func applyTapToRow(row *[]core.TableCell, ttpGrp []byte) *tapDef {
 		}
 		out = append(out, c)
 		widths = append(widths, w)
+		if i < len(td.vmerge) {
+			vmerges = append(vmerges, td.vmerge[i])
+		} else {
+			vmerges = append(vmerges, 0)
+		}
 	}
 	td.widths = widths
+	td.vmerge = vmerges // 与折叠后的格序列对齐（供 applyTableGrid 垂直合并）
 	*row = out
 	return td
+}
+
+// encodeCorners 编码四边开关串（上/右/下/左，'1'=有线 '0'=无线）。
+func encodeCorners(top, right, bottom, left brcCell) string {
+	b2i := func(b brcCell) byte {
+		if b.on {
+			return '1'
+		}
+		return '0'
+	}
+	return string([]byte{b2i(top), b2i(right), b2i(bottom), b2i(left)})
 }
 
 // applyTableGrid 对整表做网格推导（对照 LibreOffice ww8 的做法）：
@@ -170,24 +233,57 @@ func applyTableGrid(tbl *core.Table, taps []*tapDef) {
 			b += td.widths[i]
 		}
 	}
-	// 3. 垂直合并（vMerge）：不吞行、不删占位格、不发 RowSpan。
-	// 曾经的实现（VMerge==3 起点，向下吞并 VMerge==1 占位格并整行删除）产出的
-	// UDM 形状是『占位行被删 + 起点格 RowSpan=2』。但 docx 路径（parser/docx）
-	// 对 vMerge continue 的处理是【保留占位格、RowSpan 恒 1】—— 两条路径形状
-	// 不一致。前端的 rowspan 语义按 docx 形状设计：rowspan=2 要求下方行
-	// 【物理省略】被覆盖格；而 .doc 路径删掉的是【整行占位行】，若起点行的
-	// 下一行是另一个 rowspan 起点（连续两段 vMerge 区，本文件表1 的真实结构），
-	// 两个 rowspan 在网格上互相踩位 → 下行所有格可用列位为 0 → cellW=0 +
-	// table-layout:fixed → 内容逐字竖排成 1400+px 畸形行（用户主诉
-	// 『表格边框不全』的根因之一）。
-	// 与 docx 路径对齐：占位格（VMerge==1）清空内容保留结构，RowSpan 不输出。
-	// 视觉效果与 Word 一致（合并区第二行是空的），语义合并不还原 —— 与
-	// docx 路径行为统一，前端无需感知差异。
+	// 3. 垂直合并（vMerge）：真合并（round56，对齐 MS Office 显示）。
+	// 起点（VMerge>=2，实测 0x60=2 与 0xE0=3 均为起点）向下吞并 VMerge==1
+	// 延续格：起点格 RowSpan=n，延续格从所在行【物理删除】（仅删格不删行）。
+	// 前端 rowspan 语义即如此（prosemirror 表格形状）；此前实现是『占位格清空
+	// 内容、保留网格』—— MS Office 里合并区是整块大单元格，无内部空行/边框，
+	// 用户报告表格样式与 MS 有差别。旧版曾删【整行】导致行内其余格丢失——
+	// 本实现只删被覆盖的格，行内其他格保留（列位由行内格序列顺序决定，
+	// table-layout 语义下行首格=第一列，删除延续格后列位恰好前移补位）。
+	// 两阶段（先算后删，避免删除导致列位漂移串列）：
+	// 阶段1 只读扫描每个起点格的连续延续行数；阶段2 统一从覆盖行删除格。
+	type spanMark struct{ r, j, span int }
+	var marks []spanMark
+	remove := map[int][]int{} // 行 → 待删格序号
+	for r := 0; r < len(tbl.Rows); r++ {
+		for j := 0; j < len(tbl.Rows[r]); j++ {
+			if tbl.Rows[r][j].VMerge < 2 {
+				continue // 非起点
+			}
+			span := 1
+			for rr := r + 1; rr < len(tbl.Rows); rr++ {
+				if j >= len(tbl.Rows[rr]) || tbl.Rows[rr][j].VMerge != 1 {
+					break
+				}
+				span++
+			}
+			if span > 1 {
+				marks = append(marks, spanMark{r, j, span})
+				for k := r + 1; k < r+span; k++ {
+					remove[k] = append(remove[k], j)
+				}
+			}
+		}
+	}
+	for _, m := range marks {
+		tbl.Rows[m.r][m.j].RowSpan = m.span
+	}
+	// 阶段2：每行按序号降序删除（降序保证低序号格位不受移位影响）
+	for k, js := range remove {
+		sortInts(js)
+		for x := len(js) - 1; x >= 0; x-- {
+			j := js[x]
+			if j < len(tbl.Rows[k]) {
+				tbl.Rows[k] = append(tbl.Rows[k][:j:j], tbl.Rows[k][j+1:]...)
+			}
+		}
+	}
+	// 残余延续格（无起点的孤儿，容错）：清空内容保留网格
 	for r := range tbl.Rows {
 		for j := range tbl.Rows[r] {
 			c := &tbl.Rows[r][j]
 			if c.VMerge == 1 {
-				// 占位格：清空内容（Word 中它本来就不显示），保留网格结构
 				c.Inline = nil
 			}
 			c.VMerge = 0

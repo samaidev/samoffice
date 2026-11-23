@@ -13,6 +13,10 @@ interface PrintDialogProps {
   renderPreview?: (settings: PrintSettings) => React.ReactNode
   /** 实际打印内容的选择器 (用于 window.print) */
   printSelector?: string
+  /** 打印选定区域：选中文本的 HTML 片段（word）/选区表格（excel）。
+   *  提供非空值时页码范围出现「选定区域」选项，实际打印走专用打印容器。
+   *  round56：用户报告打印选定区域无效。 */
+  selectionPrintHTML?: string | null
 }
 
 /** 打印设置 (对标 MS Office 打印对话框) */
@@ -20,7 +24,7 @@ export interface PrintSettings {
   // 打印机
   printer: string          // 打印机名 (空=系统默认)
   // 页范围
-  pageRange: 'all' | 'current' | 'custom'
+  pageRange: 'all' | 'current' | 'custom' | 'selection'
   customPages: string      // 如 "1-3,5,7-9"
   // 份数
   copies: number
@@ -89,7 +93,7 @@ export const PAPER_SIZES: Record<string, { w: number; h: number }> = {
   Legal: { w: 216, h: 356 },
 }
 
-export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderPreview, printSelector }: PrintDialogProps) {
+export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderPreview, printSelector, selectionPrintHTML }: PrintDialogProps) {
   const { t } = useI18n()
   // round54：标题行数初值来自工作表已设置的打印标题（_xlnm.Print_Titles）
   const [settings, setSettings] = useState<PrintSettings>({ ...defaultPrintSettings, printTitleRows: excelTitleRows && excelTitleRows > 0 ? excelTitleRows : defaultPrintSettings.printTitleRows })
@@ -116,6 +120,36 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
     setSettings(s => ({ ...s, [key]: value }))
   }
 
+  // round56：适应/缩小真实生效 —— 之前 scaleFit 仅存状态，预览 transform 只看
+  // settings.scale，实际打印还写入 'fit'/'shrink' 这种非法 CSS（完全无效）。
+  // autoFit = 预览区容器 / 纸张 的缩放百分比：word 取宽高双向最小（单页窗口），
+  // excel/ppt/pdf 多页堆叠取宽度适应。effScale 是预览与实际打印共用的最终缩放。
+  const [autoFit, setAutoFit] = useState(100)
+  useLayoutEffect(() => {
+    if (!open) return
+    const measure = () => {
+      const box = previewRef.current
+      if (!box) return
+      const paperWpx = previewW * 1.5, paperHpx = previewH * 1.5
+      const fitW = box.clientWidth / paperWpx * 100
+      const fitH = (box.clientHeight - 40) / paperHpx * 100
+      let v = editorType === 'word' ? Math.min(fitW, fitH) : fitW
+      v = Math.max(30, Math.min(200, v))
+      setAutoFit(prev => (Math.abs(prev - v) < 1 ? prev : Math.round(v)))
+    }
+    measure()
+    const id = setTimeout(measure, 60)
+    return () => clearTimeout(id)
+  }, [open, settings.paperSize, settings.orientation, settings.margins, editorType])
+
+  const effScale = settings.scaleFit === 'fit'
+    ? autoFit
+    : settings.scaleFit === 'shrink'
+      ? Math.min(autoFit, settings.scale)
+      : settings.scale
+  const effScaleRef = useRef(100)
+  effScaleRef.current = effScale
+
   // 文档内容实际高度 → 页数。open/settings/renderPreview 变化后重测；
   // 另测一次延迟值兜底图片等异步加载导致的首次测量偏矮。
   useLayoutEffect(() => {
@@ -137,6 +171,25 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
 
   // 实际执行打印
   const doPrint = () => {
+    // round56：真实缩放 —— 预览的有效缩放（effScale，含适应/缩小）以 CSS zoom
+    // 同步作用于实际打印输出；此前 scale 只改预览 transform，打印永远是 100%，
+    // scaleFit 更是写入了 'fit'/'shrink' 这种非法 CSS（用户报告：缩放/适应无效）。
+    const eff = Math.round(effScaleRef.current)
+    const selMode = settings.pageRange === 'selection' && !!selectionPrintHTML
+
+    // 选定区域打印：把选区 HTML 注入专用打印容器（body 直挂、屏上移出视口），
+    // 打印 CSS 只显示它 —— 旧版对选定区域毫无处理，点打印仍是整篇文档。
+    const HOLDER_ID = 'print-dialog-selection-holder'
+    if (selMode) {
+      let holder = document.getElementById(HOLDER_ID)
+      if (!holder) {
+        holder = document.createElement('div')
+        holder.id = HOLDER_ID
+        document.body.appendChild(holder)
+      }
+      holder.innerHTML = selectionPrintHTML || ''
+    }
+
     // 生成打印专用 CSS
     const styleId = 'print-dialog-style'
     let style = document.getElementById(styleId)
@@ -147,9 +200,9 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
     }
     const paper = PAPER_SIZES[settings.paperSize]
     const orient = settings.orientation === 'landscape' ? 'landscape' : 'portrait'
-    const scaleCss = settings.scaleFit === 'fit' ? 'fit' : settings.scaleFit === 'shrink' ? 'shrink' : '100%'
     const colorCss = settings.color === 'color' ? '' : 'filter: grayscale(1);'
-    const duplexCss = settings.duplex !== 'none' ? 'break-after: page;' : ''
+    const zoomCss = eff !== 100 ? `zoom: ${eff}%;` : ''
+    const target = selMode ? `#${HOLDER_ID}` : (printSelector || '.print-content')
 
     style.textContent = `
       @media print {
@@ -158,14 +211,15 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
           margin: ${settings.margins.top}mm ${settings.margins.right}mm ${settings.margins.bottom}mm ${settings.margins.left}mm;
         }
         body * { visibility: hidden; }
-        ${printSelector || '.print-content'} { visibility: visible; position: absolute; left: 0; top: 0; width: 100%; ${colorCss} }
-        ${printSelector || '.print-content'} * { visibility: visible; }
+        ${target} { visibility: visible; position: absolute; left: 0; top: 0; width: 100%; ${colorCss} ${zoomCss} }
+        ${target} * { visibility: visible; }
         .no-print { display: none !important; }
       }
+      ${selMode ? `#${HOLDER_ID} { position: fixed; left: -10000px; top: 0; }` : ''}
     `
 
     // 添加打印内容类
-    if (printSelector) {
+    if (!selMode && printSelector) {
       const el = document.querySelector(printSelector)
       el?.classList.add('print-content')
     }
@@ -173,6 +227,11 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
     setTimeout(() => {
       window.print()
       onClose()
+      // 打印结束后清理选区容器（留在 DOM 也无碍，但保持干净）
+      setTimeout(() => {
+        const h = document.getElementById(HOLDER_ID)
+        if (h) h.remove()
+      }, 800)
     }, 200)
   }
 
@@ -254,6 +313,12 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
                       <input type="radio" name="pageRange" checked={settings.pageRange === 'custom'} onChange={() => update('pageRange', 'custom')} data-testid="print-range-custom" />
                       {t('print.customPages')}
                     </label>
+                    {selectionPrintHTML ? (
+                      <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--color-text)' }}>
+                        <input type="radio" name="pageRange" checked={settings.pageRange === 'selection'} onChange={() => update('pageRange', 'selection')} data-testid="print-range-selection" />
+                        {t('print.selection') || '选定区域'}
+                      </label>
+                    ) : null}
                     {settings.pageRange === 'custom' && (
                       <input
                         type="text"
@@ -407,13 +472,24 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
                       type="range"
                       min={25}
                       max={200}
-                      value={settings.scale}
+                      value={settings.scaleFit === 'actual' ? settings.scale : Math.round(effScale)}
                       onChange={e => update('scale', parseInt(e.target.value))}
                       data-testid="print-scale"
                       className="flex-1"
                       disabled={settings.scaleFit !== 'actual'}
                     />
-                    <span className="text-sm w-12 text-right" style={{ color: 'var(--color-text)' }}>{settings.scale}%</span>
+                    <input
+                      type="number"
+                      min={25}
+                      max={200}
+                      value={settings.scaleFit === 'actual' ? settings.scale : Math.round(effScale)}
+                      onChange={e => update('scale', Math.max(25, Math.min(200, parseInt(e.target.value) || 100)))}
+                      data-testid="print-scale-num"
+                      className="w-16 text-sm text-center rounded border px-1 py-0.5"
+                      style={{ background: 'var(--color-surface)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}
+                      disabled={settings.scaleFit !== 'actual'}
+                    />
+                    <span className="text-sm" style={{ color: 'var(--color-text-muted)' }}>%</span>
                   </div>
                 </div>
 
@@ -576,7 +652,7 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
           {/* 右侧：预览 */}
           <div className="w-1/2 overflow-auto p-5 flex flex-col items-center" style={{ background: 'var(--color-bg-alt)' }} ref={previewRef}>
             <div className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
-              {t('print.preview')} · {settings.paperSize} · {settings.orientation === 'portrait' ? t('print.portrait') : t('print.landscape')} · {settings.scale}%
+              {t('print.preview')} · {settings.paperSize} · {settings.orientation === 'portrait' ? t('print.portrait') : t('print.landscape')} · {Math.round(effScale)}%
             </div>
             {/* 纸张预览（word：按页高切片显示当前页；ppt/excel：整幅内容） */}
             <div
@@ -587,7 +663,7 @@ export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderP
                 // excel：多页预览由 renderPreview 自带每页"纸张"卡片（重复标题行），
                 // 外层改为透明自适应容器；word/ppt 保持单张固定纸页。
                 ...((editorType === 'excel' || editorType === 'ppt' || editorType === 'pdf') ? { background: 'transparent', boxShadow: 'none', height: 'auto', padding: 0 } : { height: `${previewH * 1.5}px`, padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px` }),
-                transform: `scale(${settings.scale / 100})`,
+                transform: `scale(${effScale / 100})`,
                 transformOrigin: 'top center',
                 filter: settings.color === 'color' ? 'none' : 'grayscale(1)',
               }}
