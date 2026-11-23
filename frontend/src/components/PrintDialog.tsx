@@ -7,6 +7,8 @@ interface PrintDialogProps {
   onClose: () => void
   /** 编辑器类型 — 决定显示哪些选项 */
   editorType: 'word' | 'ppt' | 'excel'
+  /** Excel：工作表已设置的打印标题行数（用于初始化"标题行数"输入框） */
+  excelTitleRows?: number
   /** 预览内容渲染函数 (返回 HTML 字符串或 ReactNode) */
   renderPreview?: (settings: PrintSettings) => React.ReactNode
   /** 实际打印内容的选择器 (用于 window.print) */
@@ -47,6 +49,7 @@ export interface PrintSettings {
   // Excel 专用
   printArea: boolean       // 只打印选定区域
   printTitle: boolean      // 重复打印标题行
+  printTitleRows: number   // 顶端标题行数（$1:$N，每页重复）
   printGridlines: boolean  // 打印网格线
   printComments: 'none' | 'end' | 'sheet'  // 不打印/工作表末尾/工作表上
   pageOrder: 'downRight' | 'rightDown'     // 先列后行/先行后列
@@ -71,6 +74,7 @@ export const defaultPrintSettings: PrintSettings = {
   pptContent: 'full',
   printArea: false,
   printTitle: false,
+  printTitleRows: 1,
   printGridlines: false,
   printComments: 'none',
   pageOrder: 'downRight',
@@ -85,9 +89,10 @@ export const PAPER_SIZES: Record<string, { w: number; h: number }> = {
   Legal: { w: 216, h: 356 },
 }
 
-export function PrintDialog({ open, onClose, editorType, renderPreview, printSelector }: PrintDialogProps) {
+export function PrintDialog({ open, onClose, editorType, excelTitleRows, renderPreview, printSelector }: PrintDialogProps) {
   const { t } = useI18n()
-  const [settings, setSettings] = useState<PrintSettings>(defaultPrintSettings)
+  // round54：标题行数初值来自工作表已设置的打印标题（_xlnm.Print_Titles）
+  const [settings, setSettings] = useState<PrintSettings>({ ...defaultPrintSettings, printTitleRows: excelTitleRows && excelTitleRows > 0 ? excelTitleRows : defaultPrintSettings.printTitleRows })
   const [activeTab, setActiveTab] = useState<'general' | 'layout' | 'advanced'>('general')
   const previewRef = useRef<HTMLDivElement>(null)
   // round24 打印预览真实分页（用户报告"打印预览无法翻页"——旧版 ◀/▶ 无 onClick、
@@ -496,9 +501,25 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
                     {t('print.excelPrintArea')}
                   </label>
                   <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--color-text)' }}>
-                    <input type="checkbox" checked={settings.printTitle} onChange={e => update('printTitle', e.target.checked)} />
+                    <input type="checkbox" checked={settings.printTitle} onChange={e => update('printTitle', e.target.checked)} data-testid="print-title-check" />
                     {t('print.excelPrintTitle')}
                   </label>
+                  {settings.printTitle && (
+                    <div className="ml-6 flex items-center gap-2">
+                      <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('print.excelTitleRows')}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={settings.printTitleRows}
+                        onChange={e => update('printTitleRows', Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                        data-testid="print-title-rows"
+                        className="w-20 text-sm text-center rounded-md px-2 py-1"
+                        style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                      />
+                      <span className="text-xs" style={{ color: 'var(--color-text-faint)' }}>$1:${settings.printTitleRows}</span>
+                    </div>
+                  )}
                   <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--color-text)' }}>
                     <input type="checkbox" checked={settings.printGridlines} onChange={e => update('printGridlines', e.target.checked)} data-testid="print-gridlines" />
                     {t('print.excelGridlines')}
@@ -563,8 +584,9 @@ export function PrintDialog({ open, onClose, editorType, renderPreview, printSel
               className="bg-white shadow-2xl relative"
               style={{
                 width: `${previewW * 1.5}px`,
-                height: `${previewH * 1.5}px`,
-                padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`,
+                // excel：多页预览由 renderPreview 自带每页"纸张"卡片（重复标题行），
+                // 外层改为透明自适应容器；word/ppt 保持单张固定纸页。
+                ...(editorType === 'excel' ? { background: 'transparent', boxShadow: 'none', height: 'auto', padding: 0 } : { height: `${previewH * 1.5}px`, padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px` }),
                 transform: `scale(${settings.scale / 100})`,
                 transformOrigin: 'top center',
                 filter: settings.color === 'color' ? 'none' : 'grayscale(1)',

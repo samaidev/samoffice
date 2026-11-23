@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES } from '../../lib/cnFontSizes'
-import { PrintDialog } from '../../components/PrintDialog'
+import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
 
 interface Cell {
   value: string; formula?: string
@@ -43,6 +43,8 @@ interface SheetSnapshot {
   colWidths?: Record<number, number>
   // freeze：冻结窗格锚点单元格名（如 "C3"），空表示未冻结
   freeze?: string
+  // round54：打印标题行数（每页顶端重复的标题行数，来自 _xlnm.Print_Titles；0=不重复）
+  printTitleRows?: number
   // images：浮动图片（base64 不含 data: 前缀）
   images?: { row: number; col: number; base64: string; ext: string; width: number; height: number }[]
 }
@@ -766,6 +768,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (initialSheets) initialSheets.forEach((s, i) => { if (s.freeze) init[i + 1] = s.freeze })
     return init
   })
+  // round54：每表打印标题行数（_xlnm.Print_Titles，打印预览每页顶端重复）
+  const [sheetPrintTitles, setSheetPrintTitles] = useState<Record<number, number>>(() => {
+    const init: Record<number, number> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => { if (s.printTitleRows) init[i + 1] = s.printTitleRows })
+    return init
+  })
   // 当前选中的浮动图片索引（Delete 键删除）
   const [selImage, setSelImage] = useState<number | null>(null)
   // === Excel 标准交互：单元格编辑态 / 公式引用选择 / 网格键盘焦点 ===
@@ -847,6 +855,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       // 列宽只回传与默认 80px 不同的列，空表不携带该字段
       colWidths: Object.fromEntries(Object.entries(colWidths[s.id] || {}).filter(([, w]) => w !== 80)),
       freeze: sheetFreeze[s.id] || undefined,
+      printTitleRows: sheetPrintTitles[s.id] || 0,
       images: (sheetImages[s.id] || []).map(im => {
         const { base64, ext } = dataURLToBase64(im.src)
         return { row: im.row, col: im.col, base64, ext, width: im.width, height: im.height }
@@ -854,7 +863,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }))
     onSheetsChange(snapshot)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetData, sheets, rows, cols, colWidths, sheetImages, sheetFreeze])
+  }, [sheetData, sheets, rows, cols, colWidths, sheetImages, sheetFreeze, sheetPrintTitles])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [showChartPanel, setShowChartPanel] = useState(false)
@@ -865,7 +874,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 二级颜色弹出菜单 — 统一 click 触发，避免 hover 残留导致重叠
   const [showColorPopup, setShowColorPopup] = useState(false)
   // 弹出面板互斥：同时只允许一个面板打开，避免多个弹出菜单重叠
-  type PanelName = 'chart' | 'shape' | 'func' | 'cond' | 'valid' | 'color'
+  type PanelName = 'chart' | 'shape' | 'func' | 'cond' | 'valid' | 'color' | 'freeze'
   const openPanel = (which: PanelName) => {
     setShowChartPanel(which === 'chart' ? !showChartPanel : false)
     setShowShapePanel(which === 'shape' ? !showShapePanel : false)
@@ -873,12 +882,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setShowCondPanel(which === 'cond' ? !showCondPanel : false)
     setShowValidPanel(which === 'valid' ? !showValidPanel : false)
     setShowColorPopup(which === 'color' ? !showColorPopup : false)
+    setShowFreezePanel(which === 'freeze' ? !showFreezePanel : false)
   }
   const closeAllPanels = () => {
     setShowChartPanel(false); setShowShapePanel(false); setShowFuncPanel(false)
     setShowCondPanel(false); setShowValidPanel(false); setShowColorPopup(false)
+    setShowFreezePanel(false)
   }
-  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel || showColorPopup
+  // round54：冻结窗格下拉菜单（对齐 MS Excel 视图→冻结窗格：首行/首列/到当前格/取消）
+  const [showFreezePanel, setShowFreezePanel] = useState(false)
+  const anyPanelOpen = showChartPanel || showShapePanel || showFuncPanel || showCondPanel || showValidPanel || showColorPopup || showFreezePanel
   const [validList, setValidList] = useState('')
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
@@ -2687,13 +2700,21 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </RibbonGroup>
           {/* MS Office 风格窗口 */}
           <RibbonGroup label={t('sheet.window')}>
-            {/* 冻结窗格：以当前活动单元格为界，上方行 + 左侧列真实冻结（sticky） */}
-            <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => {
-              const next = frozen ? null : { r: active.r, c: active.c }
-              setFreezeAt(next)
-              // 同步写入 sheet 级冻结锚点（保存 xlsx 时持久化）
-              setSheetFreeze(m => ({ ...m, [activeId]: next ? `${colName(next.c)}${next.r + 1}` : '' }))
-            }} active={frozen} title={tf('sheet.freezeTitle2', '冻结到当前单元格上方/左侧')} />
+            {/* round54：冻结窗格下拉菜单（对齐 MS Excel 视图→冻结窗格）——
+                此前只有「冻结到活动格」一个隐晦入口，用户反馈"缺少锁定标题"。
+                现提供 冻结首行/冻结首列/冻结到当前格/取消冻结 四个明确选项；
+                冻结渲染为真实 sticky（行/列/角格），保存 xlsx 持久化为 freeze 锚点。 */}
+            <div className="relative">
+              <RibbonButton icon="📌" label={frozen ? t('sheet.unfreeze') : t('sheet.freezePanes')} onClick={() => openPanel('freeze')} active={frozen || showFreezePanel} title={tf('sheet.freezeTitle2', '冻结标题行/列（锁定窗格）')} />
+              {showFreezePanel && (
+                <div className="absolute top-full right-0 ribbon-popup ribbon-popup_compact" style={{ minWidth: 150, zIndex: 50 }}>
+                  <button onClick={() => { closeAllPanels(); const next = { r: 1, c: 0 }; setFreezeAt(next); setSheetFreeze(m => ({ ...m, [activeId]: `${colName(next.c)}${next.r + 1}` })) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>🔒 {tf('sheet.freezeTopRow', '冻结首行')}</button>
+                  <button onClick={() => { closeAllPanels(); const next = { r: 0, c: 1 }; setFreezeAt(next); setSheetFreeze(m => ({ ...m, [activeId]: `${colName(next.c)}${next.r + 1}` })) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>🔒 {tf('sheet.freezeFirstCol', '冻结首列')}</button>
+                  <button onClick={() => { closeAllPanels(); const next = { r: active.r, c: active.c }; setFreezeAt(next); setSheetFreeze(m => ({ ...m, [activeId]: `${colName(next.c)}${next.r + 1}` })) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>📌 {tf('sheet.freezeAtActive', `冻结到当前格（${colName(active.c)}${active.r + 1} 上方/左侧）`)}</button>
+                  <button onClick={() => { closeAllPanels(); setFreezeAt(null); setSheetFreeze(m => ({ ...m, [activeId]: '' })) }} className="flex w-full text-left px-3 py-1.5 text-xs gap-2 transition-colors hover:bg-slate-100" style={{ color: 'var(--color-text)' }}>🔓 {t('sheet.unfreeze')}</button>
+                </div>
+              )}
+            </div>
             <RibbonButton icon="🪟" label={t('sheet.newWindow')} onClick={() => { const go = (window as any).go?.main?.App; if (go?.NewWindow) go.NewWindow(); else if ((window as any).runtime?.WindowNew) (window as any).runtime.WindowNew() }} title={t('sheet.newWindowTitle')} />
           </RibbonGroup>
           {/* MS Office 风格显示 */}
@@ -2738,6 +2759,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         onClose={() => setPrintDialogOpen(false)}
         editorType="excel"
         printSelector="table"
+        excelTitleRows={sheetPrintTitles[activeId] || 0}
         renderPreview={(settings) => {
           // round51（问题3）：打印预览应用单元格真实样式。
           // 旧实现是硬编码骨架表 —— 只取 value.slice(0,10)，加粗/斜体/颜色/填充/边框/
@@ -2750,6 +2772,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           //  - 合并单元格按 mergeRange 展开 rowSpan/colSpan，被 hiddenBy 的格子跳过
           //  - 行列标头（A/B/C… 1/2/3…）不进打印（Excel 打印不含行列标头）；
           //    列宽按 curColWidths 等比缩放，行数取到数据实际占用行（不为空行浪费纸张）
+          // round54（问题3）：真实分页 + 顶端标题行重复（_xlnm.Print_Titles）——
+          //   勾选"重复打印标题行"后按纸张可用高度把数据行切成多页，
+          //   第 2 页起每页顶端先渲染标题行（$1:$N），每页渲染成独立"纸张"卡片。
           const bw2 = (b?: string) => b === 'thick' ? '3px' : b === 'medium' ? '2px' : b === 'thin' ? '1px' : undefined
           // 数据实际占用范围（最后一行/列有内容的格子，兜底 12×8）
           let maxR = 0, maxC = 0, any = false
@@ -2765,50 +2790,86 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           const pvRows = any ? Math.min(rows, maxR + 1) : Math.min(rows, 12)
           const pvCols = any ? Math.min(cols, maxC + 1) : Math.min(cols, 8)
           const valignMap2: Record<string, string> = { top: 'top', middle: 'middle', bottom: 'bottom' }
+          // 页面几何（预览 1.5px/mm，与 PrintDialog 纸张卡片一致）
+          const paper = PAPER_SIZES[settings.paperSize]
+          const pageWpx = (settings.orientation === 'landscape' ? paper.h : paper.w) * 1.5
+          const pageHpx = (settings.orientation === 'landscape' ? paper.w : paper.h) * 1.5
+          const availH = Math.max(60, pageHpx - (settings.margins.top + settings.margins.bottom) * 1.5)
+          const titleN = settings.printTitle ? Math.max(0, Math.min(settings.printTitleRows || 1, pvRows - 1)) : 0
+          const heights = Array.from({ length: pvRows }, (_, r) => rowH(r))
+          const titleH = titleN > 0 ? heights.slice(0, titleN).reduce((a, b) => a + b, 0) : 0
+          // 行分页：chunks = [from,to] 数据行区间（首页自然含标题行，后续页另加标题行）
+          const chunks: [number, number][] = []
+          let dataStart = 0
+          while (dataStart < pvRows) {
+            let used = dataStart === 0 ? 0 : titleH
+            let end = dataStart
+            for (let r = dataStart; r < pvRows; r++) {
+              used += heights[r]
+              if (used > availH && r > dataStart) break
+              end = r
+            }
+            chunks.push([dataStart, end])
+            dataStart = end + 1
+          }
+          const cellTd = (r: number, c: number, keyPrefix: string) => {
+            const cell = getCell(r, c)
+            if (cell.hiddenBy) return null
+            const mr = cell.mergeRange
+            const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
+            const hasBorder = cell.border && cell.border !== 'none'
+            const gridB = settings.printGridlines && !hasBorder ? '1px solid #d0d7de' : undefined
+            return (
+              <td key={`${keyPrefix}-${r}-${c}`} rowSpan={mr?.rowSpan} colSpan={mr?.colSpan}
+                style={{
+                  background: cell.bg || '#ffffff',
+                  color: cell.color || '#000',
+                  fontWeight: cell.bold ? 700 : 400,
+                  fontStyle: cell.italic ? 'italic' : undefined,
+                  textDecoration: decoration || undefined,
+                  fontSize: cell.fontSize ? `${Math.max(8, cell.fontSize * 0.75)}px` : '11px',
+                  fontFamily: cell.fontFamily || undefined,
+                  textAlign: cell.align || (mr ? 'center' : 'left'),
+                  verticalAlign: cell.valign ? valignMap2[cell.valign] : 'middle',
+                  whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  padding: '2px 4px',
+                  border: hasBorder ? `${bw2(cell.border)} solid ${cell.borderColor || '#000'}` : gridB,
+                  width: `${(curColWidths[c] || 80) * 0.6}px`,
+                }}>
+                {fmtDisplay(cell)}
+              </td>
+            )
+          }
+          const renderRow = (r: number, keyPrefix: string) => (
+            <tr key={`${keyPrefix}-r${r}`} style={{ height: rowH(r) }}>
+              {Array.from({ length: pvCols }).map((_, c) => cellTd(r, c, keyPrefix))}
+            </tr>
+          )
           return (
-            <div className="w-full h-full overflow-auto" style={{ color: '#000' }}>
-              <table className="border-collapse w-full" style={{ tableLayout: 'fixed' }}>
-                <tbody>
-                  {Array.from({ length: pvRows }).map((_, r) => {
-                    const rowHpx = rowH(r)
-                    return (
-                      <tr key={r} style={{ height: rowHpx }}>
-                        {Array.from({ length: pvCols }).map((_, c) => {
-                          const cell = getCell(r, c)
-                          if (cell.hiddenBy) return null
-                          const mr = cell.mergeRange
-                          const decoration = [cell.under ? 'underline' : '', cell.strike ? 'line-through' : ''].filter(Boolean).join(' ')
-                          const hasBorder = cell.border && cell.border !== 'none'
-                          const gridB = settings.printGridlines && !hasBorder ? '1px solid #d0d7de' : undefined
-                          return (
-                            <td key={c} rowSpan={mr?.rowSpan} colSpan={mr?.colSpan}
-                              style={{
-                                background: cell.bg || '#ffffff',
-                                color: cell.color || '#000',
-                                fontWeight: cell.bold ? 700 : 400,
-                                fontStyle: cell.italic ? 'italic' : undefined,
-                                textDecoration: decoration || undefined,
-                                fontSize: cell.fontSize ? `${Math.max(8, cell.fontSize * 0.75)}px` : '11px',
-                                fontFamily: cell.fontFamily || undefined,
-                                textAlign: cell.align || (mr ? 'center' : 'left'),
-                                verticalAlign: cell.valign ? valignMap2[cell.valign] : 'middle',
-                                whiteSpace: cell.wrap ? 'pre-wrap' : 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                padding: '2px 4px',
-                                border: hasBorder ? `${bw2(cell.border)} solid ${cell.borderColor || '#000'}` : gridB,
-                                width: `${(curColWidths[c] || 80) * 0.6}px`,
-                              }}>
-                              {fmtDisplay(cell)}
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-              {settings.printGridlines && <div className="text-[8px] text-gray-500 mt-1">{t('print.excelGridlines')} ✓</div>}
+            <div style={{ color: '#000', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '8px 0 16px' }}>
+              {chunks.map(([from, to], pi) => {
+                // 第 2 页起：顶端重复标题行（$1:$N）+ 本页数据行
+                const rowIdxs = pi === 0
+                  ? Array.from({ length: to - from + 1 }, (_, i) => from + i)
+                  : [...Array.from({ length: titleN }, (_, i) => i), ...Array.from({ length: to - from + 1 }, (_, i) => from + i)]
+                return (
+                  <div key={`pg${pi}`} style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`, boxSizing: 'border-box' }}>
+                    <table className="border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
+                      <tbody>
+                        {rowIdxs.map((r, i) => renderRow(r, `p${pi}i${i}`))}
+                      </tbody>
+                    </table>
+                    {chunks.length > 1 && (
+                      <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
+                        {t('print.pageOf', { n: pi + 1, total: chunks.length }) || `第 ${pi + 1} 页 / 共 ${chunks.length} 页`}{pi > 0 && titleN > 0 ? ` · ${t('print.titleRepeated') || '标题行已重复'}` : ''}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {settings.printGridlines && <div className="text-[8px] text-gray-500">{t('print.excelGridlines')} ✓</div>}
             </div>
           )
         }}
@@ -2893,7 +2954,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       )}
 
       {/* 表格主体（工作簿视图：分页参考线 / 页边距参考线叠加显示） */}
-      <div className="flex-1 overflow-auto p-2 sm:p-3 relative" ref={scrollRef} style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
+      {/* round54：去掉容器 padding —— sticky 阈值以 scrollport 为基准，容器 padding
+          会让冻结格的 left/top 阈值与自然位置相差 pad 像素，冻结列/行整条错位 12px
+          （用户报告"第一列/第一行边框错乱"的组成部分）。表格改为贴边铺放。 */}
+      <div className="flex-1 overflow-auto relative" ref={scrollRef} style={{ background: 'var(--color-bg-alt)', zoom: `${zoom}%`,
         ...(viewMode === 'pageBreak' ? {
           backgroundImage: 'repeating-linear-gradient(to right, transparent 0, transparent calc(7 * 80px - 1px), #f59e0b calc(7 * 80px - 1px), #f59e0b calc(7 * 80px), transparent calc(7 * 80px)), repeating-linear-gradient(to bottom, transparent 0, transparent calc(46 * 28px - 1px), #f59e0b calc(46 * 28px - 1px), #f59e0b calc(46 * 28px), transparent calc(46 * 28px))',
           backgroundRepeat: 'no-repeat',
@@ -2916,8 +2980,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <tr>
               {/* round51（问题2）：左上角行列标头交汇格。边框原用 --color-border(#e2e8f0)，
                   浅色背景(#f1f5f9)上几乎不可见，用户报告"看不到边框"。改用专门的表头边框色
-                  --color-heading-border（更深一档），与 Excel 行列标头一致的有感边框。 */}
-              <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-heading-border)', color: 'var(--color-text-muted)' }}></th>
+                  --color-heading-border（更深一档），与 Excel 行列标头一致的有感边框。
+                  round54：列冻结时角格还需 sticky left:0（水平滚动时与行标头列一起钉住），
+                  并用 inset 阴影画边（sticky+border-collapse 的合并边框不跟随 sticky 位移）。 */}
+              <th className="w-10 sm:w-12 h-8 text-xs font-medium sticky top-0 z-20" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-heading-border)', color: 'var(--color-text-muted)', left: frozen && freezeAt!.c > 0 ? 0 : undefined, ...(frozen && freezeAt!.c > 0 ? { boxShadow: 'inset 0 0 0 1px var(--color-heading-border)', borderColor: 'transparent' } : {}) }}></th>
               {Array.from({ length: cols }).map((_, c) => {
                 const w = curColWidths[c] || 80
                 const colSel = colInAnyArea(c)
@@ -2925,7 +2991,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                 return (
                 <th key={c}
                   className={`w-20 sm:w-24 h-8 text-xs font-medium sticky top-0 transition-colors cursor-pointer select-none`}
-                  style={{ zIndex: filterMenuCol === c ? 45 : 10, background: colSel ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-heading-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px` }}
+                  style={{ zIndex: filterMenuCol === c ? 45 : 10, background: colSel ? 'rgba(59,130,246,0.30)' : (active.c === c ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-heading-border)', color: 'var(--color-text-secondary)', width: `${w}px`, minWidth: `${w}px`,
+                    // round54：列冻结时冻结列的表头随数据格一起 sticky left（否则水平滚动
+                    // 时列头滑走、冻结数据列无头）。inset 阴影画边对抗 sticky+collapse 边框错位。
+                    left: frozen && c < freezeAt!.c ? colLeft(c) : undefined,
+                    ...(frozen && c < freezeAt!.c ? { boxShadow: 'inset 0 0 0 1px var(--color-heading-border)', borderColor: 'transparent' } : {}) }}
                   onMouseDown={e => {
                     // 右键/中键不改变列选区（Excel 行为，防止右键撤销已选列）
                     if (e.button !== 0) return
@@ -3013,8 +3083,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               return (
               <tr key={r} style={rowHpx !== 28 ? { height: rowHpx } : undefined}>
                 {showHeadings && (
-                <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow ? 'sticky z-30' : ''}`}
-                  style={{ background: rowInAnyArea(r) ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-heading-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx }}
+                <td className={`w-10 sm:w-12 h-7 text-center text-xs transition-colors cursor-pointer select-none ${isFrozenRow || (frozen && freezeAt!.c > 0) ? 'sticky z-30' : ''}`}
+                  style={{ background: rowInAnyArea(r) ? 'rgba(59,130,246,0.30)' : (active.r === r ? 'rgba(59,130,246,0.14)' : 'var(--color-bg-alt)'), border: '1px solid var(--color-heading-border)', color: 'var(--color-text-muted)', top: isFrozenRow ? frozenTop : undefined, left: frozen && freezeAt!.c > 0 ? 0 : undefined, height: rowHpx, ...(isFrozenRow || (frozen && freezeAt!.c > 0) ? { boxShadow: 'inset 0 0 0 1px var(--color-heading-border)', borderColor: 'transparent' } : {}) }}
                   onMouseDown={e => {
                     // 右键/中键不改变行选区（Excel 行为，防止右键撤销已选行）
                     if (e.button !== 0) return
@@ -3065,7 +3135,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   const mergeRange = cell.mergeRange
                   const sel = inSelection(r, c)
                   const bw = cell.border === 'thick' ? '3px' : cell.border === 'medium' ? '2px' : cell.border === 'thin' ? '1px' : undefined
-                  const isFrozenCell = frozen && (c < freezeAt!.c)
+                  // round54（用户报告：缺少锁定标题/冻结后首行首列边框错乱）：
+                  // 行冻结此前只对【行标头】生效 —— 数据格没有 sticky top，
+                  // 冻结首行后向下滚动标题行照样滚走（用户观感=功能缺失）。
+                  // 现在行/列/角格统一 sticky；跨出冻结带的合并格不冻结
+                  // （sticky 会把整块合并区拽进冻结带，错乱）。
+                  const isFrozenColCell = frozen && (c < freezeAt!.c) && (c + (mergeRange?.colSpan || 1) - 1 < freezeAt!.c)
+                  const isFrozenRowCell = frozen && (r < freezeAt!.r) && (r + (mergeRange?.rowSpan || 1) - 1 < freezeAt!.r)
+                  const isFrozenCell = isFrozenColCell || isFrozenRowCell
                   const gridOff = !showGrid
                   const cw = curColWidths[c] || 80
                   // 查找高亮：无填充色时用琥珀色底标记匹配（关闭查找条即消失）
@@ -3117,17 +3194,39 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   }
                   // 选区叠加层：半透明蓝叠在原填充色上（MS Excel 行为——填充色仍隐约可见）
                   const selOverlay = `linear-gradient(rgba(59,130,246,0.22), rgba(59,130,246,0.22)), ${cell.bg || '#ffffff'}`
+                  // round54（用户报告：第一列/第一行看不到边框）：冻结格是 sticky 定位，
+                  // border-collapse 的合并边框不会跟随 sticky 位移绘制（Chromium 已知渲染
+                  // 缺陷：边框画在未冻结时的旧表格位置，内容画在冻结位置 —— 错位/消失）。
+                  // 冻结格改用【透明边框 + inset box-shadow 画边】：阴影跟随元素盒模型，
+                  // 停在冻结位置永远正确。只画朝向非冻结邻居的边（外缘/冻结分界线），
+                  // 冻结带内部相邻格共边不重复画（否则内部线 2px 变粗）。
+                  if (isFrozenCell) {
+                    const isFz = (rr: number, cc: number) => frozen && (rr < freezeAt!.r || cc < freezeAt!.c)
+                    const hasCellBorder = !!cell.border && cell.border !== 'none'
+                    const edgeW = bw || (!gridOff ? '1px' : '')
+                    const edgeC = hasCellBorder ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)')
+                    if (edgeW && edgeC !== 'transparent') {
+                      if (r === 0 || !isFz(r - 1, c)) shadowParts.push(`inset 0 ${edgeW} 0 0 ${edgeC}`)
+                      if (r === rows - 1 || !isFz(r + 1, c)) shadowParts.push(`inset 0 -${edgeW} 0 0 ${edgeC}`)
+                      if (c === 0 || !isFz(r, c - 1)) shadowParts.push(`inset ${edgeW} 0 0 0 ${edgeC}`)
+                      if (c === cols - 1 || !isFz(r, c + 1)) shadowParts.push(`inset -${edgeW} 0 0 0 ${edgeC}`)
+                    }
+                  }
                   return (
-                    <td key={c} data-cell={`${r}-${c}`} className={`border p-0 relative ${isFrozenCell ? 'sticky z-30' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
+                    <td key={c} data-cell={`${r}-${c}`} className={`border p-0 relative ${isFrozenCell ? 'sticky' : ''}`} rowSpan={mergeRange?.rowSpan} colSpan={mergeRange?.colSpan} style={{
                       // 电子表格是“白纸”：无填充单元格固定白底、深色字，与应用主题无关
                       // （否则暗色主题下会渲染成大片黑背景，且与 Excel 显示不一致）
                       background: sel ? (isActive ? (cell.bg || '#ffffff') : selOverlay) : (findHit && !cell.bg ? 'rgba(253,230,138,0.55)' : (cell.bg || '#ffffff')),
-                      borderColor: cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)'),
+                      borderColor: isFrozenCell ? 'transparent' : (cell.border && cell.border !== 'none' ? (cell.borderColor || (gridOff ? 'transparent' : '#000')) : (gridOff ? 'transparent' : 'var(--color-border)')),
                       borderWidth: bw,
                       width: `${cw}px`,
                       minWidth: `${cw}px`,
                       verticalAlign: cell.valign ? valignMap[cell.valign] : undefined,
-                      left: isFrozenCell ? colLeft(c) : undefined,
+                      left: isFrozenColCell ? colLeft(c) : undefined,
+                      top: isFrozenRowCell ? (32 + rowTop(r)) : undefined,
+                      // 冻结格层级：高于普通格（滚动时盖住滑过的内容），低于行列标头
+                      //（thead th z-10 / 行标头 td z-30），角格再高一级。
+                      zIndex: isFrozenCell ? ((isFrozenColCell && isFrozenRowCell) ? 9 : 8) : undefined,
                       boxShadow: shadowParts.length ? shadowParts.join(', ') : undefined,
                     }}
                       onMouseDown={e => {

@@ -116,6 +116,48 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
   // （round37：domCellPos 手写坐标运算已退役 —— 跨格拖选改用引擎算法
   //  cellAround/inSameTable/CellSelection，见 onMousemove。）
 
+  // round54（用户报告：Word 脚注双击编辑无效）：桥层按 tableWrapper 的【整个矩形】
+  // 铺放（跨页大表的包围盒会盖住同页的脚注行/批注按钮等非表格内容）。层默认
+  // pointer-events:none —— 非表格内容（脚注行双击编辑、复制/删除按钮、空白区双击
+  // 恢复页间空白等）全部走原生事件，不再被层吞掉；仅当鼠标悬停在真实表格格上
+  // （cellAt 几何命中）时才把层临时激活为 auto，表格死区手势照常接管。
+  // mousedown 仍先走 cellAt 判定（触屏无 hover 也能接管表格），cellAt 未命中且
+  // target 恰在层上时兜底转发给层下元素。
+  const setLayersPE = (v: string) => layers.forEach(l => { l.style.pointerEvents = v })
+  // 表格手势进行中冻结 PE（拖选移出表格时层不被关闭，mouseup 后由管理器接管）
+  let peFrozen = false
+  let peRaf = 0
+  const onMousemovePE = (e: MouseEvent) => {
+    if (peFrozen || peRaf) return
+    const x = e.clientX, y = e.clientY
+    peRaf = requestAnimationFrame(() => {
+      peRaf = 0
+      setLayersPE(cellAt(x, y) ? 'auto' : 'none')
+    })
+  }
+
+  const forwardToBeneath = (type: string, e: MouseEvent) => {
+    const saved: { el: HTMLElement; v: string }[] = []
+    try {
+      layers.forEach(l => { saved.push({ el: l, v: l.style.pointerEvents }); l.style.pointerEvents = 'none' })
+      const target = window.document.elementFromPoint(e.clientX, e.clientY)
+      if (!target || layers.has(target as HTMLElement)) return
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, view: window,
+        clientX: e.clientX, clientY: e.clientY,
+        button: e.button, buttons: e.buttons, detail: e.detail,
+      }))
+    } catch { /* 转发失败不影响原手势 */ } finally {
+      saved.forEach(s => { s.el.style.pointerEvents = s.v })
+    }
+  }
+
+  const isOnLayer = (e: MouseEvent) => {
+    let el = e.target as HTMLElement | null
+    while (el) { if (layers.has(el)) return true; el = el.parentElement }
+    return false
+  }
+
   const selectCellAll = (td: HTMLElement) => {
     const range = window.document.createRange()
     range.selectNodeContents(td)
@@ -129,7 +171,16 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     const v = getView()
     if (!v) { console.error('[bridge] no view'); return }
     const td = cellAt(e.clientX, e.clientY)
-    if (!td) { console.error('[bridge] cellAt miss at', e.clientX, e.clientY, 'wrappers=', v.dom.querySelectorAll('.tableWrapper').length); return }
+    if (!td) {
+      // round54：点不在任何格内 —— 若 target 在桥层上（表格包围盒死区），
+      // 层下可能是脚注行/正文/按钮等非表格内容，转发事件而不是静默吞掉
+      //（此前 [bridge] cellAt miss 直接 return，层下元素的 click/dblclick
+      // 手势全部失效）。stopPropagation 掐掉真事件的继续传播，只留转发
+      // 事件走完整生命周期（否则 document 级监听会双触发）。
+      // 层外点击（菜单/按钮等普通 UI）不介入，走原生路径。
+      if (isOnLayer(e)) { e.stopPropagation(); forwardToBeneath('mousedown', e) }
+      return
+    }
 
     // 行拖拽协同：CellSelection（整行选中）内按下 → 启动行拖拽会话
     //（与 tablePlugins.ts 的原生 mousedown 同逻辑 —— 但表格死区下
@@ -163,6 +214,8 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     }
 
     e.preventDefault() // 死区内的点击没有任何默认行为可保留
+    peFrozen = true
+    setLayersPE('auto')
 
     // ---- 手势判定 ----
     const now = Date.now()
@@ -445,6 +498,7 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
   const onMouseup = (e: MouseEvent) => {
     if (!gesture) return
     gesture.lastUp = Date.now()
+    peFrozen = false
     // 关键（round34 时间线实锤 t0+90ms selection 被打到文档末尾）：
     // mousedown preventDefault 不能阻止 Chromium 在 mouseup 阶段
     // 重新执行默认 caret 放置（放置到 contenteditable 末尾 —— 
@@ -473,11 +527,24 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
   // click 的默认行为独立于 mouseup（round34 时间线：mouseup preventDefault
   // 后 t+120ms selection 仍被归位到文档末尾 —— click 默认 caret 放置）。
   // 桥手势期间 click 一律 preventDefault（不阻止冒泡，UI 外部监听不受影响）。
-  const onClick = (e: MouseEvent) => { if (gesture) e.preventDefault() }
+  // round54：无手势时（点击落在层上但不是表格格）转发 click 给层下元素，
+  // 脚注行的复制/删除按钮等才能收到点击。
+  const onClick = (e: MouseEvent) => {
+    if (gesture) { e.preventDefault(); return }
+    if (isOnLayer(e)) { e.stopPropagation(); forwardToBeneath('click', e) }
+  }
+  // round54：双击同理 —— 无手势且 target 在层上时转发 dblclick，
+  // 页底脚注行的「双击编辑」才能触发（用户报告：Word 脚注无法编辑）。
+  const onDblclick = (e: MouseEvent) => {
+    if (gesture) { e.preventDefault(); return }
+    if (isOnLayer(e)) { e.stopPropagation(); forwardToBeneath('dblclick', e) }
+  }
   window.document.addEventListener('mousedown', onMousedown, true)
   window.document.addEventListener('mousemove', onMousemoveArm, true)
+  window.document.addEventListener('mousemove', onMousemovePE, true)
   window.document.addEventListener('mouseup', onMouseup, true)
   window.document.addEventListener('click', onClick, true)
+  window.document.addEventListener('dblclick', onDblclick, true)
 
   // ---- 层生命周期 ----
   const ensureLayer = (wrapper: HTMLElement) => {
@@ -486,7 +553,9 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     if (!h || !wrapper.isConnected) return
     const layer = window.document.createElement('div')
     layer.className = 'pm-table-clickbridge'
-    layer.style.cssText = 'position:absolute;z-index:7;pointer-events:auto'
+    // round54：默认 pointer-events:none（悬停真实格才激活，见 onMousemovePE）——
+    // 层矩形是非表格内容的禁区，不能常驻拦截。
+    layer.style.cssText = 'position:absolute;z-index:7;pointer-events:none'
     layers.set(wrapper, layer)
     h.appendChild(layer)
     syncOne(wrapper, layer)
@@ -555,13 +624,16 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
 
   return () => {
     disposed = true
+    if (peRaf) cancelAnimationFrame(peRaf)
     ;(window as any).__samTableBridge = false
     mo.disconnect()
     scroller?.removeEventListener('scroll', scheduleSync)
     window.removeEventListener('resize', scheduleSync)
     window.document.removeEventListener('mousedown', onMousedown, true)
   window.document.removeEventListener('click', onClick, true)
+    window.document.removeEventListener('dblclick', onDblclick, true)
     window.document.removeEventListener('mousemove', onMousemoveArm, true)
+    window.document.removeEventListener('mousemove', onMousemovePE, true)
     window.document.removeEventListener('mouseup', onMouseup, true)
     if (syncTimer) window.clearTimeout(syncTimer)
     layers.forEach(l => l.remove())

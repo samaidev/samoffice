@@ -442,6 +442,68 @@ func TestRoundTripImagesColWidthsFreeze(t *testing.T) {
 	}
 }
 
+// TestRoundTripPrintTitles 验证打印标题行数（_xlnm.Print_Titles）走 Write → Read
+// 完整往返，以及 rows=0 时清理既有定义。round54 打印标题行重复功能。
+func TestRoundTripPrintTitles(t *testing.T) {
+	wb := workbookJSON{Sheets: []sheetJSON{{
+		Name: "报表 表", Rows: 20, Cols: 5,
+		PrintTitleRows: 2,
+		Cells:          map[string]cellJSON{"0-0": {Value: "标题"}},
+	}}}
+	data, err := json.Marshal(wb)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "rt_titles.xlsx")
+	if err := WriteXLSX(path, string(data)); err != nil {
+		t.Fatalf("WriteXLSX: %v", err)
+	}
+	// excelize 直读：定义名称应为 '报表 表'!$1:$2（表名含空格需引号）
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	var found string
+	for _, dn := range f.GetDefinedName() {
+		if dn.Name == "_xlnm.Print_Titles" {
+			found = dn.RefersTo
+		}
+	}
+	if found != "'报表 表'!$1:$2" {
+		t.Errorf("Print_Titles = %q, want '报表 表'!$1:$2", found)
+	}
+	f.Close()
+	// ReadXLSX 读回 → printTitleRows=2
+	jsonStr, err := ReadXLSX(path)
+	if err != nil {
+		t.Fatalf("ReadXLSX: %v", err)
+	}
+	var back workbookJSON
+	if err := json.Unmarshal([]byte(jsonStr), &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(back.Sheets) == 0 || back.Sheets[0].PrintTitleRows != 2 {
+		t.Errorf("round trip printTitleRows = %v, want 2", back.Sheets[0].PrintTitleRows)
+	}
+	// 再写回 rows=0 → 定义应被删除
+	back.Sheets[0].PrintTitleRows = 0
+	data2, _ := json.Marshal(back)
+	path2 := filepath.Join(t.TempDir(), "rt_titles0.xlsx")
+	if err := WriteXLSX(path2, string(data2)); err != nil {
+		t.Fatalf("WriteXLSX2: %v", err)
+	}
+	f2, err := excelize.OpenFile(path2)
+	if err != nil {
+		t.Fatalf("open2: %v", err)
+	}
+	defer f2.Close()
+	for _, dn := range f2.GetDefinedName() {
+		if dn.Name == "_xlnm.Print_Titles" && dn.Scope == "报表 表" {
+			t.Errorf("Print_Titles should be deleted when rows=0, got %q", dn.RefersTo)
+		}
+	}
+}
+
 func mergeSpan(rowSpan, colSpan int) *struct {
 	RowSpan int `json:"rowSpan"`
 	ColSpan int `json:"colSpan"`

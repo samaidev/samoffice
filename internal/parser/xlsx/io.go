@@ -60,6 +60,8 @@ type sheetJSON struct {
 	ColWidths map[string]float64 `json:"colWidths,omitempty"`
 	// Freeze 冻结窗格单元格（如 "C3" 表示冻结上方 2 行与左侧 2 列），空表示未冻结
 	Freeze string `json:"freeze,omitempty"`
+	// PrintTitleRows 打印标题行数（_xlnm.Print_Titles 的 $1:$N；0=不重复）
+	PrintTitleRows int `json:"printTitleRows,omitempty"`
 	// Images 浮动图片列表（base64 不含 data: 前缀）
 	Images []imageJSON `json:"images,omitempty"`
 }
@@ -428,6 +430,8 @@ func readSheetExtras(f *excelize.File, sheet string, sj *sheetJSON) {
 			sj.Freeze = ref
 		}
 	}
+	// ---- 打印标题行：_xlnm.Print_Titles（Scope=本表）形如 Sheet1!$1:$2 → 行数 2 ----
+	sj.PrintTitleRows = readPrintTitleRows(f, sheet)
 	// ---- 浮动图片：GetPictureCells 枚举锚点，GetPictures 取字节与显示尺寸 ----
 	cells, err := f.GetPictureCells(sheet)
 	if err != nil {
@@ -606,9 +610,10 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 
 		// 数据验证（下拉列表）：valid 字段写为 list 类型 DataValidation
 		writeValidations(f, sheetName, &sj)
-		// 列宽 / 冻结窗格 / 浮动图片（sheet 级元数据）
+		// 列宽 / 冻结窗格 / 打印标题行 / 浮动图片（sheet 级元数据）
 		writeColWidths(f, sheetName, &sj)
 		writeFreeze(f, sheetName, &sj)
+		writePrintTitles(f, sheetName, &sj)
 		if err := writeImages(f, sheetName, &sj); err != nil {
 			return nil, err
 		}
@@ -643,6 +648,68 @@ func writeColWidths(f *excelize.File, sheet string, sj *sheetJSON) {
 			continue
 		}
 	}
+}
+
+// readPrintTitleRows 从工作簿定义名称 _xlnm.Print_Titles（Scope=指定表）解析顶端
+// 标题行数。RefersTo 形如 Sheet1!$1:$2（可能带引号包裹的表名），取结束行号；
+// 仅识别纯行区间（$1:$N），列区间/组合引用返回 0。round54 打印标题行重复功能。
+func readPrintTitleRows(f *excelize.File, sheet string) int {
+	for _, dn := range f.GetDefinedName() {
+		if dn.Name != "_xlnm.Print_Titles" || dn.Scope != sheet {
+			continue
+		}
+		ref := strings.TrimSpace(dn.RefersTo)
+		if i := strings.LastIndex(ref, "!"); i >= 0 {
+			ref = ref[i+1:]
+		}
+		ref = strings.TrimSpace(ref)
+		// 仅接受 $a:$b 形式且均为行号（排除 $A:$B 列区间 / A1:B2 区域引用）
+		parts := strings.Split(ref, ":")
+		if len(parts) != 2 {
+			return 0
+		}
+		trimDollar := func(s string) (int, bool) {
+			s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "$"))
+			n, err := strconv.Atoi(s)
+			if err != nil || n < 1 || n > 1048576 {
+				return 0, false
+			}
+			return n, true
+		}
+		a, okA := trimDollar(parts[0])
+		b, okB := trimDollar(parts[1])
+		if !okA || !okB {
+			return 0
+		}
+		if b >= a {
+			return b
+		}
+		return a
+	}
+	return 0
+}
+
+// writePrintTitles 把前端标题行数写回为 _xlnm.Print_Titles（Scope=本表）。
+// 已存在同名定义（任意 Scope）时先删再设，避免 ErrDefinedNameDuplicate；
+// rows<=0 表示不重复标题行，删除已有定义。
+func writePrintTitles(f *excelize.File, sheet string, sj *sheetJSON) {
+	const name = "_xlnm.Print_Titles"
+	// 先清理本表既有的 Print_Titles（无论是否本应用写入）
+	for _, dn := range f.GetDefinedName() {
+		if dn.Name == name && dn.Scope == sheet {
+			_ = f.DeleteDefinedName(&excelize.DefinedName{Name: name, Scope: sheet})
+			break
+		}
+	}
+	if sj.PrintTitleRows <= 0 {
+		return
+	}
+	// 表名含空格/特殊字符时按 OOXML 规则加引号
+	ref := "'" + sheet + "'!$1:$" + strconv.Itoa(sj.PrintTitleRows)
+	if !strings.ContainsAny(sheet, " -+.!$&'()") {
+		ref = sheet + "!$1:$" + strconv.Itoa(sj.PrintTitleRows)
+	}
+	_ = f.SetDefinedName(&excelize.DefinedName{Name: name, RefersTo: ref, Scope: sheet})
 }
 
 // writeFreeze 把冻结窗格锚点（如 "C3"）写回 xlsx；空串表示未冻结不处理。

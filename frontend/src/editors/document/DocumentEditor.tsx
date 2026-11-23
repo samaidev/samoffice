@@ -1150,6 +1150,21 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     if (!v) return
     const node = v.state.doc.nodeAt(f.sectionPos)
     if (!node || node.type.name !== 'footnote_item') return
+    // round54：删除最后一个脚注项时连 footnote_section 一起删 ——
+    // schema 规定 footnote_section content 是 'footnote_item+'（至少一项），
+    // 只删 item 会留下空 section（非法文档，重开/保存都会出问题）。
+    const $pos = v.state.doc.resolve(f.sectionPos)
+    for (let d = $pos.depth; d > 0; d--) {
+      const anc = $pos.node(d)
+      if (anc.type.name === 'footnote_section') {
+        if (anc.childCount <= 1) {
+          const start = $pos.before(d)
+          v.dispatch(v.state.tr.delete(start, start + anc.nodeSize))
+          return
+        }
+        break
+      }
+    }
     v.dispatch(v.state.tr.delete(f.sectionPos, f.sectionPos + node.nodeSize))
   }
   // 复制脚注内容到剪贴板（优先 Clipboard API，回退 execCommand）
@@ -2126,9 +2141,41 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         // 表格交互）。拼写检查只由审阅页按钮手动触发。
         updateActiveState(ns)
         if (ns.doc.childCount !== pmBlockCount) setPmBlockCount(ns.doc.childCount)
-        try { setFootnotes(extractFootnotes(ns.doc)) } catch (e) { /* ignore */ }
-        try { setComments(extractComments(ns.doc)) } catch (e) { /* ignore */ }
+        // round54（用户报告：Word 脚注无法双击编辑）：按值稳定 —— 每个事务都产生
+        // 新数组引用（内容没变），下游 footnotesByPage useMemo 依赖 footnotes 全部
+        // 重算，页底脚注行随每次 selection 事务重渲染；双击的两击之间行节点被
+        // React 替换（key=sectionPos 变化），第二击落点漂移到包装 div —— dblclick
+        // 永远到不了行上。改为内容不变时保留旧引用（setComments 同理）。
+        try {
+          const fn = extractFootnotes(ns.doc)
+          setFootnotes(prev => (prev.length === fn.length && prev.every((p, i) => p.num === fn[i].num && p.text === fn[i].text && p.sectionPos === fn[i].sectionPos && p.refPos === fn[i].refPos)) ? prev : fn)
+        } catch (e) { /* ignore */ }
+        try {
+          const cm = extractComments(ns.doc)
+          setComments(prev => (prev.length === cm.length && prev.every((p, i) => p.pos === cm[i].pos && p.text === cm[i].text && p.id === cm[i].id)) ? prev : cm)
+        } catch (e) { /* ignore */ }
         const ss = getSearchState(view); if (ss) { setMatchCount(ss.matches.length); setActiveMatch(ss.activeIndex) }
+      },
+      // round54：点击正文中的脚注引用标记（上标数字）直接打开该脚注的编辑弹窗
+      //（此前引用标记渲染成 cursor:pointer 却无任何处理 —— 用户点它毫无反应，
+      // 配合页底脚注行的双击编辑，脚注现在有两条编辑入口）。
+      handleClickOn: (view: any, _pos: number, node: any, _nodePos: number, _event: any, _direct: boolean) => {
+        if (!node || node.type.name !== 'footnote') return false
+        const num = Number(node.attrs.num) || 0
+        if (num <= 0) return false
+        // 在脚注区（footnote_section）里找同一编号的 footnote_item，取其文本与位置
+        let found: { text: string; sectionPos: number } | null = null
+        view.state.doc.descendants((n2: any, p2: number) => {
+          if (found) return false
+          if (n2.type.name === 'footnote_item' && (Number(n2.attrs.num) || 1) === num) {
+            found = { text: n2.textContent || '', sectionPos: p2 }
+            return false
+          }
+          return true
+        })
+        if (!found) return false
+        setFootnoteEdit({ num, text: (found as any).text, sectionPos: (found as any).sectionPos })
+        return true // 已处理，阻止默认 caret 放置
       },
       handleDOMEvents: {
         focus: () => { setFocused(true); return false },
@@ -2150,6 +2197,25 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
 
         click: (_view: any, event: any) => {
           const el = event.target as HTMLElement
+          // round54：点击脚注引用标记（上标数字）→ 打开该脚注编辑弹窗。
+          // 上标 line-height:0 的盒子极小，PM posAtCoords 可能解析到邻字，
+          // 这里按 DOM 命中（closest('.footnote-ref')）最稳。
+          const fnRef = el?.closest?.('.footnote-ref') as HTMLElement | null
+          if (fnRef) {
+            const fnum = parseInt(fnRef.getAttribute('data-footnote-num') || '0')
+            if (fnum > 0) {
+              let hit: { text: string; sectionPos: number } | null = null
+              _view.state.doc.descendants((n2: any, p2: number) => {
+                if (hit) return false
+                if (n2.type.name === 'footnote_item' && (Number(n2.attrs.num) || 1) === fnum) {
+                  hit = { text: n2.textContent || '', sectionPos: p2 }
+                  return false
+                }
+                return true
+              })
+              if (hit) { setFootnoteEdit({ num: fnum, text: (hit as any).text, sectionPos: (hit as any).sectionPos }); return true }
+            }
+          }
           const link = el?.closest?.('.sam-toc-link') as HTMLElement | null
           if (link) {
             const tid = link.getAttribute('data-target')
@@ -4644,6 +4710,11 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           // 纸页层被上层 pm-host 覆盖，无法用独立命中区，故在容器层按坐标判定。
           // 仅当点击落在空白带/分隔线上才生效 —— 文本块不会渲染在这些区域内，
           // 因此不会误伤正文双击（选词）行为。
+          // round54：页底脚注区覆盖层（.doc-fn-overlay）位于页底边距带内 ——
+          // 双击脚注行若落进空白带判定会触发「收起页间空白」，版面翻转、
+          // 脚注行移位，双击编辑永远失败 —— 命中前先豁免。
+          const t54 = e.target as HTMLElement
+          if (t54 && t54.closest && t54.closest('.doc-fn-overlay')) return
           const pr = pageRef.current
           if (!pr) return
           const rect = pr.getBoundingClientRect()
@@ -4681,7 +4752,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           const v = viewRef.current
           if (!v) return
           const target = e.target as HTMLElement
-          if (target.closest && target.closest('.ProseMirror, .text-box, button, input, select, textarea, [contenteditable], .sam-ruler, .comment-card, .pm-table-clickbridge, .pm-table-clickproxy, .tableWrapper')) return
+          if (target.closest && target.closest('.ProseMirror, .text-box, button, input, select, textarea, [contenteditable], .sam-ruler, .comment-card, .pm-table-clickbridge, .pm-table-clickproxy, .tableWrapper, .doc-fn-overlay')) return
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
           const zoomRatio = zoom / 100
           const below = e.clientY > rect.top + (docMargins.top * zoomRatio)
@@ -4723,41 +4794,6 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           {visibleRects.map((p, i) => (
             <Fragment key={i}>
               <div className={(showGridlines ? 'page-grid ' : '') + 'pg-paper'} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, backgroundColor: bgColor, boxShadow: '0 0 32px rgba(15, 23, 42, 0.06)', borderRadius: '8px' }}>
-                {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾。
-                    收起页间空白时不再整区隐藏 —— 折叠的是页【间】空白（上下边距区），
-                    页底脚注区属于当前页内容，隐藏会让所有脚注凭空消失（用户报告：
-                    双击合并跨页后脚注看不见）。改为跟随显示，仅位置贴纸底。 */}
-                {(footnotesByPage[i] || []).length > 0 && (
-                  <div style={{
-                    position: 'absolute',
-                    left: docMargins.left,
-                    right: docMargins.right,
-                    bottom: whiteSpaceHidden ? 4 : Math.round(docMargins.bottom * 0.55) + 18,
-                    borderTop: '1px solid var(--color-border)',
-                    padding: '4px 0',
-                    fontSize: '0.82em',
-                    lineHeight: 1.5,
-                    color: 'var(--color-text-muted)',
-                    // 背景透明：护眼色/背景色由纸页层提供，不再被白色遮住（修复护眼模式下页脚区发白）
-                    background: 'transparent',
-                    pointerEvents: 'auto',
-                  }}>
-                    {(footnotesByPage[i] || []).map((f) => (
-                      <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
-                           onDoubleClick={() => editFootnote(f)} title={t('doc.prompt.footnote') || '双击编辑脚注'}>
-                        <span style={{ flex: 1, wordBreak: 'break-word' }}>
-                          <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
-                        </span>
-                        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); copyFootnote(f) }}
-                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '12px', lineHeight: 1, padding: '0 4px' }}
-                                title="复制脚注">复制</button>
-                        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); deleteFootnote(f) }}
-                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '14px', lineHeight: 1, padding: '0 4px' }}
-                                title="删除脚注">×</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
                 {/* 文本输入区四角直角标记：仅“显示标记”时显示，标记“可输入内容的起始位置空间”——
                     即页边距之内的正文区域（可编辑文本区）的四个角。角标紧贴文本区边界，
                     让用户一眼看清正文从哪里开始、到哪里结束。
@@ -4842,6 +4878,54 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 </div>
               )}
             </Fragment>
+          ))}
+        </div>
+        {/* round54（用户报告：Word 脚注无法编辑）：页底脚注区独立覆盖层。
+            之前脚注区在纸页层（zIndex 0），正文包装层 zIndex 1 —— 跨页大表的
+            元素盒（table.pm-table 纵贯页底边距区）盖在脚注行上方，双击/复制/
+            删除事件全部落在表格元素上，脚注行永远收不到。现提到 zIndex 2
+            （正文之上），容器 pointerEvents:none、脚注盒自身 auto ——
+            不挡正文编辑，仅脚注行可交互。.doc-fn-overlay 同时被 pageRef 的
+            onMouseDown/onDoubleClick 豁免（否则空白区点击会打飞选区、双击会
+            误触发「收起页间空白」翻转版面）。 */}
+        <div className="doc-fn-overlay" style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }}>
+          {visibleRects.map((p, i) => (footnotesByPage[i] || []).length > 0 && (
+            <div key={`fnpg${i}`} style={{ position: 'absolute', top: bodyTop + p.top, left: 0, width: pageWidthPx, height: p.height, pointerEvents: 'none' }}>
+              {/* 每页脚注区：脚注文本显示在引用所在页底部，而非文档末尾。
+                  收起页间空白时不再整区隐藏 —— 折叠的是页【间】空白（上下边距区），
+                  页底脚注区属于当前页内容，隐藏会让所有脚注凭空消失（用户报告：
+                  双击合并跨页后脚注看不见）。改为跟随显示，仅位置贴纸底。 */}
+              <div style={{
+                position: 'absolute',
+                left: docMargins.left,
+                right: docMargins.right,
+                bottom: whiteSpaceHidden ? 4 : Math.round(docMargins.bottom * 0.55) + 18,
+                borderTop: '1px solid var(--color-border)',
+                padding: '4px 0',
+                fontSize: '0.82em',
+                lineHeight: 1.5,
+                color: 'var(--color-text-muted)',
+                // 背景透明：护眼色/背景色由纸页层提供，不再被白色遮住（修复护眼模式下页脚区发白）
+                background: 'transparent',
+                pointerEvents: 'auto',
+              }}>
+                {(footnotesByPage[i] || []).map((f) => (
+                  <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
+                       onDoubleClick={(e) => { e.stopPropagation(); editFootnote(f) }} onClick={(e) => e.stopPropagation()}
+                       title={t('doc.prompt.footnote') || '双击编辑脚注'}>
+                    <span style={{ flex: 1, wordBreak: 'break-word' }}>
+                      <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
+                    </span>
+                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); copyFootnote(f) }}
+                            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '12px', lineHeight: 1, padding: '0 4px' }}
+                            title="复制脚注">复制</button>
+                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); deleteFootnote(f) }}
+                            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--color-text-muted)', fontSize: '14px', lineHeight: 1, padding: '0 4px' }}
+                            title="删除脚注">×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
         <div style={{ position: 'relative', zIndex: 1 }}>
@@ -4961,7 +5045,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
             }}>
               {footnotes.map((f) => (
                 <div key={f.sectionPos} style={{ display: 'flex', alignItems: 'flex-start', gap: '4px', margin: '2px 0' }}
-                     onDoubleClick={() => editFootnote(f)} title={t('doc.prompt.footnote') || '双击编辑脚注'}>
+                     onDoubleClick={(e) => { e.stopPropagation(); editFootnote(f) }} onClick={(e) => e.stopPropagation()}
+                     title={t('doc.prompt.footnote') || '双击编辑脚注'}>
                   <span style={{ flex: 1, wordBreak: 'break-word', lineHeight: 1.5 }}>
                     <span style={{ color: '#4f46e5', marginRight: '4px', fontSize: '0.92em' }}>{f.num}.</span>{f.text || ' '}
                   </span>
