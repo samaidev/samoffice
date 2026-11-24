@@ -722,10 +722,12 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
           const fs = Math.max(8, Math.min(48, titleStyle.fontSize || 13))
           const estW = Math.min(Math.max(60, c.title.length * fs), Math.max(60, r.w) - 16)
           const pos = titleStyle.pos || 'top'
-          const anchorL = pos !== 'top' && pos.endsWith('l')
-          const anchorR = pos !== 'top' && pos.endsWith('r')
+          // round67：pos 命名 = <水平><垂直>，首字符判断水平（旧 endsWith 对
+          // 'lt'/'rt' 失效 —— 双击热区跟着标题一起落错位置）
+          const anchorL = pos !== 'top' && pos[0] === 'l'
+          const anchorR = pos !== 'top' && pos[0] === 'r'
           const tx = anchorL ? 4 : anchorR ? Math.max(60, r.w) - estW - 4 : (Math.max(60, r.w) - estW) / 2
-          const ty = (pos === 'lb' || pos === 'cb' || pos === 'rb') ? Math.max(50, r.h) - fs - 6
+          const ty = (pos.length === 2 && pos[1] === 'b') ? Math.max(50, r.h) - fs - 6
             : (pos === 'l' || pos === 'c' || pos === 'r') ? (Math.max(50, r.h) - fs) / 2
             : 2
           titleHit = { x: tx, y: ty, w: estW, h: fs + 6 }

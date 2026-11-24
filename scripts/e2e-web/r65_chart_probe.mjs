@@ -63,14 +63,14 @@ try {
     await page.click('[data-testid="sheet-btn-chart"]')
     await page.waitForSelector('[data-testid="insert-chart-column"]')
     await page.click('[data-testid="insert-chart-column"]')
-    await page.waitForSelector('svg[data-chart-id]', { timeout: 15000 })
+    await page.waitForSelector('[data-testid="pic-layer"] svg[data-chart-id]', { timeout: 15000 })
     await page.waitForTimeout(500)
     ok('图表已插入（浮层 SVG）', true)
   }
 
   // ============ 选中图表 → 图表设计选项卡 ============
   const chartBox = await page.evaluate(() => {
-    const el = document.querySelector('[data-chart-id]')
+    const el = document.querySelector('[data-testid="pic-layer"] [data-chart-id]')
     if (!el) return null
     const r = el.getBoundingClientRect()
     return { x: r.x, y: r.y, w: r.width, h: r.height }
@@ -107,7 +107,7 @@ try {
   await page.waitForTimeout(400)
 
   const titleState = await page.evaluate(() => {
-    const svg = document.querySelector('svg[data-chart-id]')
+    const svg = document.querySelector('[data-testid="pic-layer"] svg[data-chart-id]')
     if (!svg) return { found: false }
     const texts = Array.from(svg.querySelectorAll('text'))
     const t = texts.find(x => (x.textContent || '').includes('2026年销量统计'))
@@ -140,7 +140,7 @@ try {
   await page.waitForTimeout(400)
 
   const seriesState = await page.evaluate(() => {
-    const svg = document.querySelector('svg[data-chart-id]')
+    const svg = document.querySelector('[data-testid="pic-layer"] svg[data-chart-id]')
     if (!svg) return { found: false }
     const legendText = Array.from(svg.querySelectorAll('text')).map(x => x.textContent).find(t => (t || '').includes('上半年销量'))
     const bars = Array.from(svg.querySelectorAll('rect')).filter(r => {

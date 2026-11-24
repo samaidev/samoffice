@@ -13,8 +13,10 @@ const GRID = '#e6e6e6'
 const TEXT = '#595959'
 
 /** round65：标题元素（样式 + 9 宫格位置；对齐 Excel「图表标题」格式）。
- *  pos: top（默认居中）/lt/ct/rt/l/c/r/lb/cb/rb —— 标题 overlay 不占布局
- *  （与 Excel 标题可放角落一致），仅 top 类位置保留顶部 padT 占位。 */
+ *  pos 命名 = <水平><垂直>：top（默认顶中）/ lt|ct|rt（上）/ l|c|r（中）/
+ *  lb|cb|rb（下）—— 首字符 l/c/r 是水平位。round67 修复：旧锚点用
+ *  endsWith('l'/'r') 判断，'lt'/'rt' 尾字符是 t 永远落回居中（用户报告
+ *  "右上左上没用只有居中有用"）；改为 pos[0] 判断水平、次字符判断垂直。 */
 function titleEl(spec: ChartSpec, W: number, H: number): React.ReactNode {
   const ts: TitleStyle = spec.titleStyle || { fontSize: 0, color: '', bold: true, italic: false, pos: 'top' }
   const fs = Math.max(8, Math.min(48, ts.fontSize || 13))
@@ -22,12 +24,14 @@ function titleEl(spec: ChartSpec, W: number, H: number): React.ReactNode {
   const fw = ts.bold ? 600 : 400
   const style: React.CSSProperties = { fontStyle: ts.italic ? 'italic' : 'normal' }
   const pos = ts.pos || 'top'
-  const anchor = (pos !== 'top' && pos.endsWith('l')) ? 'start' : (pos !== 'top' && pos.endsWith('r')) ? 'end' : 'middle'
+  // 水平：首字符 l=左锚 / r=右锚 / 其余（c、top）=居中
+  const anchor: 'start' | 'middle' | 'end' = pos === 'top' ? 'middle' : pos[0] === 'l' ? 'start' : pos[0] === 'r' ? 'end' : 'middle'
   const x = anchor === 'start' ? 8 : anchor === 'end' ? W - 8 : W / 2
+  // 垂直：次字符 b=贴底；单字符（中行 l/c/r）=垂直居中；其余（top/lt/ct/rt）=顶带
   let y: number
-  if (pos === 'lb' || pos === 'cb' || pos === 'rb') y = H - 6          // 底部三格：贴底
-  else if (pos === 'l' || pos === 'c' || pos === 'r') y = Math.round(H / 2)  // 中部三格：垂直居中
-  else y = fs + 4                                                      // 顶部三格 + top 默认
+  if (pos.length === 2 && pos[1] === 'b') y = H - 6
+  else if (pos === 'l' || pos === 'c' || pos === 'r') y = Math.round(H / 2)
+  else y = fs + 4
   return (
     <text x={x} y={y} fontSize={fs} fontWeight={fw} fill={fill} style={style} textAnchor={anchor}>
       {spec.title}

@@ -1019,15 +1019,27 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               ? Array.from({ length: to - from + 1 }, (_, i) => from + i)
               : [...Array.from({ length: titleN }, (_, i) => i), ...Array.from({ length: to - from + 1 }, (_, i) => from + i)]
             // 该页可视行范围（工作表坐标 y 区间）→ 过滤落页内/跨到本页的浮层对象
-            const pageY0 = heights.slice(0, from).reduce((a, b) => a + b, 0)
-            const pageY1 = pageY0 + heights.slice(from, to + 1).reduce((a, b) => a + b, 0)
+            // round67：改用【绝对】工作表 y（rowH 从 0 累计）—— 旧 heights 是
+            // rOff 相对值，选定区域打印（rOff>0）时浮层 y 全部错位。
+            const pageY0Abs = Array.from({ length: from }, (_, i) => rowH(i)).reduce((a, b) => a + b, 0)
+            const pageDataH = Array.from({ length: to - from + 1 }, (_, i) => rowH(from + i)).reduce((a, b) => a + b, 0)
+            // 页 2+ 顶端重复标题行（titleN 行）占据页顶 band —— 浮层 y 要加上它
+            const titleBand = pi > 0 ? Array.from({ length: titleN }, (_, i) => rowH(i)).reduce((a, b) => a + b, 0) : 0
             const SC = 0.6 // 浮层缩放系数（与 cellTd 列宽 0.6 同源）
+            // round67（问题2：图表与表格不在同一纸面正确位置）：打印表格是
+            // width:100% + fixed 布局 —— 列宽被按比例【拉伸到纸宽】（innerW），
+            // 浮层 x 若只用 0.6 原始比例，落点与表格错位。浮层必须乘同一比例：
+            // colScale = innerW / Σ(列宽×0.6)。
+            let tableW = 0
+            for (let i = 0; i < pvColsE; i++) tableW += (curColWidths[cOff + i] || 80) * SC
+            const colScale = tableW > 0 ? innerW / tableW : 1
             const floatObj = (r2: { x: number; y: number; w: number; h: number }, k: string, node: React.ReactNode) => {
-              // 对象工作表坐标 → 页内坐标（x 列宽同 0.6 缩放；y 行高 1:1）
-              const x = r2.x * SC, y = r2.y - pageY0
-              const w = r2.w * SC, h = r2.h
-              // 与页面相交才渲染（跨页对象整体在本页可见部分即画）
-              if (y + h < 0 || y > (to - from + 1) * 1e6) return null
+              const x = r2.x * SC * colScale
+              const y = titleBand + (r2.y - pageY0Abs)
+              const w = r2.w * SC * colScale
+              const h = r2.h
+              // 与本页数据行区间相交才渲染（页 2+ 标题带内的浮层不重复画）
+              if (y + h <= titleBand || y > titleBand + pageDataH) return null
               return (
                 <div key={k} style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), pointerEvents: 'none' }}>
                   {node}
@@ -1037,7 +1049,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             const floatPics = curPics.filter(p => {
               if (p.hidden) return false
               const r2 = picRect(p, picGeom)
-              return r2.y + r2.h >= pageY0 && r2.y <= pageY1
+              return r2.y + r2.h > pageY0Abs && r2.y < pageY0Abs + pageDataH
             }).map(p => {
               const r2 = picRect(p, picGeom)
               const inner = p.svgSrc
@@ -1049,10 +1061,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             }).filter(Boolean)
             const floatCharts = curCharts.filter(c => {
               const r2 = chartRect(c, picGeom)
-              return r2.y + r2.h >= pageY0 && r2.y <= pageY1
+              return r2.y + r2.h > pageY0Abs && r2.y < pageY0Abs + pageDataH
             }).map(c => {
               const r2 = chartRect(c, picGeom)
-              return floatObj(r2, `fc${c.id}`, <ChartRenderer spec={c} w={Math.max(60, r2.w * SC)} h={Math.max(50, r2.h)} />)
+              return floatObj(r2, `fc${c.id}`, <ChartRenderer spec={c} w={Math.max(60, r2.w * SC * colScale)} h={Math.max(50, r2.h)} />)
             }).filter(Boolean)
             return (
               <>
@@ -1063,7 +1075,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                     </tbody>
                   </table>
                   {(floatPics.length > 0 || floatCharts.length > 0) && (
-                    <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, pointerEvents: 'none', overflow: 'visible' }}>
+                    <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, pointerEvents: 'none', overflow: 'hidden' }}>
                       {floatPics}
                       {floatCharts}
                     </div>
