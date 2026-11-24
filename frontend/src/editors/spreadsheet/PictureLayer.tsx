@@ -34,6 +34,8 @@ export interface PictureLayerProps {
   onNativeSize: (id: string, w: number, h: number) => void
   onBeginEdit: () => void // 拖动/缩放开始时由编辑器压入撤销栈
   onEndCrop: () => void
+  /** round65：双击图表标题 → 编辑器打开「图表设计·编辑标题」（含样式/位置） */
+  onChartDblTitle?: (c: ChartSpec) => void
 }
 
 const HANDLE_POS: Record<PicHandle, [number, number]> = {
@@ -280,7 +282,7 @@ const PicSvg: React.FC<{
 
 /** 主层：渲染 + 交互 */
 const PictureLayer: React.FC<PictureLayerProps> = ({
-  pics, sel, cropId, geom, zoom, onChange, onChangeCharts, charts, onSelect, onActivate, onMenu, onNativeSize, onBeginEdit, onEndCrop,
+  pics, sel, cropId, geom, zoom, onChange, onChangeCharts, charts, onSelect, onActivate, onMenu, onNativeSize, onBeginEdit, onEndCrop, onChartDblTitle,
 }) => {
   const layerRef = useRef<HTMLDivElement>(null)
   // 拖拽期间 props 可能变化，用 ref 镜像避免监听器闭包读到旧值
@@ -707,15 +709,43 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
         )
       })}
 
-      {/* round61：浮动图表（渲染在图片之上；与图片同一选择/拖拽状态机） */}
+      {/* round61：浮动图表（渲染在图片之上；与图片同一选择/拖拽状态机）。
+          round65：双击图表标题 → 选中并进入标题编辑（Excel 行为：双击标题文字
+          直接改内容；样式/位置在「图表设计」选项卡）。onChartDblTitle 由
+          SpreadsheetEditor 注入（弹标题编辑面板）。 */}
       {charts.map(c => {
         const r = chartRect(c, geom)
+        const titleStyle = c.titleStyle || { fontSize: 0, color: '', bold: true, italic: false, pos: 'top' as const }
+        // 标题热区（9 宫格 pos → 图表框内矩形；仅 titleOn 且有文字时）
+        let titleHit: { x: number; y: number; w: number; h: number } | null = null
+        if (c.titleOn && c.title) {
+          const fs = Math.max(8, Math.min(48, titleStyle.fontSize || 13))
+          const estW = Math.min(Math.max(60, c.title.length * fs), Math.max(60, r.w) - 16)
+          const pos = titleStyle.pos || 'top'
+          const anchorL = pos !== 'top' && pos.endsWith('l')
+          const anchorR = pos !== 'top' && pos.endsWith('r')
+          const tx = anchorL ? 4 : anchorR ? Math.max(60, r.w) - estW - 4 : (Math.max(60, r.w) - estW) / 2
+          const ty = (pos === 'lb' || pos === 'cb' || pos === 'rb') ? Math.max(50, r.h) - fs - 6
+            : (pos === 'l' || pos === 'c' || pos === 'r') ? (Math.max(50, r.h) - fs) / 2
+            : 2
+          titleHit = { x: tx, y: ty, w: estW, h: fs + 6 }
+        }
         return (
           <div key={c.id} data-chart-id={c.id}
             style={{ position: 'absolute', left: r.x, top: r.y, width: Math.max(60, r.w), height: Math.max(50, r.h), cursor: 'move' }}
             onMouseDown={e => onChartMouseDown(e, c)}
             onContextMenu={e => onChartCtx(e, c)}>
             <ChartRenderer spec={c} w={Math.max(60, r.w)} h={Math.max(50, r.h)} />
+            {titleHit && (
+              <div data-testid={`chart-title-hit-${c.id}`}
+                title="双击编辑标题"
+                style={{
+                  position: 'absolute', left: titleHit.x, top: titleHit.y, width: titleHit.w, height: titleHit.h,
+                  cursor: 'text', pointerEvents: 'auto',
+                }}
+                onMouseDown={e => { e.stopPropagation(); onChartMouseDown(e, c) }}
+                onDoubleClick={e => { e.stopPropagation(); onSelect([c.id], c.id); onChartDblTitle?.(c) }} />
+            )}
           </div>
         )
       })}

@@ -132,7 +132,23 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     const x = e.clientX, y = e.clientY
     peRaf = requestAnimationFrame(() => {
       peRaf = 0
-      setLayersPE(cellAt(x, y) ? 'auto' : 'none')
+      // round65：格 rect 判定之外，边框拖拽热区（表格包围盒外扩 6px——
+      // EDGE_TOLERANCE 同量级）也激活层：鼠标贴着表格外缘/在格间缝隙时
+      // （正在探测边框拖拽），层必须保持 auto，否则 mousemove target
+      // 落在层外的装饰/host 上，hover 双箭头光标写入路径被掐断
+      //（用户报告"hover 上去没有双箭头光标"的根因之一）。
+      let nearTable = false
+      if (!cellAt(x, y)) {
+        const v = getView()
+        if (v) {
+          v.dom.querySelectorAll('.tableWrapper table').forEach(tb => {
+            if (nearTable) return
+            const r = (tb as HTMLElement).getBoundingClientRect()
+            if (x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6) nearTable = true
+          })
+        }
+      } else nearTable = true
+      setLayersPE(nearTable ? 'auto' : 'none')
     })
   }
 
@@ -185,6 +201,12 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
     // 行拖拽协同：CellSelection（整行选中）内按下 → 启动行拖拽会话
     //（与 tablePlugins.ts 的原生 mousedown 同逻辑 —— 但表格死区下
     //  PM 收不到 mousedown，必须在此处理）。
+    // round65 用户反馈：左上角手柄「全选表格」后（CellSelection 覆盖
+    // 全部行）点击表内任一格，期望取消全选并把光标放到点击处 —— 但旧
+    // 逻辑命中行拖拽分支（全选=所有行都在选区）直接起拖拽会话，永远无
+    // 法退出全选。Word 行为：仅「部分行」选中时点选区内才是行拖拽；
+    // 全表选中时点击 = 取消全选放光标。用 tablePlugins.startRowDragSession
+    // 同款守卫（toRow-fromRow+1 >= 行数 → 全表 → 不拖）在此提前判定。
     const curSel = v.state.selection as any
     if (curSel && curSel.$anchorCell && curSel.$headCell) {
       const rowOf = ($cell: any) => {
@@ -205,7 +227,9 @@ export function createTableClickBridge(getView: () => EditorView | null): () => 
       const table = td.closest('table')
       const trs: HTMLTableRowElement[] = table ? Array.from(table.querySelectorAll('tr')) : []
       const hitRow = trs.indexOf(td.closest('tr') as HTMLTableRowElement)
-      if (hitRow >= 0 && fromRow >= 0 && hitRow >= fromRow && hitRow <= toRow) {
+      // 全表选中：不走行拖拽（拖不了全表也无意义）—— 落到下方「取消全选放光标」路径
+      const fullTableSelected = fromRow >= 0 && toRow - fromRow + 1 >= trs.length
+      if (!fullTableSelected && hitRow >= 0 && fromRow >= 0 && hitRow >= fromRow && hitRow <= toRow) {
         e.preventDefault()
         // 动态 import 会引入异步 —— 直接用全局注册（DocumentEditor 侧注册）
         ;(window as any).__samStartRowDrag?.(v, e.clientX, e.clientY)

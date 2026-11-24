@@ -1737,7 +1737,15 @@ ${t('sample.md.more')}
           const target = e.target as HTMLElement
           if (target.tagName === 'BUTTON' || target.tagName === 'SELECT' || target.tagName === 'INPUT'
             || target.closest('button') || target.closest('select') || target.closest('input')
-            || target.closest('[data-testid^="tab-"]') /* tab 标签本身有切换/关闭语义，不拖 */) return
+            || target.closest('[data-testid^="tab-"]') /* tab 标签本身有切换/关闭语义，不拖 */
+            || target.closest('.files-dropdown') /* round65：Files 下拉菜单区域不拖 */
+            || target.closest('.menu-backdrop') /* round65：菜单遮罩 —— 拖动会吞掉它的 click，菜单就永远关不掉 */) return
+          // round65（用户反馈：菜单出来后点击其他地方不会自动隐藏）：
+          // 点击 header 其余空白区域（非 Files 开关按钮本身）→ 收起 Files 菜单；
+          // 移动端汉堡菜单同理（非开关按钮 → 收起）。视口其他区域由 .menu-backdrop
+          // 遮罩的 mousedown 收起。
+          if (filesOpen && !target.closest('[data-testid="menu-files"]')) setFilesOpen(false)
+          if (menuOpen && !target.closest('[data-testid="hamburger-toggle"]')) setMenuOpen(false)
           try {
             // 双击标题栏 = 最大化/还原（系统语义），不进入拖动
             if (e.detail !== 1) return
@@ -1776,8 +1784,16 @@ ${t('sample.md.more')}
             </button>
             {filesOpen && (
               <>
-                <div className="fixed inset-0" style={{ zIndex: 55 }} onClick={() => setFilesOpen(false)} />
-                <div className="absolute files-dropdown ribbon-popup_compact min-w-[180px] mt-1" style={{ top: '100%', left: 0, zIndex: 60 }}>
+                {/* round65：视口级遮罩 —— mousedown 即收起（click 可能被 header
+                    窗口拖动语义吞掉/延迟到 mouseup 之后，mousedown 是最可靠的
+                    "点外面了"信号）；filesOpen 状态下点击视口任何非菜单处都触发。 */}
+                <div
+                  className="menu-backdrop fixed inset-0"
+                  style={{ zIndex: 55 }}
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setFilesOpen(false) }}
+                  onClick={() => setFilesOpen(false)}
+                />
+                <div className="absolute files-dropdown ribbon-popup_compact min-w-[180px] mt-1 menu-backdrop" style={{ top: '100%', left: 0, zIndex: 60 }}>
                   {fileItems.map((it) => (
                     <button
                       key={it.label}
@@ -2029,17 +2045,26 @@ ${t('sample.md.more')}
 
       {/* 移动端下拉菜单 — 复用 files-dropdown 样式保持视觉统一 */}
       {isMobile && menuOpen && (
-        <div
-          className="files-dropdown border-b animate-fade-in flex-shrink-0"
-          style={{
-            background: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-            borderRadius: 0,
-            boxShadow: 'none',
-            position: 'relative',
-            zIndex: 50,
-          }}
-        >
+        <>
+          {/* round65：移动端菜单打开时点视口任意处收起（汉堡菜单此前只能再点
+              汉堡按钮本身才关闭 —— 点击正文/其他 UI 均无反应）。 */}
+          <div
+            className="menu-backdrop fixed inset-0"
+            style={{ zIndex: 45 }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(false) }}
+            onClick={() => setMenuOpen(false)}
+          />
+          <div
+            className="files-dropdown border-b animate-fade-in flex-shrink-0 menu-backdrop"
+            style={{
+              background: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              borderRadius: 0,
+              boxShadow: 'none',
+              position: 'relative',
+              zIndex: 50,
+            }}
+          >
           {fileItems.map((it, idx) => (
             <button
               key={it.label}
@@ -2054,7 +2079,8 @@ ${t('sample.md.more')}
               {it.shortcut && <span className="ml-auto text-xs opacity-50">{it.shortcut}</span>}
             </button>
           ))}
-        </div>
+          </div>
+        </>
       )}
 
       {/* 主编辑区 */}

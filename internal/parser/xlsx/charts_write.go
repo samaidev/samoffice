@@ -60,9 +60,64 @@ func buildChartXML(cj *chartJSON) string {
 	b.WriteString(`<c:chartSpace ` + chartXMLNS + ` xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`)
 	b.WriteString(`<c:date1904 val="0"/><c:lang val="zh-CN"/><c:roundedCorners val="0"/>`)
 	b.WriteString(`<c:chart>`)
-	// 标题
+	// 标题（round65：样式 + 位置 —— sz/b/i/颜色 + 9 宫格 layout）
 	if cj.TitleOn {
-		fmt.Fprintf(&b, `<c:title><c:tx><c:rich><a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" vert="horz" wrap="square" anchor="ctr" anchorCtr="1"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="1" i="0" u="none" strike="noStrike" kern="1200" baseline="0"/></a:pPr><a:r><a:rPr lang="zh-CN" altLang="en-US" sz="1400" b="1"/><a:t>%s</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>`, xmlEsc(cj.Title))
+		ts := cj.TitleStyle
+		sz := 1400
+		bold := 1
+		ital := 0
+		color := ""
+		if ts != nil {
+			if ts.FontSize > 0 && ts.FontSize <= 200 {
+				sz = ts.FontSize * 100
+			}
+			if ts.Bold != nil && !*ts.Bold {
+				bold = 0
+			}
+			if ts.Italic {
+				ital = 1
+			}
+			if c := hex6(ts.Color); c != "" {
+				color = c
+			}
+		}
+		rPr := fmt.Sprintf(` lang="zh-CN" altLang="en-US" sz="%d" b="%d" i="%d"`, sz, bold, ital)
+		if color != "" {
+			rPr += fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"/></a:solidFill>`, color)
+		}
+		// bodyPr anchor：top/lt/ct/rt = t；l/c/r = ctr；lb/cb/rb = b
+		anchor := "t"
+		overlay := 0
+		layout := ""
+		if ts != nil && ts.Pos != "" && ts.Pos != "top" {
+			switch ts.Pos {
+			case "lt", "ct", "rt":
+				anchor = "t"
+			case "l", "c", "r":
+				anchor = "ctr"
+			case "lb", "cb", "rb":
+				anchor = "b"
+			}
+			// 非 top 位 = overlay（浮于绘图区上，Excel 手动放标题的语义）
+			overlay = 1
+			// 9 宫格 layout（0..1 比例，title layoutManual 在 chart 区内）：
+			// x: l=2% c=38% r=74%  y: t=2% ctr=45% b=88%（近似贴边）
+			xFrac, yFrac := 0.38, 0.02
+			switch ts.Pos {
+			case "lt", "l", "lb":
+				xFrac = 0.02
+			case "rt", "r", "rb":
+				xFrac = 0.74
+			}
+			switch ts.Pos {
+			case "l", "c", "r":
+				yFrac = 0.45
+			case "lb", "cb", "rb":
+				yFrac = 0.88
+			}
+			layout = fmt.Sprintf(`<c:layout><c:manualLayout><c:x val="%.4f"/><c:y val="%.4f"/></c:manualLayout></c:layout>`, xFrac, yFrac)
+		}
+		fmt.Fprintf(&b, `<c:title>%s<c:tx><c:rich><a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" vert="horz" wrap="square" anchor="%s" anchorCtr="0"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="%d" b="%d" i="%d" u="none" strike="noStrike" kern="1200" baseline="0"/></a:pPr><a:r><a:rPr%s/><a:t>%s</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="%d"/></c:title>`, layout, anchor, sz, bold, ital, rPr, xmlEsc(cj.Title), overlay)
 	} else {
 		b.WriteString(`<c:autoTitleDeleted val="1"/>`)
 	}

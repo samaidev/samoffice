@@ -52,10 +52,21 @@ type chartJSON struct {
 	Edited    bool   `json:"edited,omitempty"`
 	// HoleSize：环形图内径百分比（0-90，默认 50）
 	HoleSize int `json:"holeSize,omitempty"`
+	// round65：标题样式 + 位置（对齐 Excel「图表标题」格式面板；nil = 全默认）
+	TitleStyle *chartTitleStyleJSON `json:"titleStyle,omitempty"`
 	// round62：坐标轴全面编辑（对齐 Excel「设置坐标轴格式」）。
 	// CatAxis/ValAxis 各自独立；文本空/nil = 自动（Excel 默认）。
 	CatAxis chartAxisJSON `json:"catAxis,omitempty"`
 	ValAxis chartAxisJSON `json:"valAxis,omitempty"`
+}
+
+// round65：图表标题样式（与前端 charts.ts TitleStyleJSON 一一对应）。
+type chartTitleStyleJSON struct {
+	FontSize int    `json:"fontSize,omitempty"` // pt（0 = 默认 14→140）
+	Color    string `json:"color,omitempty"`    // #RRGGBB（"" = 默认 #333）
+	Bold     *bool  `json:"bold,omitempty"`    // nil = 默认 true
+	Italic   bool   `json:"italic,omitempty"`
+	Pos      string `json:"pos,omitempty"`     // top/lt/ct/rt/l/c/r/lb/cb/rb（"" = top）
 }
 
 // chartAxisJSON：一根坐标轴的可编辑属性（类别轴/数值轴通用）。
@@ -247,6 +258,10 @@ func parseChartXML(data []byte, resolve func(string) []string) *chartJSON {
 		// 显式删除（罕见：<c:title/> + autoTitleDeleted=1）
 		if atd := chart.kid("autoTitleDeleted"); atd != nil && parseBool(atd.attr("val")) {
 			cj.TitleOn = false
+		}
+		// round65：标题样式/位置（保存往返保真）—— sz/b/i/srgbClr + manualLayout
+		if ts := parseTitleStyle(title); ts != nil {
+			cj.TitleStyle = ts
 		}
 	} else {
 		cj.TitleOn = false
@@ -659,6 +674,95 @@ func titleText(title *xmlNode) string {
 		b.WriteString(t.text)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// parseTitleStyle 解析标题样式（round65：保存往返保真）。
+// sz（centipoint）/ b / i / solidFill srgbClr + manualLayout x/y → 9 宫格 pos。
+// 全默认时返回 nil（写出侧省略 titleStyle 字段）。
+func parseTitleStyle(title *xmlNode) *chartTitleStyleJSON {
+	ts := &chartTitleStyleJSON{}
+	// 富文本 rPr：sz / b / i / solidFill
+	for _, rpr := range allDescendants(title, "rPr") {
+		if v := rpr.attr("sz"); v != "" {
+			if n := parseIntDefault(v, 0); n > 0 {
+				ts.FontSize = n / 100
+			}
+		}
+		if v := rpr.attr("b"); v != "" && parseBool(v) {
+			f := true
+			ts.Bold = &f
+		} else if v := rpr.attr("b"); v != "" && !parseBool(v) {
+			f := false
+			ts.Bold = &f
+		}
+		if v := rpr.attr("i"); v != "" && parseBool(v) {
+			ts.Italic = true
+		}
+		for _, clr := range allDescendants(rpr, "srgbClr") {
+			ts.Color = "#" + clr.attr("val")
+			break
+		}
+		break // 首个 run 的样式（写侧单 run）
+	}
+	// manualLayout → 9 宫格
+	if ml := firstDescendant(title, "manualLayout"); ml != nil {
+		x, y := attrF(ml, "x"), attrF(ml, "y")
+		var col, row int // 0=左 1=中 2=右；0=上 1=中 2=下
+		switch {
+		case x < 0.2:
+			col = 0
+		case x < 0.6:
+			col = 1
+		default:
+			col = 2
+		}
+		switch {
+		case y < 0.2:
+			row = 0
+		case y < 0.7:
+			row = 1
+		default:
+			row = 2
+		}
+		pos := [3][3]string{{"lt", "ct", "rt"}, {"l", "c", "r"}, {"lb", "cb", "rb"}}[row][col]
+		ts.Pos = pos
+	}
+	// 全默认 → nil
+	if ts.FontSize == 0 && ts.Color == "" && ts.Italic == false && ts.Bold == nil && ts.Pos == "" {
+		return nil
+	}
+	return ts
+}
+
+// parseIntDefault：十进制整数解析失败给默认值。
+func parseIntDefault(s string, def int) int {
+	n := 0
+	ok := false
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			ok = false
+			break
+		}
+		n = n*10 + int(c-'0')
+		ok = true
+	}
+	if !ok || s == "" {
+		return def
+	}
+	return n
+}
+
+// firstDescendant：首个指定名后代（深度优先）。
+func firstDescendant(n *xmlNode, local string) *xmlNode {
+	for _, c := range n.kids {
+		if c.local == local {
+			return c
+		}
+		if r := firstDescendant(c, local); r != nil {
+			return r
+		}
+	}
+	return nil
 }
 
 // allDescendants 深度优先收集指定局部名的全部后代。

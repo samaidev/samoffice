@@ -13,6 +13,10 @@ export type ChartCommand =
   | 'data:select'
   | 'title:toggle'
   | 'title:edit'
+  /** round65：标题样式/位置编辑 —— "title:<field>:<value>"（text/size/color/bold/italic/pos） */
+  | `title:${'text' | 'size' | 'color' | 'bold' | 'italic' | 'pos'}:${string}`
+  /** round65：系列编辑 —— "series:<idx>:<field>:<value>"（name/color/up/down） */
+  | `series:${string}:${'name' | 'color' | 'up' | 'down'}:${string}`
   | 'labels:none' | `labels:${string}`
   | `legend:${string}`
   | 'gridlines:toggle'
@@ -209,6 +213,111 @@ const AxisEditor: React.FC<{
   )
 }
 
+/** round65：标题编辑面板（内容/字号/颜色/粗/斜/位置 —— 对齐 Excel「编辑标题」） */
+const TitleEditor: React.FC<{ chart: ChartSpec; onCommand: (cmd: ChartCommand) => void; close: () => void }> = ({ chart, onCommand, close }) => {
+  const { tf } = useI18n()
+  const ts = chart.titleStyle || { fontSize: 0, color: '', bold: true, italic: false, pos: 'top' as const }
+  const FLD = 'w-full flex items-center justify-between gap-2 px-3 py-1 text-xs'
+  const NUMCLS = 'w-20 rounded border border-black/15 dark:border-white/20 bg-transparent px-1.5 py-0.5 text-xs'
+  const SELCLS = 'w-28 rounded border border-black/15 dark:border-white/20 bg-transparent px-1.5 py-0.5 text-xs'
+  const POS: [typeof ts.pos, string][] = [
+    ['top', tf('sheet.chartTitlePosTop', '顶部居中（默认）')],
+    ['lt', tf('sheet.chartTitlePosLT', '左上')], ['ct', tf('sheet.chartTitlePosCT', '上中')], ['rt', tf('sheet.chartTitlePosRT', '右上')],
+    ['l', tf('sheet.chartTitlePosL', '左中')], ['c', tf('sheet.chartTitlePosC', '正中')], ['r', tf('sheet.chartTitlePosR', '右中')],
+    ['lb', tf('sheet.chartTitlePosLB', '左下')], ['cb', tf('sheet.chartTitlePosCB', '下中')], ['rb', tf('sheet.chartTitlePosRB', '右下')],
+  ]
+  return (
+    <div className="w-full">
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartTitleText', '标题文字')}</span>
+        <input className={NUMCLS} style={{ width: 150 }} defaultValue={chart.title} placeholder={tf('sheet.chartTitlePh', '输入标题…')}
+          data-testid="chart-title-text"
+          onBlur={e => { if (e.target.value !== chart.title) onCommand('title:text:' + e.target.value as ChartCommand) }} />
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartTitleFontSize', '字号 (pt)')}</span>
+        <input className={NUMCLS} style={{ width: 60 }} defaultValue={ts.fontSize || ''} placeholder="13" data-testid="chart-title-size"
+          onBlur={e => onCommand('title:size:' + (e.target.value.trim() === '' ? '0' : e.target.value) as ChartCommand)} />
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartTitleColor', '文字颜色')}</span>
+        <input type="color" className="h-6 w-10 rounded border border-black/15" value={ts.color || '#333333'}
+          data-testid="chart-title-color"
+          onChange={e => onCommand('title:color:' + e.target.value as ChartCommand)} />
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartTitleBold', '加粗')}</span>
+        <input type="checkbox" checked={ts.bold} data-testid="chart-title-bold"
+          onChange={e => onCommand('title:bold:' + (e.target.checked ? '1' : '0') as ChartCommand)} />
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartTitleItalic', '斜体')}</span>
+        <input type="checkbox" checked={ts.italic} data-testid="chart-title-italic"
+          onChange={e => onCommand('title:italic:' + (e.target.checked ? '1' : '0') as ChartCommand)} />
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartTitlePos', '标题位置')}</span>
+        <select className={SELCLS} value={ts.pos || 'top'} data-testid="chart-title-pos"
+          onChange={e => onCommand('title:pos:' + e.target.value as ChartCommand)}>
+          {POS.map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+        </select>
+      </div>
+      <button className="w-full text-left px-3 py-1 text-xs opacity-70 hover:opacity-100" onClick={close}>
+        {tf('sheet.chartAxisClose', '完成')}
+      </button>
+    </div>
+  )
+}
+
+/** round65：系列编辑面板（名称/颜色/顺序 —— 对齐 Excel「编辑系列」） */
+const SeriesEditor: React.FC<{ chart: ChartSpec; onCommand: (cmd: ChartCommand) => void; close: () => void }> = ({ chart, onCommand, close }) => {
+  const { tf } = useI18n()
+  const FLD = 'w-full flex items-center justify-between gap-2 px-3 py-1 text-xs'
+  const NUMCLS = 'w-24 rounded border border-black/15 dark:border-white/20 bg-transparent px-1.5 py-0.5 text-xs'
+  return (
+    <div className="w-full">
+      {chart.series.length === 0 && (
+        <div className="px-3 py-2 text-xs opacity-60">{tf('sheet.chartNoSeries', '该图表没有系列')}</div>
+      )}
+      {chart.series.map((s, i) => (
+        <div key={i} className="border-b border-black/5 dark:border-white/10 last:border-0" data-testid={`chart-series-row-${i}`}>
+          <div className={FLD}>
+            <span className="whitespace-nowrap opacity-60 w-10">{tf('sheet.chartSeriesName', '系列')}{i + 1}</span>
+            <input className={NUMCLS} style={{ width: 130 }} defaultValue={s.name}
+              placeholder={tf('sheet.chartSeriesNamePh', '系列名称…')} data-testid={`chart-series-name-${i}`}
+              onBlur={e => { if (e.target.value !== s.name) onCommand(`series:${i}:name:` + e.target.value as ChartCommand) }} />
+          </div>
+          <div className={FLD}>
+            <span className="whitespace-nowrap opacity-60">{tf('sheet.chartSeriesColor', '颜色')}</span>
+            <div className="flex items-center gap-1">
+              <input type="color" className="h-6 w-10 rounded border border-black/15" value={s.color || '#4472C4'}
+                data-testid={`chart-series-color-${i}`}
+                onChange={e => onCommand(`series:${i}:color:` + e.target.value as ChartCommand)} />
+              <button className="px-1.5 py-0.5 rounded border border-black/10 dark:border-white/15 text-[10px] hover:bg-black/5 dark:hover:bg-white/10"
+                title={tf('sheet.chartSeriesColorReset', '恢复默认色')}
+                onClick={() => onCommand(`series:${i}:color:` as ChartCommand)}>{tf('sheet.chartSeriesResetBtn', '默认')}</button>
+            </div>
+          </div>
+          <div className={FLD}>
+            <span className="whitespace-nowrap opacity-60">{tf('sheet.chartSeriesOrder', '图例顺序')}</span>
+            <div className="flex items-center gap-1">
+              <button className="px-2 py-0.5 rounded border border-black/10 dark:border-white/15 text-[10px] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-30"
+                disabled={i === 0} data-testid={`chart-series-up-${i}`}
+                onClick={() => onCommand(`series:${i}:up::` as ChartCommand)}>↑</button>
+              <button className="px-2 py-0.5 rounded border border-black/10 dark:border-white/15 text-[10px] hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-30"
+                disabled={i === chart.series.length - 1} data-testid={`chart-series-down-${i}`}
+                onClick={() => onCommand(`series:${i}:down::` as ChartCommand)}>↓</button>
+            </div>
+          </div>
+        </div>
+      ))}
+      <button className="w-full text-left px-3 py-1 text-xs opacity-70 hover:opacity-100" onClick={close}>
+        {tf('sheet.chartAxisClose', '完成')}
+      </button>
+    </div>
+  )
+}
+
 const ChartRibbon: React.FC<ChartRibbonProps> = ({ charts, onCommand }) => {
   const { tf } = useI18n()
   const c0 = charts[0]
@@ -254,6 +363,14 @@ const ChartRibbon: React.FC<ChartRibbonProps> = ({ charts, onCommand }) => {
             onClick={() => onCommand('title:toggle')}>
             <span className="text-[15px] leading-none">🅣</span><span>{tf('sheet.chartTitle', '图表标题')}</span>
           </button>
+          {/* round65：标题编辑面板（内容/字号/颜色/粗斜/位置 —— 用户反馈"标题无法编辑内容样式位置"） */}
+          <Pop label={<><span className="text-[15px] leading-none">✏️</span><span>{tf('sheet.chartTitleEdit', '编辑标题')}</span></>} wide testId="chart-menu-title-edit">
+            {close => <TitleEditor chart={c0} onCommand={onCommand} close={close} />}
+          </Pop>
+          {/* round65：系列编辑面板（名称/颜色/顺序 —— 用户反馈"系列的文字样式位置无法调整"） */}
+          <Pop label={<><span className="text-[15px] leading-none">🏷</span><span>{tf('sheet.chartSeries', '编辑系列')}</span></>} wide testId="chart-menu-series">
+            {close => <SeriesEditor chart={c0} onCommand={onCommand} close={close} />}
+          </Pop>
           <Pop label={<><span className="text-[15px] leading-none">🔢</span><span>{tf('sheet.chartLabels', '数据标签')}</span></>} testId="chart-menu-labels">
             {close => (
               <>

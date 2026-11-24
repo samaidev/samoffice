@@ -1028,9 +1028,20 @@ export function createTableDragResizePlugin(getZoom: () => number) {
       const t = e.target as HTMLElement | null
       if (!t) return
       if (view.dom.contains(t)) return // 正常路径走插件 handleDOMEvents
-      if (!t.closest('.pm-table-clickbridge')) return // 只接管桥层截获的事件
+      // round65（用户反馈：真实 WebView 里 hover 边框无双箭头光标——
+      // headless 探针全绿但 WebView 不出）：target 判定放宽。桥层默认
+      // pointer-events:none、悬停真实格才被 PE 管理器临时激活 —— 真实
+      // WebView 的 hit-test 差异可能让 target 落在 host/装饰层等非层元素，
+      // 旧守卫 t.closest('.pm-table-clickbridge') 直接 return，hover 光标
+      // 从未写入。改为几何接管：坐标穿层命中表格即处理（不在表格内时
+      // 顺带清理所有表格的 resize 类，避免残留）。
+      if (t.closest('[contenteditable="false"]')) return // 静态 UI 不接管
       const tableEl = pierce(e, view)
-      if (!tableEl) return
+      if (!tableEl) {
+        // 移出全部表格：清 hover 残留（防光标卡在 col/row-resize）
+        view.dom.querySelectorAll('table.pm-col-resize, table.pm-row-resize').forEach(el => el.classList.remove('pm-col-resize', 'pm-row-resize'))
+        return
+      }
       const z = Math.max(0.1, getZoom() || 1)
       const tRect = tableEl.getBoundingClientRect()
       const lx = (e.clientX - tRect.left) / z
@@ -1050,7 +1061,10 @@ export function createTableDragResizePlugin(getZoom: () => number) {
       const t = e.target as HTMLElement | null
       if (!t) return
       if (view.dom.contains(t)) return // 正常路径走插件 handleDOMEvents
-      if (!t.closest('.pm-table-clickbridge')) return
+      // round65：同 hover 守卫放宽 —— 真实 WebView 的 hit-test 差异可能
+      // 让层上 mousedown 的 target 落在 host/装饰层而非桥层本体；几何
+      // 穿层命中边框即接管（点击 UI 按钮等必然穿层不到表格，不受影响）。
+      if (t.closest('button, input, select, textarea, [contenteditable="false"]')) return // 静态 UI 不接管
       const tableEl = pierce(e, view)
       if (!tableEl) return
       const z = Math.max(0.1, getZoom() || 1)
@@ -1174,7 +1188,12 @@ export function createTableDragResizePlugin(getZoom: () => number) {
               const hitTr = (e.target as HTMLElement).closest?.('tr') as HTMLTableRowElement | null
               const trs: HTMLTableRowElement[] = Array.from(ctx.tableEl.querySelectorAll('tr'))
               const hitRow = hitTr ? trs.indexOf(hitTr) : -1
-              if (hitRow >= 0 && selFromRow >= 0 && hitRow >= selFromRow && hitRow <= selToRow) {
+              // round65：全表选中（CellSelection 覆盖全部行，如左上角手柄
+              // 全选）→ 点击表内 = 取消全选放光标。此时不能 preventDefault/
+              // 起拖拽（全表拖不动也无意义），必须放行事件让 PM 原生把
+              // CellSelection 改成光标（用户反馈"全选后点表内没反应"）。
+              const fullTableSelected = selFromRow >= 0 && selToRow - selFromRow + 1 >= trs.length
+              if (!fullTableSelected && hitRow >= 0 && selFromRow >= 0 && hitRow >= selFromRow && hitRow <= selToRow) {
                 e.preventDefault()
                 startRowDragSession(view, e.clientX, e.clientY)
                 return true

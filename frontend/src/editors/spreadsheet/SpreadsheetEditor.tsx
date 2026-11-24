@@ -2953,6 +2953,54 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       return
     }
     if (cmd === 'title:toggle') { patchSelCharts({ titleOn: !c0.titleOn }); return }
+    // round65：标题样式/位置编辑 —— "title:<field>:<value>"（field=text/size/color/bold/italic/pos）
+    if (cmd.startsWith('title:')) {
+      const rest = cmd.slice('title:'.length)
+      if (rest === 'toggle' || rest === 'edit') return
+      const sep = rest.indexOf(':')
+      if (sep < 0) return
+      const field = rest.slice(0, sep)
+      const value = rest.slice(sep + 1)
+      pushHistory()
+      updateCharts(list => list.map(c => {
+        if (!selPics.includes(c.id)) return c
+        const ts = { ...(c.titleStyle || { fontSize: 0, color: '', bold: true, italic: false, pos: 'top' as const }) }
+        if (field === 'text') { c = { ...c, title: value } }
+        else if (field === 'size') { const n = parseFloat(value); ts.fontSize = isFinite(n) && n >= 6 && n <= 72 ? Math.round(n) : 0 }
+        else if (field === 'color') { ts.color = value }
+        else if (field === 'bold') { ts.bold = value === '1' }
+        else if (field === 'italic') { ts.italic = value === '1' }
+        else if (field === 'pos') { ts.pos = value as typeof ts.pos }
+        else return c
+        return { ...c, titleStyle: ts, titleOn: field === 'text' ? true : c.titleOn, edited: true }
+      }))
+      return
+    }
+    // round65：系列编辑 —— "series:<idx>:<field>:<value>"（field=name/color/up/down）
+    if (cmd.startsWith('series:')) {
+      const parts = cmd.slice('series:'.length).split(':')
+      const idx = parseInt(parts[0], 10)
+      const field = parts[1] || ''
+      const value = parts.slice(2).join(':')
+      if (!c0 || isNaN(idx) || idx < 0 || idx >= c0.series.length) return
+      pushHistory()
+      updateCharts(list => list.map(c => {
+        if (!selPics.includes(c.id) || idx >= c.series.length) return c
+        const series = c.series.map(s => ({ ...s }))
+        if (field === 'name') {
+          series[idx].name = value
+          series[idx].nameRef = '' // 手改名后脱离单元格引用（对齐 Excel 编辑系列名）
+        } else if (field === 'color') {
+          series[idx].color = value // 空 = 恢复默认色
+        } else if (field === 'up' && idx > 0) {
+          const t = series[idx]; series[idx] = series[idx - 1]; series[idx - 1] = t
+        } else if (field === 'down' && idx < series.length - 1) {
+          const t = series[idx]; series[idx] = series[idx + 1]; series[idx + 1] = t
+        } else return c
+        return { ...c, series, edited: true }
+      }))
+      return
+    }
     if (cmd.startsWith('labels:')) { patchSelCharts({ dataLabels: cmd.slice(7) as ChartSpec['dataLabels'] }); return }
     if (cmd.startsWith('legend:')) { patchSelCharts({ legend: cmd.slice(7) as ChartSpec['legend'] }); return }
     if (cmd === 'gridlines:toggle') { patchSelCharts({ gridlines: !c0.gridlines }); return }
@@ -4303,6 +4351,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             onNativeSize={onPicNativeSize}
             onBeginEdit={picBeginEdit}
             onEndCrop={() => setCropPic(null)}
+            onChartDblTitle={(c) => {
+              // round65：双击标题 → 选图表 + 切到「图表设计」选项卡（标题/系列编辑面板在那里）
+              selectPics([c.id], c.id)
+              setRibbonTab('chart')
+            }}
           />
         </div>
         </div>
@@ -4422,6 +4475,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               {ctxItem(tf('sheet.picBack', '置于底层'), '⬇', () => { chartCommand('arrange:back') })}
               {sep}
               {target && ctxItem(tf('sheet.chartTitleToggle', '图表标题 开/关'), '🅣', () => { chartCommand('title:toggle') })}
+              {/* round65：标题/系列编辑直达入口（用户反馈"标题无法编辑"） */}
+              {target && ctxItem(tf('sheet.chartTitleEdit', '编辑标题') + tf('sheet.chartTitleParen', '（内容/样式/位置）…'), '✏️', () => { setRibbonTab('chart') })}
+              {target && ctxItem(tf('sheet.chartSeries', '编辑系列') + tf('sheet.chartSeriesParen', '（名称/颜色/顺序）…'), '🏷', () => { setRibbonTab('chart') })}
               {target && ctxItem(tf('sheet.chartLegend', '图例位置…'), '📋', () => { chartCommand('legend:r') })}
               <div className="px-3 py-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
                 {target ? `${target.name || '图表'} · ${tf('sheet.chartRange', '数据')} ${target.rangeRef || '-'}${multiSel ? ` · ${tf('sheet.picMultiN', '已选')} ${selPics.length}` : ''}` : ''}

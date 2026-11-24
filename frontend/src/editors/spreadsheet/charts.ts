@@ -95,6 +95,24 @@ export interface ChartSpec {
   edited: boolean
   anchorRaw: string
   chartRaw: string
+  /** round65：标题样式（对齐 Excel「图表标题」格式面板）；0/'' = 默认 */
+  titleStyle: TitleStyle
+}
+
+/** round65：图表标题样式 + 位置（对齐 Excel Chart Title Format） */
+export interface TitleStyle {
+  /** 字号 pt（0 = 默认 14） */
+  fontSize: number
+  /** 文字颜色（'' = 默认 #333） */
+  color: string
+  bold: boolean
+  italic: boolean
+  /** 标题位置：top（默认，居中）/lt/ct/rt/l/c/r/lb/cb/rb —— 9 宫格对齐 Word/Excel */
+  pos: 'top' | 'lt' | 'ct' | 'rt' | 'l' | 'c' | 'r' | 'lb' | 'cb' | 'rb'
+}
+
+export function defaultTitleStyle(): TitleStyle {
+  return { fontSize: 0, color: '', bold: true, italic: false, pos: 'top' }
 }
 
 export interface ChartSeriesJSON {
@@ -105,6 +123,15 @@ export interface ChartSeriesJSON {
   values: number[]
   valuesRef?: string
   color?: string
+}
+
+/** round65：标题样式 JSON（与后端 chartTitleStyleJSON 一一对应） */
+export interface TitleStyleJSON {
+  fontSize?: number
+  color?: string
+  bold?: boolean
+  italic?: boolean
+  pos?: string
 }
 
 /** round62：轴配置 JSON（与后端 chartAxisJSON 一一对应；缺省字段 = 自动） */
@@ -133,6 +160,8 @@ export interface ChartSpecJSON {
   mode?: string
   title?: string
   titleOn?: boolean
+  /** round65：标题样式 */
+  titleStyle?: TitleStyleJSON
   legend?: string
   gridlines?: boolean
   dataLabels?: string
@@ -163,7 +192,7 @@ export function defaultChart(): ChartSpec {
     from: { col: 0, row: 0, dx: 0, dy: 0 },
     to: { col: 8, row: 15, dx: 0, dy: 0 },
     mode: 'moveSize',
-    title: '', titleOn: true,
+    title: '', titleOn: true, titleStyle: defaultTitleStyle(),
     legend: 'r', gridlines: true, dataLabels: 'none',
     gapWidth: 150, overlap: 0, holeSize: 50,
     catAxis: defaultAxis(), valAxis: defaultAxis(),
@@ -184,6 +213,7 @@ export function chartFromJSON(j: ChartSpecJSON): ChartSpec {
   c.mode = (j.mode as ChartSpec['mode']) || 'moveSize'
   c.title = j.title || ''
   c.titleOn = j.titleOn !== false
+  c.titleStyle = titleStyleFromJSON(j.titleStyle)
   c.legend = (j.legend as ChartSpec['legend']) || 'r'
   c.gridlines = j.gridlines !== false
   c.dataLabels = (j.dataLabels as ChartSpec['dataLabels']) || 'none'
@@ -228,11 +258,35 @@ export function chartToJSON(c: ChartSpec): ChartSpecJSON {
   if (c.gapWidth && c.gapWidth !== 150) j.gapWidth = c.gapWidth
   if (c.overlap) j.overlap = c.overlap
   if (c.type === 'doughnut') j.holeSize = c.holeSize
+  j.titleStyle = titleStyleToJSON(c.titleStyle)
   j.catAxis = axisToJSON(c.catAxis)
   j.valAxis = axisToJSON(c.valAxis)
   if (c.edited) j.edited = true
   if (c.anchorRaw) j.anchorRaw = c.anchorRaw
   if (c.chartRaw) j.chartRaw = c.chartRaw
+  return j
+}
+
+/** round65：标题样式 JSON 互转 */
+function titleStyleFromJSON(j?: TitleStyleJSON): TitleStyle {
+  const ts = defaultTitleStyle()
+  if (!j) return ts
+  ts.fontSize = j.fontSize || 0
+  ts.color = j.color || ''
+  ts.bold = j.bold !== false
+  ts.italic = !!j.italic
+  ts.pos = (j.pos as TitleStyle['pos']) || 'top'
+  return ts
+}
+
+function titleStyleToJSON(ts: TitleStyle): TitleStyleJSON {
+  const j: TitleStyleJSON = {}
+  if (ts.fontSize) j.fontSize = ts.fontSize
+  if (ts.color) j.color = ts.color
+  // bold 默认 true：显式 false 时写出（与 bold=false 有意义的情况一致）
+  j.bold = ts.bold !== false
+  if (ts.italic) j.italic = true
+  if (ts.pos && ts.pos !== 'top') j.pos = ts.pos
   return j
 }
 
