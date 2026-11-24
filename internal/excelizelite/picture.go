@@ -356,6 +356,57 @@ func (f *File) RegisterPictureMedia(sheet string, file []byte, ext string) (stri
 	return "rId" + strconv.Itoa(drawingRID), drawingXML, nil
 }
 
+// RegisterChartPart stores a chart part (xl/charts/chartN.xml) and links it
+// from the drawing part of the given sheet. It returns the drawing
+// relationship id ("rIdN") and the drawing part path. The caller owns both
+// the chart XML content and the graphicFrame anchor written into the
+// drawing (SamOffice rewrites the drawing part as full DrawingML).
+func (f *File) RegisterChartPart(sheet string, chartXML []byte) (string, string, error) {
+	f.mu.Lock()
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		f.mu.Unlock()
+		return "", "", err
+	}
+	f.mu.Unlock()
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	drawingID := f.countDrawings() + 1
+	drawingXML := "xl/drawings/drawing" + strconv.Itoa(drawingID) + ".xml"
+	drawingID, drawingXML = f.prepareDrawing(ws, drawingID, sheet, drawingXML)
+	drawingRels := "xl/drawings/_rels/drawing" + strconv.Itoa(drawingID) + ".xml.rels"
+
+	// 编号：取 Pkg 里已有 chart 部件的最大序号 + 1，避免与既有部件冲突
+	chartID := 0
+	f.Pkg.Range(func(k, _ interface{}) bool {
+		name := k.(string)
+		if !strings.HasPrefix(name, "xl/charts/chart") || !strings.HasSuffix(name, ".xml") {
+			return true
+		}
+		if v, e := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(name, "xl/charts/chart"), ".xml")); e == nil && v > chartID {
+			chartID = v
+		}
+		return true
+	})
+	chartID++
+	chartPart := "xl/charts/chart" + strconv.Itoa(chartID) + ".xml"
+	f.Pkg.Store(chartPart, chartXML)
+	if err := f.setContentTypes("/"+chartPart, "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"); err != nil {
+		return "", "", err
+	}
+	relTarget := "../charts/chart" + strconv.Itoa(chartID) + ".xml"
+	rID := f.addRels(drawingRels, SourceRelationshipChart, relTarget, "")
+	// 确保 drawing 部件存在（空壳，锚点由调用方重写）
+	if _, _, err = f.drawingParser(drawingXML); err != nil {
+		return "", "", err
+	}
+	if err = f.addContentTypePart(drawingID, "drawings"); err != nil {
+		return "", "", err
+	}
+	f.addSheetNameSpace(sheet, SourceRelationship)
+	return "rId" + strconv.Itoa(rID), drawingXML, nil
+}
+
 // addSheetLegacyDrawing provides a function to add legacy drawing element to
 // xl/worksheets/sheet%d.xml by given worksheet name and relationship index.
 func (f *File) addSheetLegacyDrawing(sheet string, rID int) {

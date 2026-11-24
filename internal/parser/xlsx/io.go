@@ -63,6 +63,8 @@ type sheetJSON struct {
 	PrintTitleRows int `json:"printTitleRows,omitempty"`
 	// Images 浮动图片列表（base64 不含 data: 前缀）
 	Images []imageJSON `json:"images,omitempty"`
+	// Charts 浮动图表列表（round61：完整模型 + graphicFrame 锚点）
+	Charts []chartJSON `json:"charts,omitempty"`
 }
 
 // imageJSON（浮动图片完整模型）round60 起迁移到 pictures.go。
@@ -288,6 +290,7 @@ func ReadXLSXBytes(data []byte) (string, error) {
 		readSheetExtras(f, name, &sj)
 		if zi != nil {
 			readSheetPictures(zi, f, si, &sj)
+			readSheetCharts(zi, f, si, &sj)
 			readRowHeights(zi, si, &sj)
 		}
 		out.Sheets = append(out.Sheets, sj)
@@ -474,8 +477,8 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 	// 删除默认 Sheet1（后面会按数据重建）
 	f.SetSheetName("Sheet1", "__tmp__")
 
-	// round60：drawing 部件 → 图片锚点计划（registerPictures 填充，最后统一重写）
-	picPlans := map[string][]picPlan{}
+	// round60/61：drawing 部件 → 图片/图表锚点计划（register* 填充，最后统一重写）
+	picPlans := map[string]*drawingPlan{}
 
 	sheetNames := f.GetSheetList()
 	first := true
@@ -576,8 +579,9 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 		writeRowHeights(f, sheetName, &sj)
 		writeFreeze(f, sheetName, &sj)
 		writePrintTitles(f, sheetName, &sj)
-		// 浮动图片：excelize 只登记媒体部件，锚点 XML 在写出后统一重写为完整 DrawingML
+		// 浮动图片/图表：excelize 只登记媒体与部件，锚点 XML 在写出后统一重写为完整 DrawingML
 		registerPictures(f, sheetName, &sj, picPlans)
+		registerCharts(f, sheetName, &sj, picPlans)
 	}
 
 	// 若仍有空的 __tmp__ 残留则删除

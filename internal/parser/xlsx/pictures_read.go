@@ -167,12 +167,16 @@ func (g *sheetGeom) ptOf(m picPointJSON) pt {
 type picReader struct {
 	zi    *zipIndex
 	f     *excelize.File
+	// resolve：单元格引用 → 值列表（图表系列缓存缺失时回退取数）
+	resolve func(string) []string
 	sheet string
 	theme map[string]string
 	draw  string
 	drels []xmlRel
 	geom  *sheetGeom
 	out   []imageJSON
+	// round61：图表（与图片共用 drawing 关系/几何辅助）
+	outCharts []chartJSON
 }
 
 // readSheetPictures 解析一张工作表的浮动图片并追加到 sj.Images。

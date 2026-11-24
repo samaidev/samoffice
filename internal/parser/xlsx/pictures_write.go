@@ -35,8 +35,14 @@ type picPlan struct {
 	svgRID string
 }
 
+// drawingPlan：一个 drawing 部件的改写计划（图片 + 图表；图表锚点固定在图片之后 = 图上层）。
+type drawingPlan struct {
+	pics   []picPlan
+	charts []chartPlan
+}
+
 // registerPictures 为一张工作表的图片登记媒体部件，返回“drawing 部件 → 锚点列表”。
-func registerPictures(f *excelize.File, sheet string, sj *sheetJSON, plans map[string][]picPlan) {
+func registerPictures(f *excelize.File, sheet string, sj *sheetJSON, plans map[string]*drawingPlan) {
 	for i := range sj.Images {
 		im := &sj.Images[i]
 		if im.Base64 == "" {
@@ -62,7 +68,12 @@ func registerPictures(f *excelize.File, sheet string, sj *sheetJSON, plans map[s
 				}
 			}
 		}
-		plans[draw] = append(plans[draw], p)
+		plan := plans[draw]
+		if plan == nil {
+			plan = &drawingPlan{}
+			plans[draw] = plan
+		}
+		plan.pics = append(plan.pics, p)
 	}
 }
 
@@ -86,8 +97,9 @@ func isWritableImageExt(ext string) bool {
 	return ok
 }
 
-// rewriteDrawings 把 excelize 生成的 xlsx 里各 drawing 部件替换为完整 DrawingML。
-func rewriteDrawings(data []byte, plans map[string][]picPlan) ([]byte, error) {
+// rewriteDrawings 把 excelize 生成的 xlsx 里各 drawing 部件替换为完整 DrawingML
+// （图片锚点 + 图表 graphicFrame 锚点）。
+func rewriteDrawings(data []byte, plans map[string]*drawingPlan) ([]byte, error) {
 	if len(plans) == 0 {
 		return data, nil
 	}
@@ -115,6 +127,7 @@ func rewriteDrawings(data []byte, plans map[string][]picPlan) ([]byte, error) {
 			return nil, err
 		}
 		wrote++
+		_ = old
 	}
 	if err := zw.Close(); err != nil {
 		return nil, err
@@ -144,9 +157,10 @@ const drawingHeader = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` 
 	`xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" ` +
 	`xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main">`
 
-// buildDrawingXML 生成 drawing 部件：保留原有非图片锚点，再按计划顺序写图片锚点。
-// 未编辑的图片原样写回原始锚点；模型重建的图片 cNvPr id 续接原始锚点里的最大 id。
-func buildDrawingXML(old []byte, ps []picPlan) string {
+// buildDrawingXML 生成 drawing 部件：保留原有非图片锚点，再按计划顺序写图片锚点
+// 与图表 graphicFrame 锚点（图表在图片之后 = 渲染于图片上层）。
+// 未编辑的图片/图表原样写回原始锚点；模型重建的对象 cNvPr id 续接原始锚点里的最大 id。
+func buildDrawingXML(old []byte, plan *drawingPlan) string {
 	var b strings.Builder
 	b.WriteString(drawingHeader)
 	if root, err := parseXMLTree(old); err == nil && root != nil {
@@ -158,7 +172,7 @@ func buildDrawingXML(old []byte, ps []picPlan) string {
 		}
 	}
 	maxID := 0
-	for _, p := range ps {
+	for _, p := range plan.pics {
 		if p.im.Raw != "" {
 			if m := reCNvPrID.FindStringSubmatch(p.im.Raw); m != nil {
 				if v, err := strconv.Atoi(m[1]); err == nil && v > maxID {
@@ -167,8 +181,17 @@ func buildDrawingXML(old []byte, ps []picPlan) string {
 			}
 		}
 	}
+	for _, p := range plan.charts {
+		if p.cj.AnchorRaw != "" {
+			if m := reCNvPrID.FindStringSubmatch(p.cj.AnchorRaw); m != nil {
+				if v, err := strconv.Atoi(m[1]); err == nil && v > maxID {
+					maxID = v
+				}
+			}
+		}
+	}
 	id := maxID + 1
-	for _, p := range ps {
+	for _, p := range plan.pics {
 		switch {
 		case p.im.Raw == "":
 			b.WriteString(buildAnchor(p.im, id, p))
@@ -179,6 +202,20 @@ func buildDrawingXML(old []byte, ps []picPlan) string {
 			} else {
 				// 原始锚点引用了未登记的关系（如超链接）→ 模型重建，避免产出损坏文件
 				b.WriteString(buildAnchor(p.im, id, p))
+				id++
+			}
+		}
+	}
+	for _, p := range plan.charts {
+		switch {
+		case p.cj.AnchorRaw == "":
+			b.WriteString(buildChartAnchor(p.cj, id, p.rID))
+			id++
+		default:
+			if s, ok := reuseChartAnchor(p.cj, p); ok {
+				b.WriteString(s)
+			} else {
+				b.WriteString(buildChartAnchor(p.cj, id, p.rID))
 				id++
 			}
 		}

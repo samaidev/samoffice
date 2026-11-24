@@ -206,6 +206,20 @@ func (n *xmlNode) kid(local string) *xmlNode {
 	return nil
 }
 
+// children 返回全部指定局部名的直接子节点。
+func (n *xmlNode) children(local string) []*xmlNode {
+	if n == nil {
+		return nil
+	}
+	var out []*xmlNode
+	for _, k := range n.kids {
+		if k.local == local {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // desc 返回深度优先的第一个指定局部名后代节点。
 func (n *xmlNode) desc(local string) *xmlNode {
 	if n == nil {

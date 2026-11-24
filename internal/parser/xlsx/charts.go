@@ -1,0 +1,521 @@
+package xlsx
+
+// charts.go —— round61：浮动图表（对齐 MS Excel「插入图表」）。
+//
+// 读取：drawing 里的 graphicFrame 锚点 → 关系 → xl/charts/chartN.xml，
+// 还原图表类型（柱形/条形/折线/面积/饼/环/散点 × 簇状/堆积/百分比堆积）、
+// 数据系列（缓存值 + 单元格引用）、类别、标题、图例、网格线、数据标签、
+// 分类间距/重叠、系列颜色、两单元格锚点与对象定位。
+// 未在模型内的属性（3D、组合图、趋势线等）通过 ChartRaw 整段透传，
+// 图表没被编辑过时保存原样写回（保真，与图片 round60 同策略）。
+
+import (
+	"math"
+	"strconv"
+	"strings"
+
+	"github.com/zai/samoffice/internal/excelizelite"
+)
+
+// chartSeriesJSON：一个数据系列（缓存值 + 单元格引用，编辑单元格后前端重算缓存）
+type chartSeriesJSON struct {
+	Name      string    `json:"name,omitempty"`
+	NameRef   string    `json:"nameRef,omitempty"`
+	Cats      []string  `json:"cats,omitempty"`
+	CatsRef   string    `json:"catsRef,omitempty"`
+	Values    []float64 `json:"values"`
+	ValuesRef string    `json:"valuesRef,omitempty"`
+	Color     string    `json:"color,omitempty"`
+}
+
+// chartJSON：浮动图表模型（与前端 charts.ts 的 ChartSpecJSON 对应）。
+// Type 取值：column|columnStacked|columnStacked100|bar|barStacked|barStacked100|
+// line|lineMarker|area|pie|doughnut|scatter
+type chartJSON struct {
+	Name   string `json:"name,omitempty"`
+	Type   string `json:"type"`
+	From   *picPointJSON `json:"from,omitempty"`
+	To     *picPointJSON `json:"to,omitempty"`
+	Mode   string        `json:"mode,omitempty"` // moveSize|move|fixed
+	Title  string        `json:"title,omitempty"`
+	TitleOn bool         `json:"titleOn"`
+	Legend string        `json:"legend"` // none|b|l|t|r
+	Gridlines bool      `json:"gridlines"`
+	DataLabels string   `json:"dataLabels"` // none|ctr|inEnd|outEnd
+	GapWidth int         `json:"gapWidth,omitempty"`
+	Overlap  int         `json:"overlap,omitempty"`
+	Series  []chartSeriesJSON `json:"series"`
+	// AnchorRaw：整段 graphicFrame 锚点 XML；ChartRaw：整段 chart 部件 XML。
+	// Edited=true（用户改过任何属性）时两者都不再使用，按模型重建。
+	AnchorRaw string `json:"anchorRaw,omitempty"`
+	ChartRaw  string `json:"chartRaw,omitempty"`
+	Edited    bool   `json:"edited,omitempty"`
+	// HoleSize：环形图内径百分比（0-90，默认 50）
+	HoleSize int `json:"holeSize,omitempty"`
+}
+
+// chartRelType 是 drawing 关系里的图表类型 URI。
+const chartRelTypeSuffix = "/chart"
+
+// readSheetCharts 解析一张工作表的浮动图表并追加到 sj.Charts。
+func readSheetCharts(zi *zipIndex, f *excelize.File, sheetIdx int, sj *sheetJSON) {
+	sheetPart := zi.part(sheetIdx, sj.Name)
+	if sheetPart == "" {
+		return
+	}
+	var draw string
+	for _, r := range zi.rels(sheetPart) {
+		if strings.HasSuffix(r.Type, "/drawing") {
+			draw = resolvePart(sheetPart, r.Target)
+			break
+		}
+	}
+	if draw == "" {
+		return
+	}
+	data, ok := zi.read(draw)
+	if !ok {
+		return
+	}
+	root, err := parseXMLTree(data)
+	if err != nil || root == nil {
+		return
+	}
+	rd := &picReader{zi: zi, f: f, sheet: sj.Name, draw: draw, drels: zi.rels(draw), geom: nil, resolve: makeRefResolver(f)}
+	rd.walkCharts(root)
+	sj.Charts = append(sj.Charts, rd.outCharts...)
+}
+
+// makeRefResolver 构造单元格引用解析器（"Sheet1!$B$2:$D$2" → 值列表）。
+// excelize 写出的系列常只有引用没有缓存值，此时回退到工作表数据取值。
+func makeRefResolver(f *excelize.File) func(string) []string {
+	return func(ref string) []string {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return nil
+		}
+		i := strings.LastIndex(ref, "!")
+		if i < 0 {
+			return nil
+		}
+		sheet := strings.Trim(ref[:i], "'")
+		rng := strings.ReplaceAll(ref[i+1:], "$", "")
+		parts := strings.SplitN(rng, ":", 2)
+		c1, r1, err := excelize.CellNameToCoordinates(parts[0])
+		if err != nil {
+			return nil
+		}
+		r2, c2 := r1, c1
+		if len(parts) == 2 {
+			c2, r2, err = excelize.CellNameToCoordinates(parts[1])
+			if err != nil {
+				return nil
+			}
+		}
+		if (r2-r1+1)*(c2-c1+1) > 10000 {
+			return nil
+		}
+		var out []string
+		for r := r1; r <= r2; r++ {
+			for c := c1; c <= c2; c++ {
+				cell, _ := excelize.CoordinatesToCellName(c, r)
+				v, _ := f.GetCellValue(sheet, cell)
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+}
+
+// walkCharts 与图片共用锚点遍历：twoCell/oneCell/absoluteAnchor 里的 graphicFrame。
+func (rd *picReader) walkCharts(n *xmlNode) {
+	for _, ch := range n.kids {
+		switch ch.local {
+		case "twoCellAnchor", "oneCellAnchor", "absoluteAnchor":
+			if cj := rd.chartFromAnchor(ch); cj != nil {
+				rd.outCharts = append(rd.outCharts, *cj)
+			}
+		case "AlternateContent":
+			if c := ch.kid("Choice"); c != nil {
+				rd.walkCharts(c)
+			} else if fb := ch.kid("Fallback"); fb != nil {
+				rd.walkCharts(fb)
+			}
+		}
+	}
+}
+
+// chartFromAnchor 解析 graphicFrame 锚点：锚点标记 + 关系 → chart 部件 → 模型。
+func (rd *picReader) chartFromAnchor(a *xmlNode) *chartJSON {
+	gf := a.kid("graphicFrame")
+	if gf == nil {
+		return nil
+	}
+	gd := gf.kid("graphic").kid("graphicData")
+	if gd == nil || !strings.HasSuffix(gd.attr("uri"), chartRelTypeSuffix) {
+		return nil
+	}
+	cc := gd.kid("chart")
+	if cc == nil {
+		return nil
+	}
+	rid := cc.attr("r:id")
+	if rid == "" {
+		return nil
+	}
+	rel := findRel(rd.drels, rid)
+	if rel == nil || strings.EqualFold(rel.TargetMode, "External") {
+		return nil
+	}
+	chartPart := resolvePart(rd.draw, rel.Target)
+	cdata, ok := rd.zi.read(chartPart)
+	if !ok {
+		return nil
+	}
+	cj := parseChartXML(cdata, rd.resolve)
+	if cj == nil {
+		return nil
+	}
+
+	// ---- 锚点与对象定位（与图片同构） ----
+	cj.Mode = "moveSize"
+	switch a.attr("editAs") {
+	case "oneCell":
+		cj.Mode = "move"
+	case "absolute":
+		cj.Mode = "fixed"
+	}
+	if from := markerOf(a.kid("from")); from != nil {
+		cj.From = from
+	}
+	if to := markerOf(a.kid("to")); to != nil {
+		cj.To = to
+	}
+	cj.AnchorRaw = a.raw
+	return cj
+}
+
+// parseChartXML 把 c:chartSpace 解析为模型（resolve 在缓存缺失时解析单元格引用）。
+func parseChartXML(data []byte, resolve func(string) []string) *chartJSON {
+	root, err := parseXMLTree(data)
+	if err != nil || root == nil {
+		return nil
+	}
+	chart := root.kid("chart")
+	if chart == nil {
+		return nil
+	}
+	cj := &chartJSON{Type: "column", Legend: "r", Gridlines: true, DataLabels: "none", TitleOn: true, HoleSize: 50}
+
+	// ---- 标题 ----
+	if title := chart.kid("title"); title != nil {
+		cj.Title = titleText(title)
+		cj.TitleOn = true
+		// 显式删除（罕见：<c:title/> + autoTitleDeleted=1）
+		if atd := chart.kid("autoTitleDeleted"); atd != nil && parseBool(atd.attr("val")) {
+			cj.TitleOn = false
+		}
+	} else {
+		cj.TitleOn = false
+	}
+
+	// ---- 图例 ----
+	if legend := chart.kid("legend"); legend != nil {
+		if pos := legend.kid("legendPos"); pos != nil {
+			cj.Legend = pos.attr("val")
+			if cj.Legend == "" {
+				cj.Legend = "r"
+			}
+		}
+	} else {
+		cj.Legend = "none"
+	}
+
+	// ---- 绘图区：图表类型 + 系列 ----
+	pa := chart.kid("plotArea")
+	if pa == nil {
+		return nil
+	}
+	for _, k := range pa.kids {
+		var sers []*xmlNode
+		switch k.local {
+		case "barChart":
+			dir, grouping := k.kid("barDir").attr("val"), "clustered"
+			if g := k.kid("grouping"); g != nil {
+				grouping = g.attr("val")
+			}
+			cj.Type = barChartType(dir, grouping)
+			if gw := k.kid("gapWidth"); gw != nil {
+				cj.GapWidth = int(attrF(gw, "val"))
+			}
+			if ov := k.kid("overlap"); ov != nil {
+				cj.Overlap = int(attrF(ov, "val"))
+			}
+			sers = k.children("ser")
+			cj.DataLabels = chartLevelDataLabels(k)
+		case "lineChart":
+			cj.Type = "line"
+			sers = k.children("ser")
+			for _, s := range sers {
+				if m := s.kid("marker"); m != nil {
+					if sym := m.kid("symbol"); sym != nil && sym.attr("val") != "none" {
+						cj.Type = "lineMarker"
+					}
+				}
+			}
+			cj.DataLabels = chartLevelDataLabels(k)
+		case "areaChart":
+			cj.Type = "area"
+			sers = k.children("ser")
+			cj.DataLabels = chartLevelDataLabels(k)
+		case "pieChart":
+			cj.Type = "pie"
+			sers = k.children("ser")
+			cj.DataLabels = chartLevelDataLabels(k)
+		case "doughnutChart":
+			cj.Type = "doughnut"
+			if hs := k.kid("holeSize"); hs != nil {
+				cj.HoleSize = int(attrF(hs, "val"))
+			}
+			sers = k.children("ser")
+			cj.DataLabels = chartLevelDataLabels(k)
+		case "scatterChart":
+			cj.Type = "scatter"
+			sers = k.children("ser")
+			cj.DataLabels = chartLevelDataLabels(k)
+		default:
+			continue
+		}
+		for _, s := range sers {
+			if ser := parseChartSeries(s, cj.Type, resolve); ser != nil {
+				cj.Series = append(cj.Series, *ser)
+			}
+		}
+		// 只取第一组图表（组合图 round61 不建模，靠 raw 透传）
+		if len(sers) > 0 {
+			break
+		}
+	}
+
+	// ---- 坐标轴：网格线（默认主轴网格线开） ----
+	for _, ax := range pa.children("valAx") {
+		if ax.kid("delete") != nil && parseBool(ax.kid("delete").attr("val")) {
+			continue
+		}
+		cj.Gridlines = ax.kid("majorGridlines") != nil
+		break
+	}
+
+	cj.ChartRaw = string(data)
+	return cj
+}
+
+func barChartType(dir, grouping string) string {
+	if dir == "bar" {
+		switch grouping {
+		case "stacked":
+			return "barStacked"
+		case "percentStacked":
+			return "barStacked100"
+		}
+		return "bar"
+	}
+	switch grouping {
+	case "stacked":
+		return "columnStacked"
+	case "percentStacked":
+		return "columnStacked100"
+	}
+	return "column"
+}
+
+// chartLevelDataLabels 读取图表级数据标签（位置）。
+func chartLevelDataLabels(chartNode *xmlNode) string {
+	dl := chartNode.kid("dLbls")
+	if dl == nil {
+		return "none"
+	}
+	if sv := dl.kid("showVal"); sv != nil && !parseBool(sv.attr("val")) {
+		return "none"
+	}
+	if p := dl.kid("dLblPos"); p != nil {
+		v := p.attr("val")
+		switch v {
+		case "ctr", "inEnd", "outEnd", "inBase", "bestFit", "l", "r", "t", "b":
+			return v
+		}
+	}
+	return "ctr"
+}
+
+// parseChartSeries 解析 <c:ser>：名称/类别/数值（缓存优先，缺失回退到单元格引用），
+// 散点图取 xVal/yVal。
+func parseChartSeries(s *xmlNode, chartType string, resolve func(string) []string) *chartSeriesJSON {
+	ser := &chartSeriesJSON{}
+	// 系列名：c:tx/c:strRef（f + 缓存）
+	if tx := s.kid("tx"); tx != nil {
+		if ref := tx.kid("strRef"); ref != nil {
+			ser.NameRef = refText(ref, "f")
+			ser.Name = refText(ref, "strCache")
+		}
+	}
+	// 缓存缺失（excelize 生成的文件只有引用）→ 从工作表取值
+	if ser.Name == "" && ser.NameRef != "" && resolve != nil {
+		if vals := resolve(ser.NameRef); len(vals) > 0 {
+			ser.Name = vals[0]
+		}
+	}
+	// 系列颜色：c:spPr/a:solidFill/a:srgbClr
+	if sp := s.kid("spPr"); sp != nil {
+		if fill := sp.kid("solidFill"); fill != nil {
+			if c := fill.kid("srgbClr"); c != nil {
+				ser.Color = "#" + hex6(c.attr("val"))
+			}
+		}
+	}
+	if chartType == "scatter" {
+		xv, xref := cachedNums(s.kid("xVal"))
+		ser.CatsRef = xref
+		for _, v := range xv {
+			ser.Cats = append(ser.Cats, formatChartNum(v))
+		}
+		if ser.Cats == nil && ser.CatsRef != "" && resolve != nil {
+			ser.Cats = resolve(ser.CatsRef)
+		}
+		ser.Values, ser.ValuesRef = cachedNums(s.kid("yVal"))
+		if ser.Values == nil && ser.ValuesRef != "" && resolve != nil {
+			ser.Values = parseFloats(resolve(ser.ValuesRef))
+		}
+	} else {
+		ser.Values, ser.ValuesRef = cachedNums(s.kid("val"))
+		if ser.Values == nil && ser.ValuesRef != "" && resolve != nil {
+			ser.Values = parseFloats(resolve(ser.ValuesRef))
+		}
+		if cat := s.kid("cat"); cat != nil {
+			ser.Cats, ser.CatsRef = cachedCats(cat)
+		}
+		if ser.Cats == nil && ser.CatsRef != "" && resolve != nil {
+			ser.Cats = resolve(ser.CatsRef)
+		}
+	}
+	if ser.Values == nil && ser.Name == "" && len(ser.Cats) == 0 {
+		return nil
+	}
+	return ser
+}
+
+// parseFloats 把字符串值解析为数值（非数值记 NaN）。
+func parseFloats(vals []string) []float64 {
+	if vals == nil {
+		return nil
+	}
+	out := make([]float64, len(vals))
+	for i, v := range vals {
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			f = math.NaN()
+		}
+		out[i] = f
+	}
+	return out
+}
+
+// formatChartNum 数值 → 显示字符串（去多余尾零）。
+func formatChartNum(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+	return strconv.FormatFloat(v, 'g', -1, 64)
+}
+
+// refText 读取 strRef 下的 f（引用）或 strCache（首个缓存值）。
+func refText(ref *xmlNode, want string) string {
+	if ref == nil {
+		return ""
+	}
+	if want == "f" {
+		return strings.TrimSpace(ref.kid("f").text)
+	}
+	if cache := ref.kid("strCache"); cache != nil {
+		for _, pt := range cache.children("pt") {
+			return strings.TrimSpace(pt.kid("v").text)
+		}
+	}
+	return ""
+}
+
+// cachedNums 读取 numRef：返回缓存数值数组 + 引用。
+func cachedNums(valNode *xmlNode) ([]float64, string) {
+	if valNode == nil {
+		return nil, ""
+	}
+	ref := valNode.kid("numRef")
+	if ref == nil {
+		return nil, ""
+	}
+	f := strings.TrimSpace(ref.kid("f").text)
+	if cache := ref.kid("numCache"); cache != nil {
+		var out []float64
+		for _, pt := range cache.children("pt") {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(pt.kid("v").text), 64); err == nil {
+				out = append(out, v)
+			} else {
+				out = append(out, math.NaN())
+			}
+		}
+		return out, f
+	}
+	return nil, f
+}
+
+// cachedCats 读取类别（strRef→字符串 / numRef→数值，统一转显示字符串）。
+func cachedCats(cat *xmlNode) ([]string, string) {
+	if cat == nil {
+		return nil, ""
+	}
+	if ref := cat.kid("strRef"); ref != nil {
+		f := strings.TrimSpace(ref.kid("f").text)
+		var out []string
+		if cache := ref.kid("strCache"); cache != nil {
+			for _, pt := range cache.children("pt") {
+				out = append(out, strings.TrimSpace(pt.kid("v").text))
+			}
+		}
+		return out, f
+	}
+	if ref := cat.kid("numRef"); ref != nil {
+		f := strings.TrimSpace(ref.kid("f").text)
+		var out []string
+		if cache := ref.kid("numCache"); cache != nil {
+			for _, pt := range cache.children("pt") {
+				out = append(out, strings.TrimSpace(pt.kid("v").text))
+			}
+		}
+		return out, f
+	}
+	return nil, ""
+}
+
+// titleText 拼接标题富文本（a:t 片段）。
+func titleText(title *xmlNode) string {
+	var b strings.Builder
+	for _, t := range allDescendants(title, "t") {
+		b.WriteString(t.text)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// allDescendants 深度优先收集指定局部名的全部后代。
+func allDescendants(n *xmlNode, local string) []*xmlNode {
+	if n == nil {
+		return nil
+	}
+	var out []*xmlNode
+	for _, k := range n.kids {
+		if k.local == local {
+			out = append(out, k)
+		}
+		out = append(out, allDescendants(k, local)...)
+	}
+	return out
+}
