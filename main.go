@@ -355,9 +355,10 @@ func (a *App) OpenFile(path string) (map[string]any, error) {
 		"warnings": warns,
 		"path":     path,
 	}
+	// round63：.txt 同为文本类 —— 返回原文（前端路由进 Markdown 编辑器纯文本模式）。
 	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
 		strings.HasSuffix(lower, ".mdx") || strings.HasSuffix(lower, ".html") ||
-		strings.HasSuffix(lower, ".htm") {
+		strings.HasSuffix(lower, ".htm") || strings.HasSuffix(lower, ".txt") {
 		res["rawContent"] = base64.StdEncoding.EncodeToString(data)
 	}
 	return res, nil
@@ -396,7 +397,8 @@ func (a *App) GetStartupArgs() []string {
 			strings.HasSuffix(lower, ".pptx") || strings.HasSuffix(lower, ".ppt") ||
 			strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") ||
 			strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".sam") ||
-			strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") {
+			strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") ||
+			strings.HasSuffix(lower, ".txt") {
 			out = append(out, arg)
 		}
 	}
@@ -411,7 +413,7 @@ func (a *App) OpenFileDialog() (string, error) {
 		return "", fmt.Errorf("app not started")
 	}
 	filters := []runtime.FileFilter{
-		{DisplayName: "Office 文档 (*.docx;*.doc;*.md;*.markdown;*.xlsx;*.xls;*.pptx;*.ppt)", Pattern: "*.docx;*.doc;*.md;*.markdown;*.xlsx;*.xls;*.pptx;*.ppt"},
+		{DisplayName: "Office 文档 (*.docx;*.doc;*.md;*.markdown;*.txt;*.xlsx;*.xls;*.pptx;*.ppt)", Pattern: "*.docx;*.doc;*.md;*.markdown;*.txt;*.xlsx;*.xls;*.pptx;*.ppt"},
 		{DisplayName: "PDF 文件 (*.pdf)", Pattern: "*.pdf"},
 		{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
 	}
@@ -477,6 +479,8 @@ func (a *App) SaveFileDialog(defaultName, format string) (string, error) {
 		filters = []runtime.FileFilter{{DisplayName: "WPS 文档 (*.wps)", Pattern: "*.wps"}}
 	case "pdf":
 		filters = []runtime.FileFilter{{DisplayName: "PDF 文件 (*.pdf)", Pattern: "*.pdf"}}
+	case "txt":
+		filters = []runtime.FileFilter{{DisplayName: "纯文本文件 (*.txt)", Pattern: "*.txt"}}
 	default:
 		filters = []runtime.FileFilter{{DisplayName: "所有文件 (*.*)", Pattern: "*.*"}}
 	}

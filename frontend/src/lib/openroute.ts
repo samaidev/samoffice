@@ -129,7 +129,7 @@ export function isSpreadsheetPath(path: string): boolean {
 
 // Markdown 文件 → MD 标签页（分屏编辑 + 实时预览）
 export function isMarkdownPath(path: string): boolean {
-  return /\.(md|markdown|mdx)$/i.test(path || '')
+  return /\.(md|markdown|mdx|txt)$/i.test(path || '')
 }
 
 // HTML 文件 → HTML 标签页

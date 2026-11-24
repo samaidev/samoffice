@@ -22,6 +22,11 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [toc, setToc] = useState<TocItem[]>([])
   const [activeTocId, setActiveTocId] = useState('')
+  // round63：右键菜单（复制/剪切/粘贴/全选）—— textarea 原生右键在 WebView
+  // 里被默认行为占用/不可用，用户报告 md 无右键。菜单仅覆盖编辑器（预览区
+  // 文本选择复制走浏览器默认）。
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 })
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const lineMapRef = useRef<Map<string, number>>(new Map())
@@ -126,6 +131,54 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
     }
   }, [content, mode, renderMarkdown, renderHtml, extractToc])
 
+  // round63：右键菜单命令（作用于 textarea 选区；粘贴走 navigator.clipboard → execCommand 兜底）
+  const applyMenuCmd = async (cmd: 'copy' | 'cut' | 'paste' | 'selectAll') => {
+    const ta = editorRef.current
+    setMenuOpen(false)
+    if (!ta) return
+    const start = ta.selectionStart, end = ta.selectionEnd
+    const selected = ta.value.slice(start, end)
+    if (cmd === 'selectAll') {
+      ta.focus()
+      ta.setSelectionRange(0, ta.value.length)
+      return
+    }
+    if (cmd === 'copy' || cmd === 'cut') {
+      if (selected) {
+        try { await (navigator as any).clipboard?.writeText?.(selected) } catch { /* 老浏览器 */ }
+        // 同步路径：execCommand（WebView2 可靠）
+        ta.focus()
+        ;(document as any).execCommand('copy')
+      }
+      if (cmd === 'cut' && selected) {
+        setContent(ta.value.slice(0, start) + ta.value.slice(end))
+        requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(start, start) })
+      }
+      return
+    }
+    // paste
+    ta.focus()
+    let text = ''
+    try { text = await (navigator as any).clipboard?.readText?.() ?? '' } catch { text = '' }
+    if (!text) {
+      const rt: any = (window as any).runtime
+      try { text = await rt?.ClipboardGetText?.() ?? '' } catch { text = '' }
+    }
+    if (text) {
+      setContent(ta.value.slice(0, start) + text + ta.value.slice(end))
+      requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(start + text.length, start + text.length) })
+    } else {
+      ;(document as any).execCommand('paste')
+    }
+  }
+
+  const onEditorContextMenu = (e: React.MouseEvent) => {
+    if (viewMode === 'preview') return
+    e.preventDefault()
+    setMenuPos({ x: e.clientX, y: e.clientY })
+    setMenuOpen(true)
+  }
+
   const jumpToToc = (id: string) => {
     setActiveTocId(id)
     // 预览区：仅在预览容器内滚动到对应标题（不使用 scrollIntoView，
@@ -176,6 +229,38 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
 
   return (
     <div className="flex h-full" style={{ background: 'var(--color-bg)' }}>
+      {/* round63：右键菜单 —— 复制/剪切/粘贴/全选 */}
+      {menuOpen && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setMenuOpen(false)} onContextMenu={ev => { ev.preventDefault(); setMenuOpen(false) }} />
+          <div
+            data-testid="md-context-menu"
+            style={{
+              position: 'fixed', left: Math.min(menuPos.x, window.innerWidth - 180), top: Math.min(menuPos.y, window.innerHeight - 160),
+              zIndex: 999, minWidth: 160,
+              background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+              borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: '4px 0',
+            }}
+          >
+            {([
+              { id: 'copy', label: t('md.menuCopy'), icon: '📋' },
+              { id: 'cut', label: t('md.menuCut'), icon: '✂️' },
+              { id: 'paste', label: t('md.menuPaste'), icon: '📥' },
+              { id: 'selectAll', label: t('md.menuSelectAll'), icon: '🔲' },
+            ] as const).map(item => (
+              <button
+                key={item.id}
+                data-testid={`md-menu-${item.id}`}
+                onClick={() => { void applyMenuCmd(item.id) }}
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/10 flex items-center gap-2"
+                style={{ color: 'var(--color-text)' }}
+              >
+                <span>{item.icon}</span><span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <div
           className="px-3 py-1.5 flex items-center gap-2 flex-shrink-0"
@@ -231,6 +316,7 @@ export function MarkdownHtmlEditor({ initialContent = '', mode, onChange }: Prop
                 value={content}
                 onChange={handleContentChange}
                 onKeyDown={handleKeyDown}
+                onContextMenu={onEditorContextMenu}
                 onScroll={(e) => {
                   const ta = e.currentTarget
                   const pre = ta.previousElementSibling as HTMLPreElement

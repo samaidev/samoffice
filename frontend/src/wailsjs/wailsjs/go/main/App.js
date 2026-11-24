@@ -6,6 +6,10 @@ export function GetClipboardHtml() {
   return window['go']['main']['App']['GetClipboardHtml']();
 }
 
+export function ClipboardGetText() {
+  return window['go']['main']['App']['ClipboardGetText']();
+}
+
 export function GetStartupArgs() {
   return window['go']['main']['App']['GetStartupArgs']();
 }

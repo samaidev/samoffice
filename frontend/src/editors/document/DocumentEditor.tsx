@@ -1683,7 +1683,16 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
           const paper = PAPER_SIZES[st.paperSize] || PAPER_SIZES.A4
           const paperWmm = st.orientation === 'landscape' ? paper.h : paper.w
           const contentW = Math.max(50, paperWmm - st.margins.left - st.margins.right)
-          const scaleW = (contentW * 1.5) / pageWidthPx
+          const zoomW = Math.min(1, (contentW * 1.5) / pageWidthPx)
+          // round63 修复（用户报告：打印预览显示 3 页、实际只有一页）：
+          // 旧结构 transform:scale 只缩视觉，布局尺寸仍是原 pageWidthPx 宽
+          // （高度同比例未缩）—— PageFlow 测量层量 scrollHeight 得到【未缩放】
+          // 全高（如 773px），除以【缩放后口径】的 contentH（371px）→ 页数虚高
+          // 约 1/zoom 倍（0.3 缩放的一页文档报 3 页）。
+          // 修法：transform:scale → CSS zoom —— zoom 同步缩放布局尺寸，
+          // scrollHeight/getBoundingClientRect 直接落在缩放后坐标系，
+          // 测量口径与切片口径一致。Chrome/Edge(WebView2)/Safari/Firefox(126+)
+          // 均已标准支持 zoom。
           return (
             <div style={{ width: '100%', height: '100%', overflow: 'hidden', color: '#000' }}>
               {/* 类必须放在【消费 innerHTML 的容器】上（clone 根类不会随
@@ -1691,7 +1700,7 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
                * 居中）靠它生效（round28）。 */}
               <div
                 className={'ProseMirror pm-nocaret ' + (clone.className || '')}
-                style={{ transform: `scale(${Math.min(1, scaleW)})`, transformOrigin: 'top left', width: pageWidthPx + 'px', margin: 0, padding: 0 }}
+                style={{ zoom: `${zoomW}`, width: pageWidthPx + 'px', margin: 0, padding: 0 }}
                 dangerouslySetInnerHTML={{ __html: clone.innerHTML }}
               />
             </div>
@@ -3080,18 +3089,39 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       case 'copy': { focusNoJump(); serializeSelectionToClipboard(v, false); setShowContextMenu(false); break }
       case 'cut': { focusNoJump(); serializeSelectionToClipboard(v, true); setShowContextMenu(false); break }
       case 'paste': {
+        // round63 修复（用户报告：Word 右键粘贴没用）：
+        // 1) 旧 fallback 调用的 runtime.ClipboardGetText 在 Go 后端不存在 →
+        //    异常被静默吞掉，粘贴毫无反应（已在 clipboard_windows.go 补齐方法）。
+        // 2) web/浏览器模式下 window.runtime 是 wails 桥，GetClipboardHtml 不存在 →
+        //    增加浏览器 navigator.clipboard 兜底（readText；富文本 read 权限受限不取）。
+        // 3) 全部失败时兜底触发原生 paste 事件（WebView2 里可靠）。
         focusNoJump()
         ;(async () => {
+          const rt: any = (window as any).runtime
           try {
-            const html = await (window as any).runtime.GetClipboardHtml()
+            let html = ''
+            try { html = await rt.GetClipboardHtml() } catch { html = '' }
             if (html && html.trim()) {
               const nativeDoc = new DOMParser().parseFromString('<body>' + html + '</body>', 'text/html')
               const slice = PMDOMParser.fromSchema(schema).parseSlice(nativeDoc.body)
               v.dispatch(v.state.tr.replaceSelection(slice).scrollIntoView())
-            } else {
-              const t2 = await (window as any).runtime.ClipboardGetText()
-              if (t2) v.dispatch(v.state.tr.insertText(t2).scrollIntoView())
+              return
             }
+          } catch { /* fallthrough */ }
+          let text = ''
+          try { text = await rt.ClipboardGetText() } catch { text = '' }
+          if (!text && (navigator as any).clipboard?.readText) {
+            try { text = await (navigator as any).clipboard.readText() } catch { text = '' }
+          }
+          if (text) {
+            v.dispatch(v.state.tr.insertText(text).scrollIntoView())
+            return
+          }
+          // 最终兜底：派发原生 paste（浏览器/WebView 自身处理剪贴板）
+          try {
+            const target = v.dom as HTMLElement
+            target.focus()
+            ;(document as any).execCommand('paste')
           } catch { /* ignore */ }
         })()
         setShowContextMenu(false); break

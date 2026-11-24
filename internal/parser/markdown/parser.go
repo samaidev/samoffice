@@ -15,10 +15,13 @@ type Parser struct{}
 
 func New() *Parser { return &Parser{} }
 
-func (p *Parser) Supported() []string { return []string{".md", ".markdown"} }
+// round63：.txt 纯文本归 Markdown 解析器（零格式 markdown —— 逐行段落），
+// 前端 openroute 同步把 .txt 路由进 markdown 编辑器纯文本模式。
+func (p *Parser) Supported() []string { return []string{".md", ".markdown", ".txt"} }
 func (p *Parser) CanParse(path string, header []byte) bool {
 	return strings.HasSuffix(strings.ToLower(path), ".md") ||
-		strings.HasSuffix(strings.ToLower(path), ".markdown")
+		strings.HasSuffix(strings.ToLower(path), ".markdown") ||
+		strings.HasSuffix(strings.ToLower(path), ".txt")
 }
 
 // isTableSep 判断一行是否为 GFM 表格分隔行（如 | --- | :--: | ---: |）

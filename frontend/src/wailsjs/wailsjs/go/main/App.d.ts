@@ -4,6 +4,7 @@ import {dict} from '../models';
 import {core} from '../models';
 
 export function GetClipboardHtml():Promise<string>;
+export function ClipboardGetText():Promise<string>;
 
 export function GetStartupArgs():Promise<Array<string>>;
 

@@ -616,7 +616,7 @@ ${t('sample.md.more')}
 
   // 新建空白文件：不经过磁盘，直接用内存初始数据激活一个新窗口标签。
   // path 使用不带盘符的伪路径（含扩展名），保证保存时永远走“另存为”对话框。
-  const handleNewFile = (kind: 'document' | 'spreadsheet' | 'slide' | 'markdown') => {
+  const handleNewFile = (kind: 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'txt') => {
     setFilesOpen(false)
     setMenuOpen(false)
     const seq = Date.now()
@@ -639,6 +639,11 @@ ${t('sample.md.more')}
         slides: [{ title: '', content: '', bg: '#ffffff', shapes: [], pageW: 12192000, pageH: 6858000 } as SlideData],
         slideEpoch: slideEpoch + 1,
       })
+    } else if (kind === 'txt') {
+      // round63：新建纯文本 —— 同 markdown 编辑器载入，路径带 .txt 扩展
+      //（保存/另存为沿用 txt；编辑器右键含复制/剪切/粘贴/全选）
+      const path = `新建文本-${seq}.txt`
+      activateWindowData({ type: 'markdown', path, title: t('app.newTextFile'), md: '' })
     } else {
       const path = `新建笔记-${seq}.md`
       activateWindowData({ type: 'markdown', path, title: t('app.untitled'), md: '' })
@@ -1362,10 +1367,12 @@ ${t('sample.md.more')}
       }
       return
     }
-    // Markdown / HTML 选项卡：直接写纯文本（保留原文），不走 UDM
+    // Markdown / HTML 选项卡：直接写纯文本（保留原文），不走 UDM。
+    // round63：打开的 .txt 同走本分支 —— 扩展名沿用 txt（保存/另存为不换格式）。
     if (tab === 'markdown' || tab === 'html') {
       const text = tab === 'markdown' ? mdContent : htmlContent
-      const ext = tab === 'markdown' ? 'md' : 'html'
+      const isTxt = tab === 'markdown' && /\.txt$/i.test(filePath)
+      const ext = tab === 'markdown' ? (isTxt ? 'txt' : 'md') : 'html'
       const hasRealPath = /^[A-Za-z]:[\\/]/.test(filePath) && filePath.toLowerCase().endsWith('.' + ext)
       let target = filePath
       if (opts.forceDialog || !hasRealPath) {
@@ -1636,6 +1643,8 @@ ${t('sample.md.more')}
   const fileItems: { icon: string; label: string; onClick: () => void; shortcut?: string }[] = [
     // 新建各种文件类型（内存创建，首次保存时才落盘）
     { icon: '📝', label: t('app.newDocument'), onClick: () => handleNewFile('document') },
+    { icon: '📝', label: t('app.newMarkdown'), onClick: () => handleNewFile('markdown') },
+    { icon: '🗒', label: t('app.newTextFile'), onClick: () => handleNewFile('txt') },
     { icon: '📊', label: t('app.newSpreadsheet'), onClick: () => handleNewFile('spreadsheet') },
     { icon: '📽', label: t('app.newSlide'), onClick: () => handleNewFile('slide') },
     { icon: '🗒', label: t('app.newMarkdown'), onClick: () => handleNewFile('markdown') },

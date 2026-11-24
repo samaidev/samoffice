@@ -159,7 +159,11 @@ export class WasmBackend implements Backend {
     } else if (Array.isArray(r.warnings)) {
       warnings = r.warnings
     }
-    return { document: doc, warnings }
+    // round63：透传 Go 侧 rawContent（文本类 md/txt/html 原文 base64）——
+    // 之前丢弃，web/wasm 模式打开 .txt/.md 时 loadRawText 拿不到原文，
+    // 回退 sampleMd（用户打开 txt 显示示例文档）。
+    const rawContent = typeof r.rawContent === 'string' ? r.rawContent : ''
+    return { document: doc, warnings, rawContent } as any
   }
 
   // 原生 xlsx 读取（合并/边框/填充全保留）：参数与接口一致（路径字符串），

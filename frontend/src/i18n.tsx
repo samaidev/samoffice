@@ -1152,6 +1152,10 @@ const dict: Record<string, { en: string; zh: string }> = {
 
   // === MarkdownHtmlEditor ===
   'md.markdown': { en: '📝 Markdown', zh: '📝 Markdown' },
+  'md.menuCopy': { en: 'Copy', zh: '复制' },
+  'md.menuCut': { en: 'Cut', zh: '剪切' },
+  'md.menuPaste': { en: 'Paste', zh: '粘贴' },
+  'md.menuSelectAll': { en: 'Select All', zh: '全选' },
   'md.html': { en: '🌐 HTML', zh: '🌐 HTML' },
   'md.edit': { en: 'Edit', zh: '编辑' },
   'md.split': { en: 'Split', zh: '分屏' },
@@ -1280,6 +1284,7 @@ const dict: Record<string, { en: string; zh: string }> = {
   'app.newSpreadsheet': { en: 'Excel Workbook', zh: 'Excel 表格' },
   'app.newSlide': { en: 'PPT Presentation', zh: 'PPT 演示' },
   'app.newMarkdown': { en: 'Markdown', zh: 'Markdown 笔记' },
+  'app.newTextFile': { en: 'Text File', zh: '纯文本' },
 
   // === [word-agent additions below] ===
 

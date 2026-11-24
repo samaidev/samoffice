@@ -113,6 +113,25 @@ func (a *App) SetClipboardHtml(html string, plain string) error {
 }
 
 // GetClipboardHtml 优先读取 HTML 格式，否则回退纯文本。
+// ClipboardGetText 只读纯文本（右键菜单「粘贴」的兜底路径：GetClipboardHtml
+// 失败/为空时调用；round63 前端曾调用一个不存在的同名方法导致粘贴无反应）。
+func (a *App) ClipboardGetText() (string, error) {
+	r, _, _ := procOpenClipboard.Call(0)
+	if r == 0 {
+		return "", fmt.Errorf("open clipboard failed")
+	}
+	defer procCloseClipboard.Call()
+	h2, _, _ := procGetClipboardData.Call(cfUnicodeText)
+	if h2 != 0 {
+		p, _, _ := procGlobalLock.Call(h2)
+		if p != 0 {
+			s := utf16ToString(p)
+			procGlobalUnlock.Call(h2)
+			return s, nil
+		}
+	}
+	return "", nil
+}
 func (a *App) GetClipboardHtml() (string, error) {
 	r, _, _ := procOpenClipboard.Call(0)
 	if r == 0 {

@@ -62,7 +62,16 @@ export default function PageFlow(props: PageFlowProps) {
   useLayoutEffect(() => {
     const el = firstContentRef.current
     if (!el || contentH <= 0) return
-    const n = Math.max(1, Math.ceil((el.scrollHeight - 2) / contentH))
+    // round63 修复（用户报告：打印预览显示 3 页、实际一页）：
+    // scrollHeight 量的是【未缩放】布局高（transform:scale 不改布局尺寸），
+    // 除以【缩放后口径】的 contentH → 页数虚高 ~1/K 倍。按 getBoundingClientRect
+    // 的视觉高（含 scale）测量，与切片口径一致；兜底 scrollHeight×K（老浏览器 rect
+    // 异常时）。另加 2px 容差防临界整页多算一页。
+    let visualH = 0
+    try { visualH = el.getBoundingClientRect().height } catch { visualH = 0 }
+    const scaled = visualH > 1 ? visualH : el.scrollHeight * K
+    totalHRef.current = scaled
+    const n = Math.max(1, Math.ceil((scaled - 2) / contentH))
     setTotal(prev => (prev === n ? prev : n))
   })
   useEffect(() => { if (total > 0) onCount?.(total) }, [total, onCount])
@@ -77,8 +86,25 @@ export default function PageFlow(props: PageFlowProps) {
   // 整页（innerW×contentH 内容坐标系）缩放进格：取宽高双向最小
   const K = Math.min(cellW / innerW, cellH / contentH)
 
+  // round63（用户报告：1版2页显示的根本不是一页里显示两页内容）：
+  // 旧拼版 = 一张纸排 perPage 个【完整逻辑页】（1 页文档选 1版2页只显示
+  // 1 格内容 + 空格 —— 用户视之无效）。改为【内容流拼贴】：拼版时把
+  // 全部内容按 contentH 切成逻辑页序列并循环填充每张纸的每个格 ——
+  // 不足一格的内容也切半页，一页文档拼 1版2页 = 上下/左右各半页内容，
+  // 一页里真的看到两份内容（贴近用户直觉的「两页内容拼一版」）。
+  // 每版 1 页（默认）仍是完整逻辑页语义（无变化）。
   const cards: number[][] = []
   for (let i = 0; i < pageIdx.length; i += perPage) cards.push(pageIdx.slice(i, i + perPage))
+  // 拼版不足补空：把后续（不存在的）页码也填上空格子序列，使每张纸都有 perPage 格；
+  // 空格页码 = 负数标记，渲染时给占位样式（不查内容）。
+  if (perPage > 1) {
+    for (let ci = 0; ci < cards.length; ci++) {
+      while (cards[ci].length < perPage) {
+        // 没有更多逻辑页时：把总内容流切片延伸（第 k 个“流片”，页码延续编号）
+        cards[ci].push(-cards[ci].length - (pageIdx.length ? pageIdx[pageIdx.length - 1] : 0))
+      }
+    }
+  }
   const mountThreshold = mountAll || cards.length <= 6 ? Infinity : 800
 
   // 懒挂载：视口附近（rootMargin）的纸卡才渲染克隆
@@ -102,6 +128,8 @@ export default function PageFlow(props: PageFlowProps) {
   })
   const mountedRef = useRef(mounted)
   mountedRef.current = mounted
+  // 内容视觉总高（流片判断用；测量 effect 里同步）
+  const totalHRef = useRef(0)
 
   return (
     <div data-testid={testId} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '4px 0 16px', width: paperW }}>
@@ -123,20 +151,25 @@ export default function PageFlow(props: PageFlowProps) {
           >
             {isMounted ? (
               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${grid.cols}, ${cellW}px)`, gap: 6 }}>
-                {cardPages.map(p => (
-                  <div key={p} data-page={p} style={{ width: cellW, height: cellH, overflow: 'hidden', position: 'relative', background: '#fff' }}>
-                    <div
-                      ref={ci === 0 && p === cardPages[0] ? firstContentRef : undefined}
-                      style={{ transform: `scale(${K}) translateY(${-(p - 1) * contentH}px)`, transformOrigin: 'top left', width: innerW }}
-                    >
-                      {renderContent()}
+                {cardPages.map(p => {
+                  // round63：p<0 = 内容流延伸片（真实页码 |p|，超出逻辑页数但
+                  // 在内容流高度内 —— 1 页内容拼 1版2页 的第二格显示后半页）
+                  const flowP = Math.abs(p)
+                  // 流片超出内容总高 → 空占位（内容不够填满最后一版）
+                  if (p < 0 && (flowP - 1) * contentH > totalHRef.current) {
+                    return <div key={p} data-page={p} style={{ width: cellW, height: cellH, background: '#fafafa' }} />
+                  }
+                  return (
+                    <div key={p} data-page={p} style={{ width: cellW, height: cellH, overflow: 'hidden', position: 'relative', background: '#fff' }}>
+                      <div
+                        ref={ci === 0 && p === cardPages[0] ? firstContentRef : undefined}
+                        style={{ transform: `scale(${K}) translateY(${-(flowP - 1) * contentH}px)`, transformOrigin: 'top left', width: innerW }}
+                      >
+                        {renderContent()}
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {/* 不足 perPage 的空格：占位保持网格形状（MS 拼版同样留空） */}
-                {Array.from({ length: perPage - cardPages.length }).map((_, k) => (
-                  <div key={'e' + k} style={{ width: cellW, height: cellH }} />
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <div style={{ height: innerH }} />
