@@ -18,6 +18,47 @@ export type ChartType =
 
 export interface ChartPoint { col: number; row: number; dx: number; dy: number }
 
+/** round62：坐标轴配置（对齐 Excel「设置坐标轴格式」；语义 = 有/无 + 值） */
+export interface AxisConfig {
+  /** 轴标题（'' = 无） */
+  title: string
+  /** 数值轴最小值（null = 自动） */
+  min: number | null
+  /** 数值轴最大值（null = 自动） */
+  max: number | null
+  /** 主刻度单位（null = 自动） */
+  majorUnit: number | null
+  /** 次刻度单位（null = 自动；0 = 无次刻度） */
+  minorUnit: number | null
+  /** 主要刻度线：none|inside|outside|cross */
+  majorTick: 'none' | 'inside' | 'outside' | 'cross' | ''
+  /** 次要刻度线 */
+  minorTick: 'none' | 'inside' | 'outside' | 'cross' | ''
+  /** 轴标签位置：''(nextTo)|high|low|none */
+  tickLabelPos: '' | 'high' | 'low' | 'none'
+  /** 数字格式（'' = General）：'0.0' '#,##0' '0%' 等 */
+  numFmt: string
+  /** 反转轴方向 */
+  reverse: boolean
+  /** 对数刻度基数（null = 关闭；10/2） */
+  logBase: number | null
+  /** 轴线条颜色（'' = 自动） */
+  lineColor: string
+  /** 轴线条宽度 pt（0 = 默认） */
+  lineWidth: number
+  /** 主网格线开关（类别轴专用；数值轴走 chart.gridlines 总开关） */
+  majorGridlines: boolean
+}
+
+export function defaultAxis(): AxisConfig {
+  return {
+    title: '', min: null, max: null, majorUnit: null, minorUnit: null,
+    majorTick: '', minorTick: '', tickLabelPos: '', numFmt: '',
+    reverse: false, logBase: null, lineColor: '', lineWidth: 0,
+    majorGridlines: false,
+  }
+}
+
 export interface ChartSeries {
   name: string
   nameRef: string
@@ -43,6 +84,9 @@ export interface ChartSpec {
   gapWidth: number
   overlap: number
   holeSize: number
+  /** round62：坐标轴配置（水平轴 = catAxis，垂直轴 = valAxis；散点图两者都是数值轴） */
+  catAxis: AxisConfig
+  valAxis: AxisConfig
   series: ChartSeries[]
   /** 数据区域（含表头），如 "B1:D4"；切换行列/重选数据源时更新 */
   rangeRef: string
@@ -63,6 +107,24 @@ export interface ChartSeriesJSON {
   color?: string
 }
 
+/** round62：轴配置 JSON（与后端 chartAxisJSON 一一对应；缺省字段 = 自动） */
+export interface AxisConfigJSON {
+  title?: string
+  min?: number
+  max?: number
+  majorUnit?: number
+  minorUnit?: number
+  majorTick?: string
+  minorTick?: string
+  tickLabelPos?: string
+  numFmt?: string
+  reverse?: boolean
+  logBase?: number
+  lineColor?: string
+  lineWidth?: number
+  majorGridlines?: boolean
+}
+
 export interface ChartSpecJSON {
   name?: string
   type: string
@@ -77,6 +139,8 @@ export interface ChartSpecJSON {
   gapWidth?: number
   overlap?: number
   holeSize?: number
+  catAxis?: AxisConfigJSON
+  valAxis?: AxisConfigJSON
   series: ChartSeriesJSON[]
   edited?: boolean
   anchorRaw?: string
@@ -102,6 +166,7 @@ export function defaultChart(): ChartSpec {
     title: '', titleOn: true,
     legend: 'r', gridlines: true, dataLabels: 'none',
     gapWidth: 150, overlap: 0, holeSize: 50,
+    catAxis: defaultAxis(), valAxis: defaultAxis(),
     series: [],
     rangeRef: '', byRows: false,
     edited: true, anchorRaw: '', chartRaw: '',
@@ -125,6 +190,8 @@ export function chartFromJSON(j: ChartSpecJSON): ChartSpec {
   c.gapWidth = j.gapWidth || 150
   c.overlap = j.overlap || 0
   c.holeSize = j.holeSize || 50
+  c.catAxis = axisFromJSON(j.catAxis)
+  c.valAxis = axisFromJSON(j.valAxis)
   c.series = (j.series || []).map(s => ({
     name: s.name || '', nameRef: s.nameRef || '',
     cats: s.cats || [], catsRef: s.catsRef || '',
@@ -161,9 +228,50 @@ export function chartToJSON(c: ChartSpec): ChartSpecJSON {
   if (c.gapWidth && c.gapWidth !== 150) j.gapWidth = c.gapWidth
   if (c.overlap) j.overlap = c.overlap
   if (c.type === 'doughnut') j.holeSize = c.holeSize
+  j.catAxis = axisToJSON(c.catAxis)
+  j.valAxis = axisToJSON(c.valAxis)
   if (c.edited) j.edited = true
   if (c.anchorRaw) j.anchorRaw = c.anchorRaw
   if (c.chartRaw) j.chartRaw = c.chartRaw
+  return j
+}
+
+function axisFromJSON(j?: AxisConfigJSON): AxisConfig {
+  const a = defaultAxis()
+  if (!j) return a
+  a.title = j.title || ''
+  a.min = j.min ?? null
+  a.max = j.max ?? null
+  a.majorUnit = j.majorUnit ?? null
+  a.minorUnit = j.minorUnit ?? null
+  a.majorTick = (j.majorTick as AxisConfig['majorTick']) || ''
+  a.minorTick = (j.minorTick as AxisConfig['minorTick']) || ''
+  a.tickLabelPos = (j.tickLabelPos as AxisConfig['tickLabelPos']) || ''
+  a.numFmt = j.numFmt || ''
+  a.reverse = !!j.reverse
+  a.logBase = j.logBase ?? null
+  a.lineColor = j.lineColor || ''
+  a.lineWidth = j.lineWidth || 0
+  a.majorGridlines = !!j.majorGridlines
+  return a
+}
+
+function axisToJSON(a: AxisConfig): AxisConfigJSON {
+  const j: AxisConfigJSON = {}
+  if (a.title) j.title = a.title
+  if (a.min != null) j.min = a.min
+  if (a.max != null) j.max = a.max
+  if (a.majorUnit != null) j.majorUnit = a.majorUnit
+  if (a.minorUnit != null) j.minorUnit = a.minorUnit
+  if (a.majorTick) j.majorTick = a.majorTick
+  if (a.minorTick) j.minorTick = a.minorTick
+  if (a.tickLabelPos) j.tickLabelPos = a.tickLabelPos
+  if (a.numFmt) j.numFmt = a.numFmt
+  if (a.reverse) j.reverse = true
+  if (a.logBase != null) j.logBase = a.logBase
+  if (a.lineColor) j.lineColor = a.lineColor
+  if (a.lineWidth) j.lineWidth = a.lineWidth
+  if (a.majorGridlines) j.majorGridlines = true
   return j
 }
 
@@ -266,19 +374,24 @@ export function absRefsForSeries(c: ChartSpec, acc: ChartDataAccess): ChartSpec 
   const rg = parseRange(c.rangeRef)
   if (!rg) return c
   const series = c.series.map((s, i) => ({ ...s }))
+  // ★ absRangeRef/absCellRef 内部 colLetter 按传参【原样】解释为列号：
+  //   colLetter(1)='A'。parseRange 返回 0 基 → 传参必须是 1 基列号。
+  //   round61 起 valuesRef 全部左移一列（指到类别列），此处统一换算修正。
   if (!c.byRows) {
+    // 按列取系列：系列 i = c1+1(表头下一系列起)…实际数据列 c1+2..；首行 r1+1 为表头
     for (let i = 0; i < series.length; i++) {
-      const col = rg.c1 + 1 + i
-      series[i].valuesRef = absRangeRef(acc, col, rg.r1 + 1, col, rg.r2 + 1)
-      series[i].nameRef = absCellRef(acc, col, rg.r1 + 1)
-      series[i].catsRef = absRangeRef(acc, rg.c1 + 1, rg.r1 + 2, rg.c1 + 1, rg.r2 + 1)
+      const col = rg.c1 + 2 + i // 数据列（c1+1 是类别列，c1+2 起是系列）
+      series[i].valuesRef = absRangeRef(acc, col, rg.r1 + 2, col, rg.r2 + 1) // 数据行（跳过表头行 r1+1）
+      series[i].nameRef = absCellRef(acc, col, rg.r1 + 1) // 系列名 = 数据列首行（表头）
+      series[i].catsRef = absRangeRef(acc, rg.c1 + 1, rg.r1 + 2, rg.c1 + 1, rg.r2 + 1) // 类别 = 首列数据行
     }
   } else {
+    // 按行取系列：系列 i = 数据行 r1+2..；首列 c1+1 为系列名列
     for (let i = 0; i < series.length; i++) {
-      const row = rg.r1 + 1 + i
-      series[i].valuesRef = absRangeRef(acc, rg.c1 + 2, row, rg.c2 + 1, row)
-      series[i].nameRef = absCellRef(acc, rg.c1 + 1, row)
-      series[i].catsRef = absRangeRef(acc, rg.c1 + 2, rg.r1 + 1, rg.c2 + 1, rg.r1 + 1)
+      const row = rg.r1 + 2 + i // 数据行（跳过表头行 r1+1）
+      series[i].valuesRef = absRangeRef(acc, rg.c1 + 2, row, rg.c2 + 1, row) // 数据行 c1+2..c2+1
+      series[i].nameRef = absCellRef(acc, rg.c1 + 1, row) // 系列名 = 行首（首列）
+      series[i].catsRef = absRangeRef(acc, rg.c1 + 2, rg.r1 + 1, rg.c2 + 1, rg.r1 + 1) // 类别 = 表头行数据列
     }
   }
   return { ...c, series }

@@ -6,7 +6,7 @@
  * Office 主题配色；系列色可由模型覆盖（读自文件的 c:spPr）。
  */
 import React from 'react'
-import { ChartSpec, CHART_PALETTE, isPercentStacked } from './charts'
+import { ChartSpec, AxisConfig, CHART_PALETTE, isPercentStacked } from './charts'
 
 const AXIS = '#8c8c8c'
 const GRID = '#e6e6e6'
@@ -18,18 +18,58 @@ function fmtNum(v: number): string {
   return String(r)
 }
 
-/** 漂亮刻度：覆盖 [min,max] 的 ~count 个等步长值 */
-function niceTicks(min: number, max: number, count = 5): number[] {
+/** round62：Excel 数字格式码渲染（轴标签/数据标签共用；支持 0/0.0/0.00/#,##0/#,##0.0/0%/0.0%/"0 "等子集） */
+function fmtByCode(v: number, code: string): string {
+  if (!code || code === 'General') return fmtNum(v)
+  const dec = (code.match(/\.(0+)/) || [, ''])[1]?.length ?? 0
+  let out: string
+  if (/%/.test(code)) {
+    out = (v * 100).toFixed(dec) + '%'
+  } else {
+    out = v.toFixed(dec)
+  }
+  // 千分位
+  if (/#,/.test(code) || /,/.test(code)) {
+    const neg = out.startsWith('-')
+    const [ip, dp] = out.replace('-', '').split('.')
+    out = ip.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (dp ? '.' + dp : '')
+    if (neg) out = '-' + out
+  }
+  return out
+}
+
+/** 漂亮刻度：覆盖 [min,max] 的 ~count 个等步长值。
+ *  round62：axis.majorUnit 固定步长；axis.min/max 固定域；logBase 对数刻度。 */
+function niceTicks(min: number, max: number, count = 5, axis?: AxisConfig): number[] {
   if (!isFinite(min) || !isFinite(max)) return [0, 1]
   if (min === max) { max = min + 1 }
-  const span = max - min
-  const step0 = span / count
+  const lo = axis?.min != null ? axis.min : min
+  const hi = axis?.max != null ? axis.max : max
+  // 对数刻度：整数幂次刻度
+  if (axis?.logBase != null && axis.logBase > 1) {
+    const b = axis.logBase
+    const out: number[] = []
+    for (let e = Math.floor(Math.log10(lo) / Math.log10(b) + 1e-9); Math.pow(b, e) <= hi + 1e-9; e++) {
+      out.push(Math.pow(b, e))
+    }
+    return out.length ? out : [1, 10]
+  }
+  // 固定主刻度单位：起点对齐 lo（含 lo 本身），步长 = majorUnit
+  if (axis?.majorUnit != null && axis.majorUnit > 0) {
+    const step = axis.majorUnit
+    const out: number[] = []
+    const start = Math.ceil((lo - 1e-9) / step) * step
+    for (let v = start; v <= hi + step * 1e-3; v += step) out.push(Math.abs(v) < step * 1e-6 ? 0 : v)
+    return out.length ? out : [lo, hi]
+  }
+  // 自动刻度：漂亮步长
+  const step0 = (hi - lo) / count
   const mag = Math.pow(10, Math.floor(Math.log10(step0)))
   const norm = step0 / mag
   const step = (norm >= 5 ? 10 : norm >= 2 ? 5 : norm >= 1 ? 2 : 1) * mag
-  const start = Math.floor(min / step + 1e-9) * step
+  const start = Math.floor(lo / step + 1e-9) * step
   const out: number[] = []
-  for (let v = start; v <= max + step * 1e-3; v += step) out.push(Math.abs(v) < step * 1e-6 ? 0 : v)
+  for (let v = start; v <= hi + step * 1e-3; v += step) out.push(Math.abs(v) < step * 1e-6 ? 0 : v)
   return out
 }
 
@@ -105,6 +145,9 @@ const ChartRenderer: React.FC<{ spec: ChartSpec; w: number; h: number }> = ({ sp
   const horizontal = spec.type.startsWith('bar')
   const lineish = spec.type === 'line' || spec.type === 'lineMarker'
   const scatter = spec.type === 'scatter'
+  // round62 轴配置（值轴 = 数值；类别轴仅标题/刻度线/反转）
+  const vAx = spec.valAxis
+  const cAx = spec.catAxis
 
   let domainMin = 0, domainMax = 1
   if (stacked) {
@@ -129,8 +172,23 @@ const ChartRenderer: React.FC<{ spec: ChartSpec; w: number; h: number }> = ({ sp
     if (mn === mx) mx = mn + 1
     domainMin = mn; domainMax = mx
   }
-  const ticks = niceTicks(domainMin, domainMax, 4)
-  const vMin = Math.min(domainMin, ticks[0]), vMax = Math.max(domainMax, ticks[ticks.length - 1])
+  // round62：固定域优先（axis.min/max），否则取自动刻度的覆盖域
+  let vMin: number, vMax: number, ticks: number[]
+  if (vAx.min != null || vAx.max != null) {
+    vMin = vAx.min != null ? vAx.min : Math.min(domainMin, 0)
+    vMax = vAx.max != null ? vAx.max : domainMax + Math.max(1, (domainMax - Math.min(domainMin, 0)) * 0.1)
+    if (vMax <= vMin) vMax = vMin + 1
+    ticks = niceTicks(vMin, vMax, 4, vAx)
+    if (!ticks.length) ticks = [vMin, vMax]
+    if (ticks[0] > vMin) ticks.unshift(vMin)
+    if (ticks[ticks.length - 1] < vMax) ticks.push(vMax)
+  } else {
+    ticks = niceTicks(domainMin, domainMax, 4, vAx)
+    vMin = Math.min(domainMin, ticks[0])
+    vMax = Math.max(domainMax, ticks[ticks.length - 1])
+  }
+  // 反转轴（Excel「逆序类别/值」）
+  const vReversed = vAx.reverse
   const vSpan = vMax - vMin || 1
 
   // 散点 x 域（类别可解析为数值则用数值，否则用序号）
@@ -149,8 +207,11 @@ const ChartRenderer: React.FC<{ spec: ChartSpec; w: number; h: number }> = ({ sp
   }
   const xTicks = scatter ? niceTicks(xMin, xMax, 4) : []
 
-  // 值 → 像素
-  const valPx = (v: number) => horizontal ? plotX + ((v - vMin) / vSpan) * plotW : plotBottom - ((v - vMin) / vSpan) * plotH
+  // 值 → 像素（round62：reverse 翻转方向）
+  const valPx = (v: number) => {
+    const f = vReversed ? 1 - (v - vMin) / vSpan : (v - vMin) / vSpan
+    return horizontal ? plotX + f * plotW : plotBottom - f * plotH
+  }
   const xPx = (i: number) => scatter ? plotX + ((catNum(cats[i] ?? String(i), i) - xMin) / (xMax - xMin || 1)) * plotW
     : horizontal ? plotX : plotX + ((i + 0.5) / nCats) * plotW
   const catPx = (i: number) => horizontal ? plotY + ((i + 0.5) / nCats) * plotH : plotBottom - ((i + 0.5) / nCats) * plotH
@@ -257,48 +318,137 @@ const ChartRenderer: React.FC<{ spec: ChartSpec; w: number; h: number }> = ({ sp
     }
   })
 
-  // ---------- 轴与网格 ----------
+  // ---------- 轴与网格（round62：全属性渲染） ----------
   const axes: React.ReactNode[] = []
+  // 网格线（数值轴总开关 spec.gridlines；样式取 vAx.lineColor/lineWidth）
+  const gridStroke = vAx.lineColor || GRID
+  const gridW = vAx.lineWidth ? Math.max(0.5, vAx.lineWidth) : 1
   if (spec.gridlines) {
     ticks.forEach((t, i) => {
       const p = valPx(t)
       axes.push(horizontal
-        ? <line key={`g${i}`} x1={p} y1={plotY} x2={p} y2={plotBottom} stroke={GRID} />
-        : <line key={`g${i}`} x1={plotX} y1={p} x2={plotX + plotW} y2={p} stroke={GRID} />)
+        ? <line key={`g${i}`} x1={p} y1={plotY} x2={p} y2={plotBottom} stroke={gridStroke} strokeWidth={gridW} />
+        : <line key={`g${i}`} x1={plotX} y1={p} x2={plotX + plotW} y2={p} stroke={gridStroke} strokeWidth={gridW} />)
     })
   }
-  ticks.forEach((t, i) => {
-    const label = pct ? `${Math.round(t * 100)}%` : fmtNum(t)
-    const p = valPx(t)
-    axes.push(horizontal
-      ? <text key={`t${i}`} x={p} y={plotBottom + 14} fontSize={9.5} fill={AXIS} textAnchor="middle">{label}</text>
-      : <text key={`t${i}`} x={plotX - 5} y={p + 3} fontSize={9.5} fill={AXIS} textAnchor="end">{label}</text>)
-  })
-  // 轴线
-  axes.push(<line key="ax" x1={plotX} y1={plotBottom} x2={plotX + plotW} y2={plotBottom} stroke={AXIS} strokeWidth={1} />)
-  axes.push(<line key="ay" x1={plotX} y1={plotY} x2={plotX} y2={plotBottom} stroke={AXIS} strokeWidth={1} />)
-  // 类别标签（散点图用 x 数值刻度）
-  if (scatter) {
-    xTicks.forEach((t, i) => {
-      const p = plotX + ((t - xMin) / (xMax - xMin || 1)) * plotW
-      axes.push(<text key={`x${i}`} x={p} y={plotBottom + 14} fontSize={9.5} fill={AXIS} textAnchor="middle">{fmtNum(t)}</text>)
-    })
-  } else {
-    const step = Math.max(1, Math.ceil(nCats / Math.max(2, Math.floor((horizontal ? plotH : plotW) / 34))))
-    for (let ci = 0; ci < nCats; ci += step) {
-      const label = cats[ci] ?? String(ci + 1)
-      const p = catPx(ci)
+  // 值刻度标签（数字格式 vAx.numFmt；tickLabelPos=none 隐藏；high 贴绘图区顶端/右缘）
+  const vShowLabels = vAx.tickLabelPos !== 'none'
+  if (vShowLabels) {
+    ticks.forEach((t, i) => {
+      const label = pct ? `${Math.round(t * 100)}%` : fmtByCode(t, vAx.numFmt)
+      const p = valPx(t)
+      const high = vAx.tickLabelPos === 'high'
       axes.push(horizontal
-        ? <text key={`c${ci}`} x={plotX - 5} y={p + 3} fontSize={9.5} fill={AXIS} textAnchor="end">{label}</text>
-        : <text key={`c${ci}`} x={plotX + ((ci + 0.5) / nCats) * plotW} y={plotBottom + 14} fontSize={9.5} fill={AXIS} textAnchor="middle">{label}</text>)
+        ? <text key={`t${i}`} x={p} y={high ? plotY - 3 : plotBottom + 14} fontSize={9.5} fill={AXIS} textAnchor="middle">{label}</text>
+        : <text key={`t${i}`} x={high ? plotX + plotW + 5 : plotX - 5} y={p + 3} fontSize={9.5} fill={AXIS} textAnchor={high ? 'start' : 'end'}>{label}</text>)
+    })
+  }
+  // 轴线（颜色/宽度可定制；tickLabelPos=none 视为隐藏整轴）
+  const axStroke = vAx.lineColor || AXIS
+  const axW = vAx.lineWidth ? Math.max(0.75, vAx.lineWidth) : 1
+  if (vAx.tickLabelPos !== 'none') {
+    axes.push(<line key="ax" x1={plotX} y1={plotBottom} x2={plotX + plotW} y2={plotBottom} stroke={axStroke} strokeWidth={axW} />)
+    axes.push(<line key="ay" x1={plotX} y1={plotY} x2={plotX} y2={plotBottom} stroke={axStroke} strokeWidth={axW} />)
+    // 值轴主要刻度线（outside 向外/inside 向内/cross 两向；horizontal 时竖直方向）
+    const vTick = vAx.majorTick || 'outside'
+    if (vTick !== 'none') {
+      ticks.forEach(t => {
+        const p = valPx(t)
+        const len = 4
+        if (horizontal) {
+          const y2v = vTick === 'inside' ? p - len : vTick === 'cross' ? p - len : p + len
+          const y1v = vTick === 'inside' ? p : vTick === 'cross' ? p + len : p
+          axes.push(<line key={`vt${t}`} x1={plotX} y1={y1v} x2={plotX} y2={y2v} stroke={axStroke} strokeWidth={1} />)
+        } else {
+          const x2v = vTick === 'inside' ? plotX + len : vTick === 'cross' ? plotX + len : plotX - len
+          const x1v = vTick === 'inside' ? plotX : vTick === 'cross' ? plotX - len : plotX
+          axes.push(<line key={`vt${t}`} x1={x1v} y1={p} x2={x2v} y2={p} stroke={axStroke} strokeWidth={1} />)
+        }
+      })
+    }
+    // 值轴次要刻度线（主刻度间按 minorUnit 插入）
+    if (vAx.minorUnit != null && vAx.minorUnit > 0 && vAx.majorUnit != null && vAx.majorUnit > vAx.minorUnit) {
+      const n = Math.floor(vAx.majorUnit / vAx.minorUnit)
+      for (let t = vMin; t < vMax; t += vAx.majorUnit) {
+        for (let k = 1; k < n && t + k * vAx.minorUnit < vMax; k++) {
+          const p = valPx(t + k * vAx.minorUnit)
+          const len = 2.5
+          if (horizontal) {
+            axes.push(<line key={`vm${t}.${k}`} x1={plotX} y1={p} x2={plotX} y2={p + len} stroke={axStroke} strokeWidth={1} />)
+          } else {
+            axes.push(<line key={`vm${t}.${k}`} x1={plotX - len} y1={p} x2={plotX} y2={p} stroke={axStroke} strokeWidth={1} />)
+          }
+        }
+      }
     }
   }
+  // 类别轴（round62：标题/刻度线/标签隐藏/反转/线条样式）
+  const cShowLabels = cAx.tickLabelPos !== 'none'
+  const cAxStroke = cAx.lineColor || AXIS
+  const catReversed = cAx.reverse
+  // 反转类别：catPx 映射倒置
+  const catPxR = (i: number) => catReversed
+    ? (horizontal ? plotY + plotH - ((i + 0.5) / nCats) * plotH : plotBottom - ((i + 0.5) / nCats) * plotW)
+    : catPx(i)
+  if (cShowLabels) {
+    // 类别标签（散点图用 x 数值刻度）
+    if (scatter) {
+      const xFmt = (t: number) => fmtByCode(t, cAx.numFmt)
+      const xr = (t: number) => catReversed ? plotX + plotW - ((t - xMin) / (xMax - xMin || 1)) * plotW : plotX + ((t - xMin) / (xMax - xMin || 1)) * plotW
+      xTicks.forEach((t, i) => {
+        axes.push(<text key={`x${i}`} x={xr(t)} y={plotBottom + 14} fontSize={9.5} fill={AXIS} textAnchor="middle">{xFmt(t)}</text>)
+      })
+    } else {
+      const step = Math.max(1, Math.ceil(nCats / Math.max(2, Math.floor((horizontal ? plotH : plotW) / 34))))
+      for (let ci = 0; ci < nCats; ci += step) {
+        const label = cats[ci] ?? String(ci + 1)
+        const p = catPxR(ci)
+        axes.push(horizontal
+          ? <text key={`c${ci}`} x={plotX - 5} y={p + 3} fontSize={9.5} fill={AXIS} textAnchor="end">{label}</text>
+          : <text key={`c${ci}`} x={p} y={plotBottom + 14} fontSize={9.5} fill={AXIS} textAnchor="middle">{label}</text>)
+      }
+    }
+  }
+  // 类别轴刻度线（每个类别一记；horizontal 时为水平短线）
+  if (cAx.tickLabelPos !== 'none') {
+    for (let ci = 0; ci < nCats; ci++) {
+      const p = catPxR(ci)
+      const len = 4
+      if (cAx.majorTick && cAx.majorTick !== 'none') {
+        axes.push(horizontal
+          ? <line key={`ct${ci}`} x1={plotX} y1={p} x2={plotX + len} y2={p} stroke={cAxStroke} strokeWidth={1} />
+          : <line key={`ct${ci}`} x1={p} y1={plotBottom} x2={p} y2={plotBottom + len} stroke={cAxStroke} strokeWidth={1} />)
+      }
+    }
+    if (cAx.majorGridlines) {
+      for (let ci = 0; ci < nCats; ci++) {
+        const p = catPxR(ci)
+        axes.push(horizontal
+          ? <line key={`cg${ci}`} x1={plotX} y1={p} x2={plotX + plotW} y2={p} stroke={cAx.lineColor || GRID} strokeWidth={cAx.lineWidth || 1} />
+          : <line key={`cg${ci}`} x1={p} y1={plotY} x2={p} y2={plotBottom} stroke={cAx.lineColor || GRID} strokeWidth={cAx.lineWidth || 1} />)
+      }
+    }
+  }
+
+  // 轴标题（round62：水平方向的轴标题横排底部；垂直方向旋转 -90°）
+  const axisTitleEl = (text: string, horiz: boolean) => {
+    if (!text) return null
+    return horiz
+      ? <text x={plotX + plotW / 2} y={H - 6} fontSize={11} fill={TEXT} textAnchor="middle">{text}</text>
+      : <text x={12} y={plotY + plotH / 2} fontSize={11} fill={TEXT} textAnchor="middle" transform={`rotate(-90 12 ${plotY + plotH / 2})`}>{text}</text>
+  }
+  // 值轴标题：垂直图（值轴在左）旋转；horizontal 条形图（值轴在下）横排
+  const valTitle = vAx.title ? axisTitleEl(vAx.title, horizontal) : null
+  // 类别轴标题：垂直图（类别轴在下）横排；horizontal 条形图（类别轴在左）旋转
+  const catTitle = cAx.title ? axisTitleEl(cAx.title, !horizontal) : null
 
   return (
     <svg width={W} height={H} data-chart-id={spec.id} style={{ display: 'block', background: '#fff', border: '1px solid #d9d9d9' }}>
       {hasTitle && <text x={W / 2} y={15} fontSize={13} fontWeight={600} fill="#333" textAnchor="middle">{spec.title}</text>}
       {axes}
       {renderers}
+      {valTitle}
+      {catTitle}
       {showLegend && <Legend spec={spec} series={series} serColor={serColor} W={W} H={H} padT={padT} />}
     </svg>
   )

@@ -127,16 +127,19 @@ func buildChartXML(cj *chartJSON) string {
 		}
 		fmt.Fprintf(&b, `<c:axId val="%d"/><c:axId val="%d"/></c:barChart>`, catAxID, valAxID)
 	}
-	// 坐标轴（饼/环无轴）
+	// 坐标轴（饼/环无轴；round62：全属性轴配置 catAxis/valAxis）
 	if cj.Type != "pie" && cj.Type != "doughnut" {
 		barDir := cj.Type == "bar" || cj.Type == "barStacked" || cj.Type == "barStacked100"
 		if cj.Type == "scatter" {
-			writeValAxis(&b, catAxID, "b", false)
-			writeValAxis(&b, valAxID, "l", cj.Gridlines)
+			// 散点：x/y 都是数值轴。x 轴配置存 CatAxis（编辑语义按"水平轴"），
+			// 但写出按 valAx（含 min/max/unit）
+			axX := cj.CatAxis
+			writeValAxisFull(&b, catAxID, "b", axX)
+			writeValAxis(&b, valAxID, "l", cj.ValAxis, cj.Gridlines)
 		} else {
 			// 类别轴：条形图在左，其余在下
-			writeCatAxis(&b, barDir)
-			writeValAxis(&b, valAxID, axisPos(barDir), cj.Gridlines)
+			writeCatAxis(&b, cj.CatAxis, barDir)
+			writeValAxis(&b, valAxID, axisPos(barDir), cj.ValAxis, cj.Gridlines)
 		}
 	}
 	b.WriteString(`</c:plotArea>`)
@@ -160,23 +163,138 @@ func axisPos(barDir bool) string {
 	return "l"
 }
 
-// writeCatAxis 写类别轴（条形图在左，柱形图在下）。
-func writeCatAxis(b *strings.Builder, barDir bool) {
+// writeCatAxis 写类别轴（round62：全属性——标题/刻度线/标签位置/格式/线条/网格线/反转）。
+// barDir：条形图类别轴在左，柱形图在下。
+func writeCatAxis(b *strings.Builder, a chartAxisJSON, barDir bool) {
 	pos := "b"
 	if barDir {
 		pos = "l"
 	}
-	fmt.Fprintf(b, `<c:catAx><c:axId val="%d"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="%s"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="%d"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>`,
-		catAxID, pos, valAxID)
+	writeAxisCommon(b, catAxID, pos, valAxID, a, true, false)
 }
 
-// writeValAxis 写数值轴（gridlines 控制主网格线）。
-func writeValAxis(b *strings.Builder, id int, pos string, gridlines bool) {
-	fmt.Fprintf(b, `<c:valAx><c:axId val="%d"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="%s"/>`, id, pos)
-	if gridlines {
-		b.WriteString(`<c:majorGridlines/>`)
+// writeValAxis 写数值轴（round62：全属性 + min/max/单位/对数/反转）。
+func writeValAxis(b *strings.Builder, id int, pos string, a chartAxisJSON, gridlines bool) {
+	writeAxisCommon(b, id, pos, catAxID, a, false, gridlines)
+}
+
+// writeValAxisFull 散点 x 轴：valAx XML，crossAx 指向 y 轴（valAxID），
+// 网格线由 a.MajorGridlines 自带（不经 round61 总开关）。
+func writeValAxisFull(b *strings.Builder, id int, pos string, a chartAxisJSON) {
+	writeAxisCommon(b, id, pos, valAxID, a, false, a.MajorGridlines)
+}
+
+// writeAxisCommon 写一根轴的完整 XML（类别轴补 lblAlgn/lblOffset/auto）。
+// gridlines 仅对 valAx 生效（类别轴网格线走 a.MajorGridlines）。
+func writeAxisCommon(b *strings.Builder, id int, pos string, crossAx int, a chartAxisJSON, isCat bool, gridlines bool) {
+	tag := "valAx"
+	if isCat {
+		tag = "catAx"
 	}
-	fmt.Fprintf(b, `<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="%d"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>`, catAxID)
+	fmt.Fprintf(b, `<c:%s><c:axId val="%d"/>`, tag, id)
+
+	// scaling：min/max/orientation/logBase（类别轴只写 orientation）
+	fmt.Fprintf(b, `<c:scaling>`)
+	if !isCat {
+		if a.Min != nil {
+			fmt.Fprintf(b, `<c:min val="%s"/>`, formatChartNum(*a.Min))
+		}
+		if a.Max != nil {
+			fmt.Fprintf(b, `<c:max val="%s"/>`, formatChartNum(*a.Max))
+		}
+		if a.LogBase != nil && *a.LogBase > 1 && *a.LogBase <= 1000 {
+			fmt.Fprintf(b, `<c:logBase val="%s"/>`, formatChartNum(*a.LogBase))
+		}
+	}
+	orient := "minMax"
+	if a.Reverse {
+		orient = "maxMin"
+	}
+	fmt.Fprintf(b, `<c:orientation val="%s"/></c:scaling>`, orient)
+
+	// delete：轴标签 none = 整轴隐藏（Excel「无坐标轴」）
+	del := 0
+	if a.TickLabelPos == "none" {
+		del = 1
+	}
+	fmt.Fprintf(b, `<c:delete val="%d"/><c:axPos val="%s"/>`, del, pos)
+
+	// 主网格线（CT 序列：axPos → majorGridlines → minorGridlines → title → numFmt；
+	// valAx 侧用 gridlines 总开关兼容 round61，catAx 用 a.MajorGridlines）
+	if isCat {
+		if a.MajorGridlines {
+			writeMajorGridlines(b, a)
+		}
+	} else if gridlines {
+		writeMajorGridlines(b, a)
+	}
+
+	// 轴标题（c:title，CT 序列位于 majorGridlines 之后）
+	if a.Title != "" {
+		fmt.Fprintf(b, `<c:title><c:tx><c:rich><a:bodyPr rot="0" spcFirstLastPara="1" vertOverflow="ellipsis" vert="horz" wrap="square" anchor="ctr" anchorCtr="1"/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000" b="0" i="0" u="none" strike="noStrike" kern="1200" baseline="0"/></a:pPr><a:r><a:rPr lang="zh-CN" altLang="en-US" sz="1000"/><a:t>%s</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>`, xmlEsc(a.Title))
+	}
+
+	// 数字格式
+	numFmt := a.NumFmt
+	if numFmt == "" {
+		numFmt = "General"
+	}
+	fmt.Fprintf(b, `<c:numFmt formatCode="%s" sourceLinked="0"/>`, xmlEsc(numFmt))
+
+	// 主要/次要刻度线（默认 out/none，对齐 Excel 默认）
+	majorTick := orDefault(a.MajorTick, "out")
+	minorTick := orDefault(a.MinorTick, "none")
+	fmt.Fprintf(b, `<c:majorTickMark val="%s"/><c:minorTickMark val="%s"/>`, majorTick, minorTick)
+
+	// 轴标签位置
+	tlp := orDefault(a.TickLabelPos, "nextTo")
+	fmt.Fprintf(b, `<c:tickLblPos val="%s"/>`, tlp)
+
+	// 轴线条样式（颜色/宽度）
+	fmt.Fprintf(b, `<c:spPr>%s</c:spPr>`, axisLnXML(a))
+
+	fmt.Fprintf(b, `<c:crossAx val="%d"/><c:crosses val="autoZero"/>`, crossAx)
+	if !isCat {
+		// 数值轴单位（major/minor）
+		if a.MajorUnit != nil && *a.MajorUnit > 0 {
+			fmt.Fprintf(b, `<c:majorUnit val="%s"/>`, formatChartNum(*a.MajorUnit))
+		}
+		if a.MinorUnit != nil && *a.MinorUnit > 0 {
+			fmt.Fprintf(b, `<c:minorUnit val="%s"/>`, formatChartNum(*a.MinorUnit))
+		}
+		fmt.Fprintf(b, `<c:crossBetween val="between"/>`)
+	} else {
+		fmt.Fprintf(b, `<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/>`)
+	}
+	fmt.Fprintf(b, `</c:%s>`, tag)
+}
+
+// writeMajorGridlines 写主网格线（含颜色/宽度样式）。
+func writeMajorGridlines(b *strings.Builder, a chartAxisJSON) {
+	if a.LineColor == "" && a.LineWidth == 0 {
+		b.WriteString(`<c:majorGridlines/>`)
+		return
+	}
+	fmt.Fprintf(b, `<c:majorGridlines><c:spPr>%s</c:spPr></c:majorGridlines>`, axisLnXML(a))
+}
+
+// axisLnXML 生成 a:ln 轴/网格线条 XML（颜色 + 宽度 pt→EMU）。
+func axisLnXML(a chartAxisJSON) string {
+	w := 9525 // 默认 0.75pt
+	if a.LineWidth > 0 {
+		w = a.LineWidth * 12700
+	}
+	if a.LineColor != "" {
+		return fmt.Sprintf(`<a:ln w="%d"><a:solidFill><a:srgbClr val="%s"/></a:solidFill></a:ln>`, w, hex6(a.LineColor))
+	}
+	return fmt.Sprintf(`<a:ln w="%d"/>`, w)
+}
+
+func orDefault(v, d string) string {
+	if v == "" {
+		return d
+	}
+	return v
 }
 
 // writeSeries 写全部系列（kind 决定 ser 内部结构：bar/line/area/pie/scatter）。

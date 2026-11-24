@@ -52,6 +52,39 @@ type chartJSON struct {
 	Edited    bool   `json:"edited,omitempty"`
 	// HoleSize：环形图内径百分比（0-90，默认 50）
 	HoleSize int `json:"holeSize,omitempty"`
+	// round62：坐标轴全面编辑（对齐 Excel「设置坐标轴格式」）。
+	// CatAxis/ValAxis 各自独立；文本空/nil = 自动（Excel 默认）。
+	CatAxis chartAxisJSON `json:"catAxis,omitempty"`
+	ValAxis chartAxisJSON `json:"valAxis,omitempty"`
+}
+
+// chartAxisJSON：一根坐标轴的可编辑属性（类别轴/数值轴通用）。
+type chartAxisJSON struct {
+	// 轴标题（"" = 无；"auto" 不使用——Excel 语义就是有/无 + 文本）
+	Title string `json:"title,omitempty"`
+	// 数值轴刻度：min/max（nil = 自动）。类别轴忽略。
+	Min *float64 `json:"min,omitempty"`
+	Max *float64 `json:"max,omitempty"`
+	// 主/次刻度单位（nil = 自动；0 = 隐藏该级刻度线）
+	MajorUnit *float64 `json:"majorUnit,omitempty"`
+	MinorUnit *float64 `json:"minorUnit,omitempty"`
+	// 主要刻度线类型：none/inside/outside/cross
+	MajorTick string `json:"majorTick,omitempty"`
+	// 次要刻度线类型
+	MinorTick string `json:"minorTick,omitempty"`
+	// 轴标签位置：nextTo/high/low/none
+	TickLabelPos string `json:"tickLabelPos,omitempty"`
+	// 数字格式（"General"、"0.0"、"#,##0"、"0%"…；空 = General）
+	NumFmt string `json:"numFmt,omitempty"`
+	// 反转轴方向（scaling orientation = maxMin）
+	Reverse bool `json:"reverse,omitempty"`
+	// 对数刻度基数（nil = 关闭；典型 10）
+	LogBase *float64 `json:"logBase,omitempty"`
+	// 轴线条颜色（#RRGGBB；空 = 自动）+ 宽度（EMU→pt 由前端写 pt，Go 侧原样）
+	LineColor string `json:"lineColor,omitempty"`
+	LineWidth int     `json:"lineWidth,omitempty"` // pt（0 = 默认 1pt 上下）
+	// 主网格线开关（round61 已有 Gridlines 总开关，round62 存细化样式）
+	MajorGridlines bool `json:"majorGridlines,omitempty"`
 }
 
 // chartRelType 是 drawing 关系里的图表类型 URI。
@@ -297,13 +330,27 @@ func parseChartXML(data []byte, resolve func(string) []string) *chartJSON {
 		}
 	}
 
-	// ---- 坐标轴：网格线（默认主轴网格线开） ----
+	// ---- 坐标轴：round62 全面解析（类别轴 + 数值轴；散点图 x 轴也是 valAx） ----
+	// 兼容 round61 的 Gridlines 总开关：取第一根未删除轴的 majorGridlines。
 	for _, ax := range pa.children("valAx") {
 		if ax.kid("delete") != nil && parseBool(ax.kid("delete").attr("val")) {
 			continue
 		}
 		cj.Gridlines = ax.kid("majorGridlines") != nil
 		break
+	}
+	// 数值轴 = 第一根 valAx（y 轴）；散点图第二根 valAx 是 x 轴（round62 仍建模为 catAxis 位置）
+	valAxes := pa.children("valAx")
+	if len(valAxes) > 0 {
+		cj.ValAxis = parseAxis(valAxes[0])
+	}
+	// 类别轴 = catAx；散点图没有 catAx，x 轴取第二根 valAx
+	catAxes := pa.children("catAx")
+	if len(catAxes) > 0 {
+		cj.CatAxis = parseAxis(catAxes[0])
+	} else if len(valAxes) > 1 && cj.Type == "scatter" {
+		// 散点 x 轴：数值轴但按类别轴编辑语义（轴标题/刻度线/格式）
+		cj.CatAxis = parseAxis(valAxes[1])
 	}
 
 	cj.ChartRaw = string(data)
@@ -420,6 +467,96 @@ func parseFloats(vals []string) []float64 {
 	return out
 }
 
+// parseAxis 把一根 c:catAx/c:valAx 解析为可编辑轴属性（round62）。
+func parseAxis(ax *xmlNode) chartAxisJSON {
+	var a chartAxisJSON
+	if ax == nil {
+		return a
+	}
+	// 轴标题：c:title 富文本
+	if title := ax.kid("title"); title != nil {
+		a.Title = titleText(title)
+	}
+	// scaling：min/max/orientation/logBase
+	if sc := ax.kid("scaling"); sc != nil {
+		if m := sc.kid("min"); m != nil {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(m.attr("val")), 64); err == nil {
+				a.Min = &v
+			}
+		}
+		if m := sc.kid("max"); m != nil {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(m.attr("val")), 64); err == nil {
+				a.Max = &v
+			}
+		}
+		if o := sc.kid("orientation"); o != nil && o.attr("val") == "maxMin" {
+			a.Reverse = true
+		}
+		if lb := sc.kid("logBase"); lb != nil {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(lb.attr("val")), 64); err == nil && v > 0 {
+				a.LogBase = &v
+			}
+		}
+	}
+	if ax.kid("delete") != nil && parseBool(ax.kid("delete").attr("val")) {
+		a.TickLabelPos = "none" // delete=1 → 轴隐藏（映射为标签 none + 后端写 delete）
+	}
+	// 主要/次要刻度线类型
+	if m := ax.kid("majorTickMark"); m != nil {
+		a.MajorTick = m.attr("val")
+	}
+	if m := ax.kid("minorTickMark"); m != nil {
+		a.MinorTick = m.attr("val")
+	}
+	// 轴标签位置
+	if m := ax.kid("tickLblPos"); m != nil {
+		v := m.attr("val")
+		if v != "" && v != "nextTo" {
+			a.TickLabelPos = v
+		}
+	}
+	// 数字格式
+	if nf := ax.kid("numFmt"); nf != nil && !parseBool(nf.attr("sourceLinked")) {
+		a.NumFmt = nf.attr("formatCode")
+	}
+	// 主刻度单位（valAx 专用）
+	if u := ax.kid("majorUnit"); u != nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(u.attr("val")), 64); err == nil && v > 0 {
+			a.MajorUnit = &v
+		}
+	}
+	if u := ax.kid("minorUnit"); u != nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(u.attr("val")), 64); err == nil && v > 0 {
+			a.MinorUnit = &v
+		}
+	}
+	// 网格线开关 + 样式
+	if g := ax.kid("majorGridlines"); g != nil {
+		a.MajorGridlines = true
+		// 网格线颜色（spPr/ln/solidFill/srgbClr）
+		if ln := g.kid("spPr").kid("ln"); ln != nil {
+			if c := ln.kid("solidFill").kid("srgbClr"); c != nil {
+				a.LineColor = "#" + hex6(c.attr("val"))
+			}
+			if w, err := strconv.ParseFloat(strings.TrimSpace(ln.attr("w")), 64); err == nil {
+				a.LineWidth = int(math.Round(w / 12700)) // EMU → pt
+			}
+		}
+	}
+	// 轴线条颜色/宽度（spPr/ln）
+	if ln := ax.kid("spPr").kid("ln"); ln != nil {
+		if c := ln.kid("solidFill").kid("srgbClr"); c != nil && a.LineColor == "" {
+			a.LineColor = "#" + hex6(c.attr("val"))
+		}
+		if a.LineWidth == 0 {
+			if w, err := strconv.ParseFloat(strings.TrimSpace(ln.attr("w")), 64); err == nil {
+				a.LineWidth = int(math.Round(w / 12700))
+			}
+		}
+	}
+	return a
+}
+
 // formatChartNum 数值 → 显示字符串（去多余尾零）。
 func formatChartNum(v float64) string {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
@@ -429,16 +566,22 @@ func formatChartNum(v float64) string {
 }
 
 // refText 读取 strRef 下的 f（引用）或 strCache（首个缓存值）。
+// 全程 nil 防护：f/pt/v 元素缺失时返回空（Excel 侧引用与缓存都可选）。
 func refText(ref *xmlNode, want string) string {
 	if ref == nil {
 		return ""
 	}
 	if want == "f" {
-		return strings.TrimSpace(ref.kid("f").text)
+		if f := ref.kid("f"); f != nil {
+			return strings.TrimSpace(f.text)
+		}
+		return ""
 	}
 	if cache := ref.kid("strCache"); cache != nil {
 		for _, pt := range cache.children("pt") {
-			return strings.TrimSpace(pt.kid("v").text)
+			if v := pt.kid("v"); v != nil {
+				return strings.TrimSpace(v.text)
+			}
 		}
 	}
 	return ""
@@ -453,7 +596,10 @@ func cachedNums(valNode *xmlNode) ([]float64, string) {
 	if ref == nil {
 		return nil, ""
 	}
-	f := strings.TrimSpace(ref.kid("f").text)
+	var f string
+	if node := ref.kid("f"); node != nil {
+		f = strings.TrimSpace(node.text)
+	}
 	if cache := ref.kid("numCache"); cache != nil {
 		var out []float64
 		for _, pt := range cache.children("pt") {
@@ -474,21 +620,31 @@ func cachedCats(cat *xmlNode) ([]string, string) {
 		return nil, ""
 	}
 	if ref := cat.kid("strRef"); ref != nil {
-		f := strings.TrimSpace(ref.kid("f").text)
+		var f string
+		if node := ref.kid("f"); node != nil {
+			f = strings.TrimSpace(node.text)
+		}
 		var out []string
 		if cache := ref.kid("strCache"); cache != nil {
 			for _, pt := range cache.children("pt") {
-				out = append(out, strings.TrimSpace(pt.kid("v").text))
+				if v := pt.kid("v"); v != nil {
+					out = append(out, strings.TrimSpace(v.text))
+				}
 			}
 		}
 		return out, f
 	}
 	if ref := cat.kid("numRef"); ref != nil {
-		f := strings.TrimSpace(ref.kid("f").text)
+		var f string
+		if node := ref.kid("f"); node != nil {
+			f = strings.TrimSpace(node.text)
+		}
 		var out []string
 		if cache := ref.kid("numCache"); cache != nil {
 			for _, pt := range cache.children("pt") {
-				out = append(out, strings.TrimSpace(pt.kid("v").text))
+				if v := pt.kid("v"); v != nil {
+					out = append(out, strings.TrimSpace(v.text))
+				}
 			}
 		}
 		return out, f

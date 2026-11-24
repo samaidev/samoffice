@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n'
-import { ChartSpec, ChartType, CHART_TYPES, isCartesian } from './charts'
+import { ChartSpec, ChartType, CHART_TYPES, isCartesian, AxisConfig } from './charts'
 
 export type ChartCommand =
   | `type:${string}`
@@ -19,6 +19,8 @@ export type ChartCommand =
   | 'arrange:front' | 'arrange:back' | 'arrange:forward' | 'arrange:backward'
   | `align:${string}`
   | 'delete'
+  /** round62：轴属性编辑（axis = 'cat' | 'val'；value 为 JSON 编码的补丁值） */
+  | `axis:${'cat' | 'val'}:${'title' | 'min' | 'max' | 'majorUnit' | 'minorUnit' | 'majorTick' | 'minorTick' | 'tickLabelPos' | 'numFmt' | 'reverse' | 'logBase' | 'lineColor' | 'lineWidth' | 'majorGridlines'}:${string}`
 
 export interface ChartRibbonProps {
   charts: ChartSpec[]          // 选中的图表
@@ -48,6 +50,161 @@ const Pop: React.FC<{ label: React.ReactNode; children: (close: () => void) => R
           {children(() => setOpen(false))}
         </div>
       )}
+    </div>
+  )
+}
+
+/** round62：单个轴的编辑面板（「设置坐标轴格式」对齐 Excel）
+ *  字段：标题 / 最小-最大 / 主-次刻度单位 / 刻度线类型 / 标签位置 / 数字格式 /
+ *  逆序 / 对数 / 线条颜色-宽度 / 网格线。所有改动即时经 onCommand 回传编辑器。
+ */
+const AxisEditor: React.FC<{
+  chart: ChartSpec
+  which: 'cat' | 'val'
+  onCommand: (cmd: ChartCommand) => void
+  close: () => void
+}> = ({ chart, which, onCommand, close }) => {
+  const { tf } = useI18n()
+  const ax: AxisConfig = which === 'cat' ? chart.catAxis : chart.valAxis
+  const isVal = which === 'val'
+  const scatter = chart.type === 'scatter'
+  // 数值轴编辑仅对数值刻度有效；类别轴的 min/max/单位/对数仅散点 x 轴（数值）开放
+  const numScale = isVal || (scatter && which === 'cat')
+  type AxisField = 'title' | 'min' | 'max' | 'majorUnit' | 'minorUnit' | 'majorTick' | 'minorTick' | 'tickLabelPos' | 'numFmt' | 'reverse' | 'logBase' | 'lineColor' | 'lineWidth' | 'majorGridlines'
+  const cmd = (field: AxisField) => (value: string) =>
+    onCommand(`axis:${which}:${field}:${value}` as ChartCommand)
+  const num = (v: string) => (v.trim() === '' ? 'null' : v)
+  const FLD = 'w-full flex items-center justify-between gap-2 px-3 py-1 text-xs'
+  const NUMCLS = 'w-20 rounded border border-black/15 dark:border-white/20 bg-transparent px-1.5 py-0.5 text-xs'
+  const SELCLS = 'w-28 rounded border border-black/15 dark:border-white/20 bg-transparent px-1.5 py-0.5 text-xs'
+
+  return (
+    <div className="w-[300px] pb-1" data-testid={`axis-editor-${which}`}>
+      <div className="px-3 pt-1.5 pb-1 text-[11px] font-medium border-b mb-1" style={{ borderColor: 'var(--color-border)' }}>
+        {which === 'cat' ? tf('sheet.chartAxisCat', '坐标轴：水平（类别）轴') : tf('sheet.chartAxisVal', '坐标轴：垂直（值）轴')}
+      </div>
+      {/* 轴标题 */}
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisTitle', '轴标题')}</span>
+        <input className={NUMCLS} style={{ width: 150 }} defaultValue={ax.title} placeholder={tf('sheet.chartAxisTitlePh', '无')}
+          data-testid={`ax-${which}-title`}
+          onBlur={e => { if (e.target.value !== ax.title) cmd('title')(e.target.value) }} />
+      </div>
+      {numScale && (
+        <div className={FLD}>
+          <span className="whitespace-nowrap">{tf('sheet.chartAxisMin', '最小值')}</span>
+          <input className={NUMCLS} defaultValue={ax.min ?? ''} placeholder="自动" data-testid={`ax-${which}-min`}
+            onBlur={e => cmd('min')(num(e.target.value))} />
+        </div>
+      )}
+      {numScale && (
+        <div className={FLD}>
+          <span className="whitespace-nowrap">{tf('sheet.chartAxisMax', '最大值')}</span>
+          <input className={NUMCLS} defaultValue={ax.max ?? ''} placeholder="自动" data-testid={`ax-${which}-max`}
+            onBlur={e => cmd('max')(num(e.target.value))} />
+        </div>
+      )}
+      {numScale && (
+        <div className={FLD}>
+          <span className="whitespace-nowrap">{tf('sheet.chartAxisMajorUnit', '主要刻度单位')}</span>
+          <input className={NUMCLS} defaultValue={ax.majorUnit ?? ''} placeholder="自动" data-testid={`ax-${which}-majorUnit`}
+            onBlur={e => cmd('majorUnit')(num(e.target.value))} />
+        </div>
+      )}
+      {numScale && (
+        <div className={FLD}>
+          <span className="whitespace-nowrap">{tf('sheet.chartAxisMinorUnit', '次要刻度单位')}</span>
+          <input className={NUMCLS} defaultValue={ax.minorUnit ?? ''} placeholder="自动" data-testid={`ax-${which}-minorUnit`}
+            onBlur={e => cmd('minorUnit')(num(e.target.value))} />
+        </div>
+      )}
+      {/* 刻度线 */}
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisMajorTick', '主要刻度线')}</span>
+        <select className={SELCLS} value={ax.majorTick || ''} data-testid={`ax-${which}-majorTick`}
+          onChange={e => cmd('majorTick')(e.target.value)}>
+          <option value="">{tf('sheet.chartAxisTickDef', '默认（外部）')}</option>
+          <option value="none">{tf('sheet.chartAxisTickNone', '无')}</option>
+          <option value="inside">{tf('sheet.chartAxisTickIn', '内部')}</option>
+          <option value="outside">{tf('sheet.chartAxisTickOut', '外部')}</option>
+          <option value="cross">{tf('sheet.chartAxisTickCross', '交叉')}</option>
+        </select>
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisMinorTick', '次要刻度线')}</span>
+        <select className={SELCLS} value={ax.minorTick || ''} data-testid={`ax-${which}-minorTick`}
+          onChange={e => cmd('minorTick')(e.target.value)}>
+          <option value="">{tf('sheet.chartAxisTickNone', '无')}</option>
+          <option value="inside">{tf('sheet.chartAxisTickIn', '内部')}</option>
+          <option value="outside">{tf('sheet.chartAxisTickOut', '外部')}</option>
+          <option value="cross">{tf('sheet.chartAxisTickCross', '交叉')}</option>
+        </select>
+      </div>
+      {/* 轴标签位置 */}
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisLblPos', '轴标签')}</span>
+        <select className={SELCLS} value={ax.tickLabelPos || ''} data-testid={`ax-${which}-lblPos`}
+          onChange={e => cmd('tickLabelPos')(e.target.value)}>
+          <option value="">{tf('sheet.chartAxisLblNext', '轴旁')}</option>
+          <option value="high">{tf('sheet.chartAxisLblHigh', '高')}</option>
+          <option value="low">{tf('sheet.chartAxisLblLow', '低')}</option>
+          <option value="none">{tf('sheet.chartAxisLblNone', '无')}</option>
+        </select>
+      </div>
+      {/* 数字格式 */}
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisNumFmt', '数字格式')}</span>
+        <select className={SELCLS} value={ax.numFmt || ''} data-testid={`ax-${which}-numFmt`}
+          onChange={e => cmd('numFmt')(e.target.value)}>
+          <option value="">General</option>
+          <option value="0">0</option>
+          <option value="0.0">0.0</option>
+          <option value="0.00">0.00</option>
+          <option value="#,##0">#,##0</option>
+          <option value="#,##0.0">#,##0.0</option>
+          <option value="0%">0%</option>
+          <option value="0.0%">0.0%</option>
+        </select>
+      </div>
+      {numScale && (
+        <div className={FLD}>
+          <span className="whitespace-nowrap">{tf('sheet.chartAxisLog', '对数刻度')}</span>
+          <div className="flex items-center gap-1">
+            <input type="checkbox" checked={ax.logBase != null} data-testid={`ax-${which}-log`}
+              onChange={e => cmd('logBase')(e.target.checked ? '10' : 'null')} />
+            {ax.logBase != null && <input className={NUMCLS} style={{ width: 46 }} defaultValue={ax.logBase}
+              onBlur={e => cmd('logBase')(e.target.value || '10')} />}
+          </div>
+        </div>
+      )}
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisReverse', '逆序类别/值')}</span>
+        <input type="checkbox" checked={ax.reverse} data-testid={`ax-${which}-reverse`}
+          onChange={e => cmd('reverse')(e.target.checked ? '1' : '0')} />
+      </div>
+      {/* 线条样式 */}
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisLineColor', '线条颜色')}</span>
+        <input type="color" className="h-6 w-10 rounded border border-black/15" value={ax.lineColor || '#8c8c8c'}
+          data-testid={`ax-${which}-lineColor`}
+          onChange={e => cmd('lineColor')(e.target.value)} />
+      </div>
+      <div className={FLD}>
+        <span className="whitespace-nowrap">{tf('sheet.chartAxisLineWidth', '线条宽度 (pt)')}</span>
+        <input className={NUMCLS} style={{ width: 60 }} defaultValue={ax.lineWidth || ''} placeholder="默认" data-testid={`ax-${which}-lineWidth`}
+          onBlur={e => cmd('lineWidth')(e.target.value.trim() === '' ? '0' : e.target.value)} />
+      </div>
+      {/* 类别轴网格线（数值轴走总开关） */}
+      {!isVal && (
+        <div className={FLD}>
+          <span className="whitespace-nowrap">{tf('sheet.chartAxisCatGrid', '类别网格线')}</span>
+          <input type="checkbox" checked={ax.majorGridlines} data-testid={`ax-${which}-grid`}
+            onChange={e => cmd('majorGridlines')(e.target.checked ? '1' : '0')} />
+        </div>
+      )}
+      <button className="w-full text-left px-3 py-1 text-xs opacity-70 hover:opacity-100" onClick={close}>
+        {tf('sheet.chartAxisClose', '完成')}
+      </button>
     </div>
   )
 }
@@ -127,6 +284,16 @@ const ChartRibbon: React.FC<ChartRibbonProps> = ({ charts, onCommand }) => {
             <button className={BTN} data-testid="chart-gridlines" title={tf('sheet.chartGridlines', '网格线')} onClick={() => onCommand('gridlines:toggle')}>
               <span className="text-[15px] leading-none">▦</span><span>{tf('sheet.chartGridlines', '网格线')}</span>
             </button>
+          )}
+          {isCartesian(c0.type) && (
+            <Pop label={<><span className="text-[15px] leading-none">↕</span><span>{tf('sheet.chartAxes', '坐标轴')}</span></>} wide testId="chart-menu-cat-axis">
+              {close => <AxisEditor chart={c0} which="cat" onCommand={onCommand} close={close} />}
+            </Pop>
+          )}
+          {isCartesian(c0.type) && (
+            <Pop label={<><span className="text-[15px] leading-none">↕</span><span>{tf('sheet.chartAxisValBtn', '垂直轴')}</span></>} wide testId="chart-menu-val-axis">
+              {close => <AxisEditor chart={c0} which="val" onCommand={onCommand} close={close} />}
+            </Pop>
           )}
         </div>
       </div>

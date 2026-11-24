@@ -10,7 +10,7 @@ import ChartRibbon, { ChartCommand } from './ChartRibbon'
 import {
   ChartSpec, ChartSpecJSON, ChartType, chartFromJSON, chartToJSON, defaultChart, newChartId,
   seriesFromRange, refreshChartSeries, absRefsForSeries, CHART_TYPES, chartRect, setChartRect,
-  ChartDataAccess, parseRange, parseNum,
+  ChartDataAccess, parseRange, parseNum, AxisConfig,
 } from './charts'
 import {
   SheetPicture, SheetPictureJSON, PicGeometry, picFromJSON, picToJSON, picRect, setPicRect,
@@ -852,8 +852,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       printTitleRows: sheetPrintTitles[s.id] || 0,
       // 浮动图片：完整模型（锚点/效果/裁剪/透传片段）
       images: (sheetImages[s.id] || []).map(p => picToJSON(p)).filter(p => p.base64),
-      // 浮动图表（round61）：会话内创建的图表带 rangeRef → 生成绝对引用后写出
-      charts: (sheetCharts[s.id] || []).map(c => chartToJSON(absRefsForSeries(c, chartAcc))),
+      // 浮动图表（round61/62）：带 rangeRef 的图表按 rangeRef+byRows 重建系列并生成
+      // 一致的绝对引用（修复：撤销/切行/列后 series 与 byRows 脱钩导致引用错列）
+      charts: (sheetCharts[s.id] || []).map(c => {
+        const c2 = c.rangeRef ? absRefsForSeries(refreshChartSeries(c, chartAcc), chartAcc) : c
+        return chartToJSON(c2)
+      }),
     }))
     onSheetsChange(snapshot)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2904,6 +2908,48 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if (!series.length) { alert(tf('sheet.noData', '该区域没有数值数据')); return }
       pushHistory()
       updateCharts(list => list.map(c => c.id === c0.id ? { ...c, rangeRef, series, edited: true } : c))
+      return
+    }
+    if (cmd.startsWith('axis:')) {
+      // round62：轴属性编辑 —— "axis:<cat|val>:<field>:<value>"
+      const [, which, field, value] = cmd.split(':') as [string, 'cat' | 'val', string, string]
+      if (which !== 'cat' && which !== 'val') return
+      const apply = (a: AxisConfig): AxisConfig => {
+        const num = (v: string) => (v === 'null' || v === '' ? null : (isFinite(parseFloat(v)) ? parseFloat(v) : null))
+        switch (field) {
+          case 'title': return { ...a, title: value }
+          case 'min': return { ...a, min: num(value) }
+          case 'max': return { ...a, max: num(value) }
+          case 'majorUnit': return { ...a, majorUnit: num(value) }
+          case 'minorUnit': return { ...a, minorUnit: num(value) }
+          case 'majorTick': return { ...a, majorTick: value as AxisConfig['majorTick'] }
+          case 'minorTick': return { ...a, minorTick: value as AxisConfig['minorTick'] }
+          case 'tickLabelPos': return { ...a, tickLabelPos: value as AxisConfig['tickLabelPos'] }
+          case 'numFmt': return { ...a, numFmt: value }
+          case 'reverse': return { ...a, reverse: value === '1' }
+          case 'logBase': {
+            const b = num(value)
+            return { ...a, logBase: b != null && b > 1 && b <= 1000 ? b : null }
+          }
+          case 'lineColor': return { ...a, lineColor: value }
+          case 'lineWidth': {
+            const w = num(value)
+            return { ...a, lineWidth: w != null && w > 0 && w <= 20 ? Math.round(w) : 0 }
+          }
+          case 'majorGridlines': return { ...a, majorGridlines: value === '1' }
+          default: return a
+        }
+      }
+      // 轴编辑同时把 Gridlines 总开关同步（数值轴网格线开/关与面板一致）
+      pushHistory()
+      updateCharts(list => list.map(c => {
+        if (!selPics.includes(c.id)) return c
+        const next = which === 'cat' ? { ...c, catAxis: apply(c.catAxis) } : { ...c, valAxis: apply(c.valAxis) }
+        next.edited = true
+        // 数值轴网格线样式与总开关联动（用户开 val 轴网格线时保持 spec.gridlines 同步）
+        if (which === 'val' && (field === 'majorGridlines')) next.gridlines = value === '1'
+        return next
+      }))
       return
     }
     if (cmd === 'title:toggle') { patchSelCharts({ titleOn: !c0.titleOn }); return }
