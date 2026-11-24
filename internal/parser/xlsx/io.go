@@ -73,6 +73,20 @@ type workbookJSON struct {
 	Sheets []sheetJSON `json:"sheets"`
 }
 
+// numericCellRe 匹配 Excel 会识别为数字的文本：可选负号、无前导零整数/小数、
+// 允许科学计数法（1e3）与 .5 形式；前导零（007、01）、带 % 等符号的保持文本。
+var numericCellRe = regexp.MustCompile(`^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$|^-?\.\d+([eE][+-]?\d+)?$`)
+
+// parseNumericCell 把纯数字文本解析为 float64（Excel 键入语义；超长数字防精度损失按文本处理）。
+func parseNumericCell(s string) (float64, bool) {
+	t := strings.TrimSpace(s)
+	if t == "" || len(t) > 18 || !numericCellRe.MatchString(t) {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(t, 64)
+	return v, err == nil
+}
+
 // borderRank 把 excelize 的边框线型代码映射到前端抽象的细/中/粗。
 func borderRank(style int) string {
 	switch style {
@@ -537,7 +551,14 @@ func WriteXLSXBytes(jsonStr string) ([]byte, error) {
 					}
 				}
 			} else if cj.Value != "" {
-				if err := f.SetCellValue(sheetName, ref, cj.Value); err != nil {
+				// ★ round61 保真修复：纯数字文本写真数字（此前一律写共享字符串，
+				// Excel/Calc 里被当文本 —— 不能求和、图表引用取不到数值、
+				// LibreOffice 直接不画柱形）。前导零（"007"）等 Excel 语义文本保持不变。
+				if v, ok := parseNumericCell(cj.Value); ok {
+					if err := f.SetCellValue(sheetName, ref, v); err != nil {
+						return nil, fmt.Errorf("set cell %s: %w", ref, err)
+					}
+				} else if err := f.SetCellValue(sheetName, ref, cj.Value); err != nil {
 					return nil, fmt.Errorf("set cell %s: %w", ref, err)
 				}
 			}

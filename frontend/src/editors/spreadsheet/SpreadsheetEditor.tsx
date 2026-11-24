@@ -6,6 +6,12 @@ import PictureLayer from './PictureLayer'
 import PictureRibbon, { PicCommand } from './PictureRibbon'
 import PicturePane from './PicturePane'
 import IconLibrary from './IconLibrary'
+import ChartRibbon, { ChartCommand } from './ChartRibbon'
+import {
+  ChartSpec, ChartSpecJSON, ChartType, chartFromJSON, chartToJSON, defaultChart, newChartId,
+  seriesFromRange, refreshChartSeries, absRefsForSeries, CHART_TYPES, chartRect, setChartRect,
+  ChartDataAccess, parseRange, parseNum,
+} from './charts'
 import {
   SheetPicture, SheetPictureJSON, PicGeometry, picFromJSON, picToJSON, picRect, setPicRect,
   defaultPicture, newPicId, touchPic, cropFill, cropFit, naturalRectSize, PICTURE_STYLES,
@@ -55,6 +61,8 @@ interface SheetSnapshot {
   printTitleRows?: number
   // images：浮动图片（round60 完整模型，与 io.go imageJSON 对应）
   images?: SheetPictureJSON[]
+  // charts：浮动图表（round61 完整模型，与 io.go chartJSON 对应）
+  charts?: ChartSpecJSON[]
 }
 // 快照回传类型（rows/cols 必填，另带 sheet 级元数据）
 interface SheetSnapshotOut extends SheetSnapshot { rows: number; cols: number }
@@ -68,7 +76,7 @@ interface Props {
   onSheetsChange?: (snapshot: SheetSnapshotOut[]) => void
 }
 
-type RibbonTab = 'home' | 'insert' | 'data' | 'view' | 'picture'
+type RibbonTab = 'home' | 'insert' | 'data' | 'view' | 'picture' | 'chart'
 
 function RibbonButton({ icon, label, onClick, active, disabled, title, ...rest }: any) {
   return (
@@ -465,87 +473,6 @@ function FormatCellsDialog({ sample, initToken, labels, onClose, onApply }: {
 
 // === SVG 图表渲染组件 ===
 const CHART_COLORS = ['#4f46e5', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1']
-function ChartSVG({ type, data, labels }: { type: string; data: number[]; labels: string[] }) {
-  const W = 280, H = 160, pad = 24
-  const max = Math.max(...data, 1)
-  const min = Math.min(...data, 0)
-  const range = max - min || 1
-  const n = data.length
-
-  if (type === 'bar') {
-    const bw = (W - pad * 2) / n * 0.7
-    const gap = (W - pad * 2) / n * 0.3
-    return (
-      <svg width={W} height={H} style={{ display: 'block' }}>
-        {data.map((v, i) => {
-          const bh = ((v - min) / range) * (H - pad * 2)
-          const x = pad + i * (bw + gap) + gap / 2
-          const y = H - pad - bh
-          return <g key={i}>
-            <rect x={x} y={y} width={bw} height={Math.max(bh, 1)} fill={CHART_COLORS[i % CHART_COLORS.length]} rx={2} />
-            <text x={x + bw / 2} y={H - pad + 12} fontSize={9} fill="var(--color-text-muted)" textAnchor="middle">{labels[i]}</text>
-          </g>
-        })}
-        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--color-border)" />
-      </svg>
-    )
-  }
-  if (type === 'line' || type === 'area') {
-    const points = data.map((v, i) => {
-      const x = pad + (i / (n - 1 || 1)) * (W - pad * 2)
-      const y = H - pad - ((v - min) / range) * (H - pad * 2)
-      return `${x},${y}`
-    }).join(' ')
-    return (
-      <svg width={W} height={H} style={{ display: 'block' }}>
-        {type === 'area' && <polygon points={`${pad},${H - pad} ${points} ${W - pad},${H - pad}`} fill={CHART_COLORS[0]} opacity={0.2} />}
-        <polyline points={points} fill="none" stroke={CHART_COLORS[0]} strokeWidth={2} />
-        {data.map((v, i) => {
-          const x = pad + (i / (n - 1 || 1)) * (W - pad * 2)
-          const y = H - pad - ((v - min) / range) * (H - pad * 2)
-          return <circle key={i} cx={x} cy={y} r={3} fill={CHART_COLORS[0]} />
-        })}
-        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--color-border)" />
-      </svg>
-    )
-  }
-  if (type === 'pie' || type === 'doughnut') {
-    const total = data.reduce((a, b) => a + b, 0) || 1
-    const cx = W / 2, cy = H / 2, r = 60, innerR = type === 'doughnut' ? 30 : 0
-    let angle = -Math.PI / 2
-    const slices = data.map((v, i) => {
-      const slice = (v / total) * Math.PI * 2
-      const x1 = cx + Math.cos(angle) * r, y1 = cy + Math.sin(angle) * r
-      const x2 = cx + Math.cos(angle + slice) * r, y2 = cy + Math.sin(angle + slice) * r
-      const ix1 = cx + Math.cos(angle) * innerR, iy1 = cy + Math.sin(angle) * innerR
-      const ix2 = cx + Math.cos(angle + slice) * innerR, iy2 = cy + Math.sin(angle + slice) * innerR
-      const large = slice > Math.PI ? 1 : 0
-      const d = innerR > 0
-        ? `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${innerR} ${innerR} 0 ${large} 0 ${ix1} ${iy1} Z`
-        : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
-      angle += slice
-      return <path key={i} d={d} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="white" strokeWidth={1} />
-    })
-    return <svg width={W} height={H} style={{ display: 'block' }}>{slices}</svg>
-  }
-  if (type === 'scatter') {
-    return (
-      <svg width={W} height={H} style={{ display: 'block' }}>
-        {data.map((v, i) => {
-          const x = pad + (i / (n - 1 || 1)) * (W - pad * 2)
-          const y = H - pad - ((v - min) / range) * (H - pad * 2)
-          return <circle key={i} cx={x} cy={y} r={4} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-        })}
-        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="var(--color-border)" />
-        <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke="var(--color-border)" />
-      </svg>
-    )
-  }
-  return null
-}
-
-// === 轻量公式引擎：支持数字、单元格引用(A1/$A$1)、范围(A1:B3)、四则运算、
-//     括号、函数 SUM/AVERAGE/AVG/MIN/MAX/COUNT/ROUND/ABS ===
 function colToNum(name: string): number {
   let n = 0
   for (const ch of name.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64)
@@ -774,7 +701,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const [colorMode, setColorMode] = useState<'font' | 'fill' | 'border'>('font')
   // round53（问题1）：右键菜单来源 —— cell=单元格 / col=列标头 / row=行标头 / pic=浮动图片。
   // 标头右键对齐 MS Excel：先选中整列/整行（已在选区内则保留多选），再弹对应菜单。
-  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number; kind?: 'cell' | 'col' | 'row' | 'pic'; picId?: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number; kind?: 'cell' | 'col' | 'row' | 'pic' | 'chart'; picId?: string } | null>(null)
   const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
   const [sheets, setSheets] = useState(initialSheetList)
   const activeId = sheets.find(s => s.active)?.id ?? 1
@@ -803,6 +730,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (initialSheets) initialSheets.forEach((s, i) => { if (s.freeze) init[i + 1] = s.freeze })
     return init
   })
+  // round61：浮动图表状态（声明提前——历史快照 picSnapshot 在下方引用）
+  const [sheetCharts, setSheetCharts] = useState<Record<number, ChartSpec[]>>(() => {
+    const init: Record<number, ChartSpec[]> = {}
+    if (initialSheets) initialSheets.forEach((s, i) => {
+      const list = (s.charts || []).map(c => chartFromJSON(c))
+      if (list.length) init[i + 1] = list
+    })
+    return init
+  })
   // round54：每表打印标题行数（_xlnm.Print_Titles，打印预览每页顶端重复）
   const [sheetPrintTitles, setSheetPrintTitles] = useState<Record<number, number>>(() => {
     const init: Record<number, number> = {}
@@ -818,6 +754,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 图片内部剪贴板（跨表粘贴用；系统剪贴板图像优先级在它之后）
   const picClipRef = useRef<{
     pics: SheetPicture[]
+    charts: ChartSpec[]
     rel: { dx: number; dy: number; w: number; h: number }[]
     baseX: number; baseY: number
     isCut: boolean; fromSheet: number
@@ -825,6 +762,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // === Excel 标准交互：单元格编辑态 / 公式引用选择 / 网格键盘焦点 ===
   // editCell 非空表示正在编辑该单元格（Excel 模型：单击只选中，输入/F2/双击才进入编辑）
   const [editCell, setEditCell] = useState<{ r: number; c: number; buf: string } | null>(null)
+  // round61：编辑态镜像（window 键盘 effect 的闭包读不到最新 editCell —— deps 未含它）
+  const editCellRef = useRef(editCell); editCellRef.current = editCell
   const [formulaBarFocused, setFormulaBarFocused] = useState(false)
   const gridRef = useRef<HTMLDivElement>(null)
   // round56：隐藏 IME 宿主输入框 —— 网格 DIV 无法接收 insertText/输入法组合
@@ -913,10 +852,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       printTitleRows: sheetPrintTitles[s.id] || 0,
       // 浮动图片：完整模型（锚点/效果/裁剪/透传片段）
       images: (sheetImages[s.id] || []).map(p => picToJSON(p)).filter(p => p.base64),
+      // 浮动图表（round61）：会话内创建的图表带 rangeRef → 生成绝对引用后写出
+      charts: (sheetCharts[s.id] || []).map(c => chartToJSON(absRefsForSeries(c, chartAcc))),
     }))
     onSheetsChange(snapshot)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetData, sheets, rows, cols, colWidths, rowHeights, sheetImages, sheetFreeze, sheetPrintTitles])
+  }, [sheetData, sheets, rows, cols, colWidths, rowHeights, sheetImages, sheetCharts, sheetFreeze, sheetPrintTitles])
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
   const [zoom, setZoom] = useState(100)
   const [showChartPanel, setShowChartPanel] = useState(false)
@@ -1201,7 +1142,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       // round60：Ctrl+A 选中图片时全选本表所有图片
       if (!inInput && mod && key === 'a' && selPics.length) {
         e.preventDefault()
-        selectPics((sheetImages[activeId] || []).map(p => p.id))
+        selectPics([...(sheetImages[activeId] || []).map(p => p.id), ...(sheetCharts[activeId] || []).map(c => c.id)])
         return
       }
 
@@ -1253,12 +1194,32 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         if (e.key === 'ArrowDown') { e.preventDefault(); move(1, 0); return }
         if (e.key === 'ArrowLeft') { e.preventDefault(); move(0, -1); return }
         if (e.key === 'ArrowRight') { e.preventDefault(); move(0, 1); return }
-        if (e.key === 'Tab') { e.preventDefault(); move(0, e.shiftKey ? -1 : 1); return }
-        if (e.key === 'Enter') { e.preventDefault(); move(1, 0); return }
+        if (e.key === 'Tab') {
+          e.preventDefault()
+          if (editCellRef.current) commitEdit({ dr: 0, dc: e.shiftKey ? -1 : 1 })
+          else move(0, e.shiftKey ? -1 : 1)
+          return
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          if (editCellRef.current) commitEdit({ dr: 1, dc: 0 })
+          else move(1, 0)
+          return
+        }
         // 兜底（网格焦点因 React 卸载编辑输入框短暂落在 body 时仍可继续键入）：
         // 可打印字符进入单元格编辑、F2 编辑，与 Excel 行为一致
         if (e.key === 'F2') { e.preventDefault(); startEdit(active.r, active.c); return }
-        if (e.key.length === 1 && !e.altKey) { e.preventDefault(); startEdit(active.r, active.c, e.key); return }
+        if (e.key.length === 1 && !e.altKey) {
+          e.preventDefault()
+          // ★ 编辑已开但焦点尚未落位（重渲染耗时，如含图表时）→ 追加字符，避免覆盖首字符
+          const ec = editCellRef.current
+          if (ec && ec.r === active.r && ec.c === active.c) {
+            setEditCell(prev => prev ? { ...prev, buf: prev.buf + e.key } : prev)
+          } else {
+            startEdit(active.r, active.c, e.key)
+          }
+          return
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1629,8 +1590,9 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }, 0)
   }
   const commitEdit = (move?: { dr: number; dc: number }) => {
-    if (!editCell) return
-    const { r, c, buf } = editCell
+    const ec = editCellRef.current
+    if (!ec) return
+    const { r, c, buf } = ec
     if (buf.startsWith('=')) setCellFmt(r, c, { formula: buf, value: '' })
     else setCellFmt(r, c, { formula: '', value: buf })
     setEditCell(null)
@@ -1852,7 +1814,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if (multi && !findBar) { e.preventDefault(); e.stopPropagation(); selectCell(active.r, active.c); return }
       return
     }
-    if (key.length === 1 && !e.altKey && !e.ctrlKey) { e.preventDefault(); e.stopPropagation(); startEdit(active.r, active.c, key); return }
+    if (key.length === 1 && !e.altKey && !e.ctrlKey) {
+      e.preventDefault(); e.stopPropagation()
+      const ec = editCellRef.current
+      if (ec && ec.r === active.r && ec.c === active.c) {
+        setEditCell(prev => prev ? { ...prev, buf: prev.buf + key } : prev)
+      } else {
+        startEdit(active.r, active.c, key)
+      }
+      return
+    }
   }
   const selectRange = (r1: number, c1: number, r2: number, c2: number) =>
     commitSelection({ r1, c1, r2, c2, mode: 'cell' })
@@ -1872,12 +1843,19 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 在用户编辑动作前调用：记录当前数据快照
   // round60：图片撤销栈与单元格撤销栈并行推进（pushHistory 同时压两边；图片对象
   // 不可变，浅拷贝数组即可，不深拷贝 base64）
-  const picPastRef = useRef<Record<number, SheetPicture[]>[]>([])
-  const picFutureRef = useRef<Record<number, SheetPicture[]>[]>([])
-  const picSnapshot = () => Object.fromEntries(Object.entries(sheetImages).map(([k, v]) => [Number(k), [...v]])) as Record<number, SheetPicture[]>
+  const picPastRef = useRef<{ pics: Record<number, SheetPicture[]>; charts: Record<number, ChartSpec[]> }[]>([])
+  const picFutureRef = useRef<{ pics: Record<number, SheetPicture[]>; charts: Record<number, ChartSpec[]> }[]>([])
+  // 状态镜像（ref）：快照从 ref 读，避免任何 stale closure 拿到旧状态
+  const sheetImagesRef = useRef(sheetImages); sheetImagesRef.current = sheetImages
+  const sheetChartsRef = useRef(sheetCharts); sheetChartsRef.current = sheetCharts
+  const dataRef = useRef(data); dataRef.current = data
+  const picSnapshot = () => ({
+    pics: Object.fromEntries(Object.entries(sheetImagesRef.current).map(([k, v]) => [Number(k), [...v]])) as Record<number, SheetPicture[]>,
+    charts: Object.fromEntries(Object.entries(sheetChartsRef.current).map(([k, v]) => [Number(k), [...v]])) as Record<number, ChartSpec[]>,
+  })
   const pushHistory = () => {
     setPast(p => {
-      const np = [...p, JSON.parse(JSON.stringify(data))]
+      const np = [...p, JSON.parse(JSON.stringify(dataRef.current))]
       if (np.length > HISTORY_LIMIT) np.shift()
       return np
     })
@@ -1888,23 +1866,27 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   const undo = () => {
     if (past.length === 0) return
     const prev = past[past.length - 1]
-    setFuture(f => [...f, JSON.parse(JSON.stringify(data))])
+    setFuture(f => [...f, JSON.parse(JSON.stringify(dataRef.current))])
     setPast(past.slice(0, -1))
     setData(prev)
     if (picPastRef.current.length) {
       picFutureRef.current = [...picFutureRef.current, picSnapshot()]
-      setSheetImages(picPastRef.current.pop()!)
+      const snap = picPastRef.current.pop()!
+      setSheetImages(snap.pics)
+      setSheetCharts(snap.charts)
     }
   }
   const redo = () => {
     if (future.length === 0) return
     const next = future[future.length - 1]
-    setPast(p => [...p, JSON.parse(JSON.stringify(data))])
+    setPast(p => [...p, JSON.parse(JSON.stringify(dataRef.current))])
     setFuture(future.slice(0, -1))
     setData(next)
     if (picFutureRef.current.length) {
       picPastRef.current = [...picPastRef.current, picSnapshot()]
-      setSheetImages(picFutureRef.current.pop()!)
+      const snap = picFutureRef.current.pop()!
+      setSheetImages(snap.pics)
+      setSheetCharts(snap.charts)
     }
   }
   // 清除选区内容（保留格式）：Delete / Backspace 快捷键；作用于全部选中区域
@@ -2026,7 +2008,11 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setSelPics(ids)
     setFocusPic(focusId ?? ids[ids.length - 1] ?? null)
     if (!ids.length) setCropPic(null)
-    if (ids.length) { if (ribbonTab !== 'picture') setRibbonTab('picture') } else if (ribbonTab === 'picture') setRibbonTab('home')
+    // 语境选项卡：图表 →「图表设计」，图片 →「图片格式」（对齐 Excel）
+    const focusChart = (focusId ?? ids[ids.length - 1] ?? '').startsWith('c')
+    const wantTab: RibbonTab | null = ids.length ? (focusChart ? 'chart' : 'picture') : null
+    if (wantTab) { if (ribbonTab !== wantTab) setRibbonTab(wantTab) }
+    else if (ribbonTab === 'picture' || ribbonTab === 'chart') setRibbonTab('home')
   }
   const picBeginEdit = () => pushHistory()
   // 补丁式更新选中图片（touch 决定丢弃哪些原始 XML 透传片段；history 用于离散操作）
@@ -2041,12 +2027,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     while (names.has(name)) { i++; name = `图片 ${i}` }
     return name
   }
-  const removePics = (ids: string[] = selPics) => {
+  /** 删除浮层对象（图片或图表，id 前缀区分：p=图片 c=图表） */
+  const removeObjects = (ids: string[] = selPics) => {
     if (!ids.length) return
     pushHistory()
     updatePics(list => list.filter(p => !ids.includes(p.id)))
+    updateCharts(list => list.filter(c => !ids.includes(c.id)))
     selectPics([])
   }
+  const removePics = removeObjects
   const addPicFromDataURL = (src: string, base64: string, ext: string, natW: number, natH: number, svgSrc?: string) => {
     const b64 = base64 || src.split(',')[1] || ''
     if (!b64) return
@@ -2158,22 +2147,23 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return false
   }
   const copyPics = (cut: boolean) => {
-    const sel = curPics.filter(p => selPics.includes(p.id))
+    const sel = [...curPics.filter(p => selPics.includes(p.id)), ...curCharts.filter(c => selPics.includes(c.id))]
     if (!sel.length) return
     // 相对位移（跨表粘贴时按活动单元格重定位）
     let minX = Infinity, minY = Infinity
-    const rects = sel.map(p => picRect(p, picGeom))
+    const rects = sel.map(o => (o as SheetPicture).id ? picRect(o as SheetPicture, picGeom) : chartRect(o as ChartSpec, picGeom))
     rects.forEach(r => { minX = Math.min(minX, r.x); minY = Math.min(minY, r.y) })
     picClipRef.current = {
-      pics: sel.map((p, i) => ({ ...p })),
+      pics: curPics.filter(p => selPics.includes(p.id)).map(p => ({ ...p })),
+      charts: curCharts.filter(c => selPics.includes(c.id)).map(c => ({ ...c })),
       rel: rects.map(r => ({ dx: r.x - minX, dy: r.y - minY, w: r.w, h: r.h })),
       baseX: minX, baseY: minY,
       isCut: cut, fromSheet: activeId,
     }
-    // 同步 PNG 到系统剪贴板（能贴到其他应用；失败静默）
+    // 同步 PNG 到系统剪贴板（能贴到其他应用；失败静默）——仅图片对象
     try {
-      const p0 = sel[0]
-      const src = p0.svgSrc || p0.src
+      const p0 = sel.find(o => o.id.startsWith('p')) as SheetPicture | undefined
+      const src = p0?.svgSrc || p0?.src || ''
       if (src.startsWith('data:image/')) {
         const img = new Image()
         img.onload = () => {
@@ -2192,7 +2182,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const pastePics = async () => {
     const clip = picClipRef.current
-    if (!clip?.pics?.length) { await pasteSystemImage(); return }
+    if (!clip?.pics?.length && !clip?.charts?.length) { await pasteSystemImage(); return }
     pushHistory()
     const sameSheet = clip.fromSheet === activeId
     const baseX = sameSheet ? clip.baseX + 24 : picGeom.colLeft(active.c)
@@ -2204,34 +2194,47 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         if (i < 0) return p
         return setPicRect(touchPic(p, 'pos'), picGeom, { x: baseX + clip.rel[i].dx, y: baseY + clip.rel[i].dy, w: clip.rel[i].w, h: clip.rel[i].h })
       }))
+      updateCharts(list => list.map(c => {
+        const i = clip.charts.findIndex(q => q.id === c.id)
+        if (i < 0) return c
+        return setChartRect(c, picGeom, { x: baseX + clip.rel[i].dx, y: baseY + clip.rel[i].dy, w: clip.rel[i].w, h: clip.rel[i].h })
+      }))
       picClipRef.current = null
       return
     }
-    const copies = clip.pics.map((p, i) => ({
-      ...setPicRect({ ...p, id: newPicId(), raw: '', name: nextPicName() }, picGeom, { x: baseX + clip.rel[i].dx, y: baseY + clip.rel[i].dy, w: clip.rel[i].w, h: clip.rel[i].h }),
-    }))
+    const picCopies = clip.pics.map((p, i) =>
+      setPicRect({ ...p, id: newPicId(), raw: '', name: nextPicName() }, picGeom, { x: baseX + clip.rel[i].dx, y: baseY + clip.rel[i].dy, w: clip.rel[i].w, h: clip.rel[i].h }))
+    const chartCopies = clip.charts.map((c, i) =>
+      setChartRect({ ...c, id: newChartId(), name: nextChartName() }, picGeom, { x: baseX + clip.rel[clip.pics.length + i].dx, y: baseY + clip.rel[clip.pics.length + i].dy, w: clip.rel[clip.pics.length + i].w, h: clip.rel[clip.pics.length + i].h }))
     if (clip.isCut) {
       // 跨表剪切：原表删除
       setSheetImages(m => ({ ...m, [clip.fromSheet]: (m[clip.fromSheet] || []).filter(p => !clip.pics.some(q => q.id === p.id)) }))
+      setSheetCharts(m => ({ ...m, [clip.fromSheet]: (m[clip.fromSheet] || []).filter(c => !clip.charts.some(q => q.id === c.id)) }))
       picClipRef.current = null
     }
-    updatePics(list => [...list, ...copies])
-    selectPics(copies.map(c => c.id))
-    const maxR = copies.reduce((a, c) => Math.max(a, c.to.row), 0), maxC = copies.reduce((a, c) => Math.max(a, c.to.col), 0)
+    if (picCopies.length) updatePics(list => [...list, ...picCopies])
+    if (chartCopies.length) updateCharts(list => [...list, ...chartCopies])
+    selectPics([...picCopies.map(c => c.id), ...chartCopies.map(c => c.id)])
+    const maxR = [...picCopies, ...chartCopies].reduce((a, c) => Math.max(a, c.to.row), 0)
+    const maxC = [...picCopies, ...chartCopies].reduce((a, c) => Math.max(a, c.to.col), 0)
     ensureGrid(maxR + 2, maxC + 2, true)
   }
   const duplicatePics = () => {
-    const clip = picClipRef.current
-    const sel = curPics.filter(p => selPics.includes(p.id))
-    if (!sel.length) return
+    const selPics0 = curPics.filter(p => selPics.includes(p.id))
+    const selCharts0 = curCharts.filter(c => selPics.includes(c.id))
+    if (!selPics0.length && !selCharts0.length) return
     pushHistory()
-    const copies = sel.map(p => {
+    const picCopies = selPics0.map(p => {
       const r = picRect(p, picGeom)
       return setPicRect({ ...p, id: newPicId(), raw: '', name: nextPicName() }, picGeom, { x: r.x + 24, y: r.y + 24, w: r.w, h: r.h })
     })
-    updatePics(list => [...list, ...copies])
-    selectPics(copies.map(c => c.id))
-    void clip
+    const chartCopies = selCharts0.map(c => {
+      const r = chartRect(c, picGeom)
+      return setChartRect({ ...c, id: newChartId(), name: nextChartName() }, picGeom, { x: r.x + 24, y: r.y + 24, w: r.w, h: r.h })
+    })
+    if (picCopies.length) updatePics(list => [...list, ...picCopies])
+    if (chartCopies.length) updateCharts(list => [...list, ...chartCopies])
+    selectPics([...picCopies.map(c => c.id), ...chartCopies.map(c => c.id)])
   }
   // 大小（锁定纵横比时联动）
   const picSetSize = (w: number | null, h: number | null) => {
@@ -2261,17 +2264,29 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       if (v >= base - 0.01) return base
       return v
     }
+    const mapped = (r: { x: number; y: number; w: number; h: number }) => ({
+      x1: axis === 'col' ? map(r.x) : r.x,
+      x2: axis === 'col' ? map(r.x + r.w) : r.x + r.w,
+      y1: axis === 'row' ? map(r.y) : r.y,
+      y2: axis === 'row' ? map(r.y + r.h) : r.y + r.h,
+    })
     updatePics(list => {
       const out: SheetPicture[] = []
       for (const p of list) {
-        const r = picRect(p, picGeom)
-        const x1 = axis === 'col' ? map(r.x) : r.x
-        const x2 = axis === 'col' ? map(r.x + r.w) : r.x + r.w
-        const y1 = axis === 'row' ? map(r.y) : r.y
-        const y2 = axis === 'row' ? map(r.y + r.h) : r.y + r.h
-        const w = x2 - x1, h = y2 - y1
+        const m = mapped(picRect(p, picGeom))
+        const w = m.x2 - m.x1, h = m.y2 - m.y1
         if (count < 0 && ((axis === 'row' && h < 1) || (axis === 'col' && w < 1))) continue // 完全落在删除区
-        out.push(setPicRect(touchPic(p, 'pos'), picGeom, { x: x1, y: y1, w: Math.max(4, w), h: Math.max(4, h) }))
+        out.push(setPicRect(touchPic(p, 'pos'), picGeom, { x: m.x1, y: m.y1, w: Math.max(4, w), h: Math.max(4, h) }))
+      }
+      return out
+    })
+    updateCharts(list => {
+      const out: ChartSpec[] = []
+      for (const c of list) {
+        const m = mapped(chartRect(c, picGeom))
+        const w = m.x2 - m.x1, h = m.y2 - m.y1
+        if (count < 0 && ((axis === 'row' && h < 1) || (axis === 'col' && w < 1))) continue
+        out.push(setChartRect(c, picGeom, { x: m.x1, y: m.y1, w: Math.max(20, w), h: Math.max(20, h) }))
       }
       return out
     })
@@ -2409,9 +2424,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   // 键盘：方向键微移（1px，Shift=10px，Ctrl=吸附到下一格边线）
   const nudgePics = (dx: number, dy: number, snap = false) => {
-    updatePics(list => list.map(p => {
-      if (!selPics.includes(p.id)) return p
-      const r = picRect(p, picGeom)
+    const move = (r: { x: number; y: number; w: number; h: number }) => {
       let x = r.x + dx, y = r.y + dy
       if (snap) {
         if (dx > 0) x = picGeom.colLeft(Math.floor(x / 80) + 1)
@@ -2419,14 +2432,34 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         if (dy > 0) y = picGeom.rowTop(Math.floor(y / 28) + 1)
         if (dy < 0) y = picGeom.rowTop(Math.max(0, Math.ceil(y / 28) - 1))
       }
-      return setPicRect(touchPic(p, 'pos'), picGeom, { x, y, w: r.w, h: r.h })
+      return { x, y, w: r.w, h: r.h }
+    }
+    updatePics(list => list.map(p => {
+      if (!selPics.includes(p.id)) return p
+      return setPicRect(touchPic(p, 'pos'), picGeom, move(picRect(p, picGeom)))
+    }))
+    updateCharts(list => list.map(c => {
+      if (!selPics.includes(c.id)) return c
+      return setChartRect(c, picGeom, move(chartRect(c, picGeom)))
     }))
   }
+  // round61：单元格数据变化 → 本表带 rangeRef 的图表实时重算系列（Excel 联动体验）
+  useEffect(() => {
+    setSheetCharts(m => {
+      const list = m[activeId] || []
+      if (!list.some(c => c.rangeRef)) return m
+      const out = list.map(c => c.rangeRef ? refreshChartSeries(c, chartAcc) : c)
+      if (out.every((c, i) => c === list[i])) return m
+      return { ...m, [activeId]: out }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, activeId])
+
   const onPicNativeSize = (id: string, w: number, h: number) => {
     updatePics(list => list.map(p => p.id === id && (p.natW !== w || p.natH !== h) ? { ...p, natW: w, natH: h } : p))
   }
   const onPicMenu = (x: number, y: number, picId: string) => {
-    setMenu({ x, y, r: active.r, c: active.c, kind: 'pic', picId })
+    setMenu({ x, y, r: active.r, c: active.c, kind: picId.startsWith('c') ? 'chart' : 'pic', picId })
   }
   // 表头右缘拖拽调整列宽（mousemove 实时更新，40~600px）
   const colResizeRef = useRef<{ c: number; startX: number; startW: number } | null>(null)
@@ -2742,21 +2775,187 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     setActive({ r: active.r, c: at })
   }
 
-  // === 图表 ===
+  // === round61：浮动图表（完整模型：锚点/类型/系列/标题/图例/数据标签，随 xlsx 读写） ===
+  const curCharts = sheetCharts[activeId] || []
+  const isChartId = (id: string) => id.startsWith('c')
+  const updateCharts = (fn: (list: ChartSpec[]) => ChartSpec[]) => {
+    setSheetCharts(m => {
+      const cur = m[activeId] || []
+      const out = fn(cur)
+      if (out === cur) return m
+      return { ...m, [activeId]: out }
+    })
+  }
+  /** 图表取数：从单元格区域读值 / 生成绝对引用 */
+  const chartAcc: ChartDataAccess = {
+    rangeValues: (ref: string) => {
+      const rg = parseRange(ref)
+      if (!rg) return []
+      const grid: string[][] = []
+      for (let r = rg.r1; r <= rg.r2; r++) {
+        const row: string[] = []
+        for (let c = rg.c1; c <= rg.c2; c++) row.push(getCell(r, c).value ?? '')
+        grid.push(row)
+      }
+      return grid
+    },
+    absRangeValues: (ref: string) => {
+      // 绝对引用（读取文件来的系列）：只解析本表数据，跨表保留缓存值
+      const i = ref.lastIndexOf('!')
+      if (i < 0) return null
+      const sn = ref.slice(0, i).replace(/^'|'$/g, '')
+      const cur = sheets.find(x => x.active)
+      if (!cur || sn !== cur.name) return null
+      const rg = parseRange(ref.slice(i + 1).replace(/\$/g, ''))
+      if (!rg) return null
+      const grid: string[][] = []
+      for (let r = rg.r1; r <= rg.r2; r++) {
+        const row: string[] = []
+        for (let c = rg.c1; c <= rg.c2; c++) row.push(getCell(r, c).value ?? '')
+        grid.push(row)
+      }
+      return grid
+    },
+    makeAbsRef: (ref: string) => {
+      const rg = parseRange(ref)
+      const cur = sheets.find(x => x.active)
+      const sn = (cur?.name || 'Sheet1').replace(/'/g, "''")
+      const q = /[^A-Za-z0-9_\u4e00-\u9fff]/.test(sn) ? `'${sn}'` : sn
+      if (!rg) return `${q}!${ref}`
+      // 完全绝对引用：$A$2:$D$4（与 Excel 写出一致）
+      return `${q}!$${colName(rg.c1)}$${rg.r1 + 1}:$${colName(rg.c2)}$${rg.r2 + 1}`
+    },
+    makeAbsCellRef: (ref: string) => {
+      const cur = sheets.find(x => x.active)
+      const sn = (cur?.name || 'Sheet1').replace(/'/g, "''")
+      const q = /[^A-Za-z0-9_\u4e00-\u9fff]/.test(sn) ? `'${sn}'` : sn
+      // 单元格引用 → 完全绝对：$A$2
+      const m = ref.replace(/\$/g, '').match(/^([A-Za-z]+)(\d+)$/)
+      return m ? `${q}!$${m[1]}$${m[2]}` : `${q}!${ref.replace(/\$/g, '')}`
+    },
+  }
+  const nextChartName = () => {
+    const list = sheetCharts[activeId] || []
+    const names = new Set(list.map(c => c.name))
+    let i = list.length + 1, name = `图表 ${i}`
+    while (names.has(name)) { i++; name = `图表 ${i}` }
+    return name
+  }
   const addChart = (type: string) => {
-    // 从当前列收集数据
-    const values: number[] = []
-    const labels: string[] = []
-    for (let r = 0; r < rows; r++) {
-      const v = parseFloat(getCell(r, active.c).value)
-      if (!isNaN(v)) { values.push(v); labels.push(`${r + 1}`) }
+    // 数据源（对齐 Excel）：优先当前选区；单格时扫描活动列的连续数值段
+    const { r1, c1, r2, c2 } = selRect()
+    let rangeRef = ''
+    if (r2 > r1 || c2 > c1) {
+      rangeRef = `${colName(c1)}${r1 + 1}:${colName(c2)}${r2 + 1}`
+    } else {
+      let top = active.r
+      while (top > 0 && !isNaN(parseFloat(getCell(top - 1, active.c).value))) top--
+      let bottom = active.r
+      while (bottom < rows - 1 && !isNaN(parseFloat(getCell(bottom + 1, active.c).value))) bottom++
+      if (!isNaN(parseFloat(getCell(active.r, active.c).value))) rangeRef = `${colName(active.c)}${top + 1}:${colName(active.c)}${bottom + 1}`
     }
-    if (values.length === 0) { alert(tf('sheet.noData', 'No numeric data in this column')); return }
-    setCharts(cs => [...cs, { id: Date.now(), type, data: values, labels, title: `${colName(active.c)} - ${type}` }])
+    const series = rangeRef ? seriesFromRange(rangeRef, false, chartAcc) : []
+    if (!series.length) { alert(tf('sheet.noData', '当前选区没有数值数据，请先框选数据区域')); return }
+    const c = defaultChart()
+    c.type = type as ChartType
+    c.name = nextChartName()
+    c.title = tf('sheet.chartPlaceholder', '图表标题')
+    c.series = series
+    c.rangeRef = rangeRef
+    // 锚点：活动格右下方向，默认 8 列 × 15 行（对齐 Excel 插入尺寸）
+    const fromCol = active.c + 1
+    c.from = { col: fromCol, row: active.r, dx: 0, dy: 0 }
+    c.to = { col: fromCol + 8, row: active.r + 15, dx: 0, dy: 0 }
+    ensureGrid(c.to.row + 2, c.to.col + 2, true)
+    pushHistory()
+    updateCharts(list => [...list, c])
+    selectPics([c.id], c.id)
     setShowChartPanel(false)
   }
-  const removeChart = (id: number) => setCharts(cs => cs.filter(c => c.id !== id))
-  const [charts, setCharts] = useState<{ id: number; type: string; data: number[]; labels: string[]; title: string }[]>([])
+  /** 图表命令（「图表设计」选项卡 / 右键菜单） */
+  const patchSelCharts = (patch: Partial<ChartSpec>, history = false) => {
+    if (history) pushHistory()
+    updateCharts(list => list.map(c => selPics.includes(c.id) ? { ...c, ...patch, edited: true } : c))
+  }
+  const chartCommand = (cmd: ChartCommand) => {
+    const sel = curCharts.filter(c => selPics.includes(c.id))
+    const c0 = sel[0]
+    if (!c0 && !cmd.startsWith('arrange') && !cmd.startsWith('align')) return
+    if (cmd.startsWith('type:')) { patchSelCharts({ type: cmd.slice(5) as ChartType }, true); return }
+    if (cmd === 'data:switchRowCol') {
+      if (!c0?.rangeRef) return
+      pushHistory()
+      updateCharts(list => list.map(c => {
+        if (c.id !== c0.id) return c
+        const byRows = !c.byRows
+        const series = seriesFromRange(c.rangeRef, byRows, chartAcc)
+        return { ...c, byRows, series, edited: true }
+      }))
+      return
+    }
+    if (cmd === 'data:select') {
+      if (!c0) return
+      const input = prompt(tf('sheet.chartRangePrompt', '数据区域（含表头，如 B1:D4）：'), c0.rangeRef || '')
+      if (!input) return
+      const rg = parseRange(input.trim().toUpperCase())
+      if (!rg) { alert(tf('sheet.chartRangeBad', '区域格式应为 B1:D4 这样的形式')); return }
+      const rangeRef = `${colName(rg.c1)}${rg.r1 + 1}:${colName(rg.c2)}${rg.r2 + 1}`
+      const series = seriesFromRange(rangeRef, c0.byRows, chartAcc)
+      if (!series.length) { alert(tf('sheet.noData', '该区域没有数值数据')); return }
+      pushHistory()
+      updateCharts(list => list.map(c => c.id === c0.id ? { ...c, rangeRef, series, edited: true } : c))
+      return
+    }
+    if (cmd === 'title:toggle') { patchSelCharts({ titleOn: !c0.titleOn }); return }
+    if (cmd.startsWith('labels:')) { patchSelCharts({ dataLabels: cmd.slice(7) as ChartSpec['dataLabels'] }); return }
+    if (cmd.startsWith('legend:')) { patchSelCharts({ legend: cmd.slice(7) as ChartSpec['legend'] }); return }
+    if (cmd === 'gridlines:toggle') { patchSelCharts({ gridlines: !c0.gridlines }); return }
+    if (cmd.startsWith('arrange:')) {
+      const op = cmd.slice('arrange:'.length)
+      pushHistory()
+      updateCharts(list => {
+        const selIds = sel.map(c => c.id)
+        const kept = list.filter(c => !selIds.includes(c.id))
+        if (op === 'front') return [...kept, ...sel]
+        if (op === 'back') return [...sel, ...kept]
+        const out = [...list]
+        if (op === 'forward') {
+          for (let i = out.length - 2; i >= 0; i--) {
+            if (selIds.includes(out[i].id) && !selIds.includes(out[i + 1].id)) { const t = out[i]; out[i] = out[i + 1]; out[i + 1] = t }
+          }
+        } else if (op === 'backward') {
+          for (let i = 1; i < out.length; i++) {
+            if (selIds.includes(out[i].id) && !selIds.includes(out[i - 1].id)) { const t = out[i]; out[i] = out[i - 1]; out[i - 1] = t }
+          }
+        }
+        return out
+      })
+      return
+    }
+    if (cmd.startsWith('align:') && sel.length >= 2) {
+      pushHistory()
+      const rects = sel.map(c => chartRect(c, picGeom))
+      const minX = Math.min(...rects.map(r => r.x)), maxX = Math.max(...rects.map(r => r.x + r.w))
+      const minY = Math.min(...rects.map(r => r.y)), maxY = Math.max(...rects.map(r => r.y + r.h))
+      const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2
+      const kind = cmd.slice('align:'.length)
+      updateCharts(list => list.map(c => {
+        const i = sel.findIndex(q => q.id === c.id)
+        if (i < 0) return c
+        const r = rects[i]
+        let x = r.x, y = r.y
+        if (kind === 'left') x = minX
+        if (kind === 'right') x = maxX - r.w
+        if (kind === 'center') x = midX - r.w / 2
+        if (kind === 'top') y = minY
+        if (kind === 'bottom') y = maxY - r.h
+        if (kind === 'middle') y = midY - r.h / 2
+        return setChartRect(c, picGeom, { x, y, w: r.w, h: r.h })
+      }))
+      return
+    }
+    if (cmd === 'delete') { removeObjects(sel.map(c => c.id)); return }
+  }
   const addSheet = () => { const id = Math.max(...sheets.map(s => s.id)) + 1; setSheetData(sd => ({ ...sd, [activeId]: data, [id]: {} })); setData({}); setSheets(s => [...s.map(x => ({ ...x, active: false })), { id, name: `Sheet${id}`, active: true }]) }
 
   // === 数据验证：选中区域应用下拉列表；带验证的单元格渲染下拉框，保存时写回 xlsx ===
@@ -3058,8 +3257,10 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
 
   const ribbonTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: t('sheet.ribbon.home') }, { id: 'insert', label: t('sheet.ribbon.insert') }, { id: 'data', label: t('sheet.ribbon.data') }, { id: 'view', label: t('sheet.ribbon.view') },
-    // round60：图片格式上下文选项卡（选中浮动图片时出现，对齐 Excel Picture Format）
-    ...(selPics.length ? [{ id: 'picture' as RibbonTab, label: tf('sheet.ribbon.picture', '图片格式') }] : []),
+    // round60/61：语境选项卡 —— 选中图片 →「图片格式」；选中图表 →「图表设计」
+    ...(selPics.some(id => id.startsWith('c'))
+      ? [{ id: 'chart' as RibbonTab, label: tf('sheet.ribbon.chart', '图表设计') }]
+      : selPics.length ? [{ id: 'picture' as RibbonTab, label: tf('sheet.ribbon.picture', '图片格式') }] : []),
   ]
 
   // 查找匹配集合（查找条打开且有关键词时高亮所有匹配单元格）
@@ -3245,25 +3446,26 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         {ribbonTab === 'insert' && (<>
           <RibbonGroup label={t('sheet.chart')}>
             <div className="relative">
-              <RibbonButton icon="📊" label={t('sheet.chart')} onClick={() => openPanel('chart')} />
+              <RibbonButton icon="📊" label={t('sheet.chart')} data-testid="sheet-btn-chart" onClick={() => openPanel('chart')} />
               {showChartPanel && (
-                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { type: 'bar', icon: '📊', name: t('sheet.chart.bar') },
-                      { type: 'line', icon: '📈', name: t('sheet.chart.line') },
-                      { type: 'pie', icon: '🥧', name: t('sheet.chart.pie') },
-                      { type: 'scatter', icon: '⚫', name: t('sheet.chart.scatter') },
-                      { type: 'area', icon: '🔻', name: t('sheet.chart.area') },
-                      { type: 'doughnut', icon: '🍩', name: t('sheet.chart.donut') },
-                    ].map(c => (
-                      <button key={c.type} onClick={() => { addChart(c.type); setShowChartPanel(false) }}
-                        className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 64 }}>
-                        <span style={{ fontSize: '20px' }}>{c.icon}</span>
-                        <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{c.name}</span>
-                      </button>
-                    ))}
-                  </div>
+                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50, maxHeight: '60vh', overflowY: 'auto' }}>
+                  {/* round61：12 种图表类型（对齐 Excel 插入图表库；数据取当前选区） */}
+                  {CHART_TYPES.map(g => (
+                    <div key={g.group} className="mb-1">
+                      <div className="px-2 pt-1.5 pb-0.5 text-[10px] opacity-50">{g.group}</div>
+                      <div className="grid grid-cols-3 gap-1 px-1 pb-1">
+                        {g.items.map(it => (
+                          <button key={it.type} onClick={() => { addChart(it.type); setShowChartPanel(false) }}
+                            data-testid={`insert-chart-${it.type}`}
+                            className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 76 }}>
+                            <span style={{ fontSize: '18px' }}>{it.icon}</span>
+                            <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{it.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="px-3 py-1.5 text-[10px] opacity-50 border-t" style={{ borderColor: 'var(--color-border)' }}>{tf('sheet.chartFromSelection', '数据取自当前选区（或活动列的连续数值）')}</div>
                 </div>
               )}
             </div>
@@ -3327,6 +3529,12 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             onPatch={patchSelPics}
             onSize={picSetSize}
             onRot={picSetRot}
+          />
+        )}
+        {ribbonTab === 'chart' && (
+          <ChartRibbon
+            charts={curCharts.filter(c => selPics.includes(c.id))}
+            onCommand={chartCommand}
           />
         )}
         {ribbonTab === 'data' && (<>
@@ -4040,6 +4248,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             cropId={cropPic}
             geom={picGeom}
             zoom={zoom}
+            charts={curCharts}
+            onChangeCharts={updateCharts}
             onChange={updatePics}
             onSelect={selectPics}
             onActivate={focusGrid}
@@ -4144,6 +4354,35 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         const sep = <div key={'sep' + Math.random()} className="my-1 h-px" style={{ background: 'var(--color-border)' }} />
         // round53（问题1）：列标头 / 行标头右键菜单（对齐 MS Excel 标头菜单：
         // 剪切/复制 + 插入/删除 + 清除内容 + 列宽/行高；选区即右键时选中的整列/整行）
+        // round61：图表右键菜单（对齐 Excel 图表右键）
+        if (kind === 'chart') {
+          const chartId = menu.picId || ''
+          const target = curCharts.find(c => c.id === chartId)
+          const multiSel = selPics.length > 1
+          return (
+            <div className="fixed z-[100] py-1 rounded-lg shadow-xl border" style={{ left: menu.x, top: menu.y, background: 'var(--color-surface)', borderColor: 'var(--color-border)' }} onContextMenu={e => e.preventDefault()} onMouseDown={e => e.stopPropagation()}>
+              {ctxItem(tf('sheet.cut', '剪切'), '✂', () => { copyPics(true) })}
+              {ctxItem(tf('sheet.copy', '复制'), '⧉', () => { copyPics(false) })}
+              {ctxItem(tf('sheet.paste', '粘贴'), '📋', () => { pastePics() })}
+              {sep}
+              {ctxItem(tf('sheet.picMenuDelete', '删除'), '🗑', () => { removeObjects() })}
+              {sep}
+              {ctxItem(tf('sheet.chartSelectData', '选择数据…'), '🔤', () => { chartCommand('data:select') })}
+              {ctxItem(tf('sheet.chartSwitchRC', '切换行/列'), '⇄', () => { chartCommand('data:switchRowCol') })}
+              {sep}
+              {ctxItem(tf('sheet.picFront', '置于顶层'), '⬆', () => { chartCommand('arrange:front') })}
+              {ctxItem(tf('chartMenuItemOrder', '上移一层'), '↥', () => { chartCommand('arrange:forward') })}
+              {ctxItem(tf('chartMenuItemOrder2', '下移一层'), '↧', () => { chartCommand('arrange:backward') })}
+              {ctxItem(tf('sheet.picBack', '置于底层'), '⬇', () => { chartCommand('arrange:back') })}
+              {sep}
+              {target && ctxItem(tf('sheet.chartTitleToggle', '图表标题 开/关'), '🅣', () => { chartCommand('title:toggle') })}
+              {target && ctxItem(tf('sheet.chartLegend', '图例位置…'), '📋', () => { chartCommand('legend:r') })}
+              <div className="px-3 py-1 text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                {target ? `${target.name || '图表'} · ${tf('sheet.chartRange', '数据')} ${target.rangeRef || '-'}${multiSel ? ` · ${tf('sheet.picMultiN', '已选')} ${selPics.length}` : ''}` : ''}
+              </div>
+            </div>
+          )
+        }
         // round60：浮动图片右键菜单（对齐 Excel 图片右键）
         if (kind === 'pic') {
           const picId = menu.picId || ''
@@ -4245,21 +4484,6 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           </div>
         )
       })()}
-
-      {/* 图表渲染区 */}
-      {charts.length > 0 && (
-        <div className="flex gap-3 p-3 overflow-x-auto flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)', maxHeight: '240px' }}>
-          {charts.map(chart => (
-            <div key={chart.id} className="relative flex-shrink-0 rounded-lg p-3" style={{ background: 'var(--color-bg-alt)', border: '1px solid var(--color-border)', width: '320px' }}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>{chart.title}</span>
-                <button onClick={() => removeChart(chart.id)} className="text-xs opacity-50 hover:opacity-100" style={{ color: 'var(--color-text)' }}>✕</button>
-              </div>
-              <ChartSVG type={chart.type} data={chart.data} labels={chart.labels} />
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Sheet 标签栏（双击重命名；右侧 + 新建 / 🗑 删除当前表） */}
       <div className="px-2 py-1 flex items-center gap-1 overflow-x-auto flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)' }}>

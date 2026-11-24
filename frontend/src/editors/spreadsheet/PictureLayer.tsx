@@ -14,6 +14,8 @@ import {
   SheetPicture, PicGeometry, PicRect, PicHandle, picRect, setPicRect, shapePath, shapeFillRule,
   cropWindow, resizeRect, rotationFromPointer, touchPic, PicPart, newPicId,
 } from './pictures'
+import { ChartSpec, chartRect, setChartRect, newChartId } from './charts'
+import ChartRenderer from './ChartRenderer'
 
 export interface PictureLayerProps {
   pics: SheetPicture[]
@@ -23,6 +25,9 @@ export interface PictureLayerProps {
   /** 滚动容器 CSS zoom 百分比（指针坐标 → 工作表坐标要除掉缩放） */
   zoom: number
   onChange: (fn: (pics: SheetPicture[]) => SheetPicture[], touch?: PicPart | PicPart[]) => void
+  /** round61：浮动图表（与图片同层；渲染在图片之上） */
+  charts: ChartSpec[]
+  onChangeCharts: (fn: (charts: ChartSpec[]) => ChartSpec[]) => void
   onSelect: (ids: string[], focusId?: string) => void
   onActivate: () => void
   onMenu: (x: number, y: number, picId: string) => void
@@ -275,11 +280,12 @@ const PicSvg: React.FC<{
 
 /** 主层：渲染 + 交互 */
 const PictureLayer: React.FC<PictureLayerProps> = ({
-  pics, sel, cropId, geom, zoom, onChange, onSelect, onActivate, onMenu, onNativeSize, onBeginEdit, onEndCrop,
+  pics, sel, cropId, geom, zoom, onChange, onChangeCharts, charts, onSelect, onActivate, onMenu, onNativeSize, onBeginEdit, onEndCrop,
 }) => {
   const layerRef = useRef<HTMLDivElement>(null)
   // 拖拽期间 props 可能变化，用 ref 镜像避免监听器闭包读到旧值
   const picsRef = useRef(pics); picsRef.current = pics
+  const chartsRef = useRef(charts); chartsRef.current = charts
   const geomRef = useRef(geom); geomRef.current = geom
   const cropRef = useRef(cropId); cropRef.current = cropId
 
@@ -311,13 +317,33 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
 
   const selSet = useMemo(() => new Set(sel), [sel])
 
+  /** 统一应用矩形：图片走 setPicRect（清 raw），图表走 setChartRect（置 edited） */
+  const applyRects = useCallback((rects: Record<string, PicRect>) => {
+    const g = geomRef.current
+    onChange(list => list.map(p => rects[p.id] ? setPicRect(touchPic(p, 'pos'), g, rects[p.id]) : p))
+    onChangeCharts(list => list.map(c => rects[c.id] ? setChartRect(c, g, rects[c.id]) : c))
+  }, [onChange, onChangeCharts])
+
+  // ★ 修复 stale closure：useCallback([]) 会捕获首渲染的 onDragMove/onDragUp，
+  // 其闭包里的 onBeginEdit→pushHistory→picSnapshot 读到首渲染的空状态
+  //（运行时新建的图表在拖拽撤销时被整体删掉）。经 ref 转发最新处理器。
+  const onDragMoveRef = useRef<(e: PointerEvent) => void>(() => {})
+  const onDragUpRef = useRef<(e: PointerEvent) => void>(() => {})
+  const dragListeners = useRef<{ mv: (e: PointerEvent) => void; up: (e: PointerEvent) => void } | null>(null)
   const attachDrag = useCallback(() => {
-    document.addEventListener('pointermove', onDragMove)
-    document.addEventListener('pointerup', onDragUp)
+    if (dragListeners.current) return
+    const mv = (e: PointerEvent) => onDragMoveRef.current(e)
+    const up = (e: PointerEvent) => onDragUpRef.current(e)
+    dragListeners.current = { mv, up }
+    document.addEventListener('pointermove', mv)
+    document.addEventListener('pointerup', up)
   }, [])
   const detachDrag = useCallback(() => {
-    document.removeEventListener('pointermove', onDragMove)
-    document.removeEventListener('pointerup', onDragUp)
+    const L = dragListeners.current
+    if (!L) return
+    document.removeEventListener('pointermove', L.mv)
+    document.removeEventListener('pointerup', L.up)
+    dragListeners.current = null
   }, [])
   useEffect(() => detachDrag, [detachDrag])
 
@@ -336,9 +362,10 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
       if (d.kind === 'move' && d.copyLeft) {
         d.copyLeft = false
         const ids = Object.keys(d.startRects)
-        const cur = picsRef.current
-        const copies = cur.filter(q => ids.includes(q.id)).map(q => ({ ...q, id: newPicId(), raw: '', name: q.name ? `${q.name} 副本` : q.name }))
-        onChange(list => [...list, ...copies])
+        const picCopies = picsRef.current.filter(q => ids.includes(q.id)).map(q => ({ ...q, id: newPicId(), raw: '', name: q.name ? `${q.name} 副本` : q.name }))
+        const chartCopies = chartsRef.current.filter(c => ids.includes(c.id)).map(c => ({ ...c, id: newChartId(), name: c.name ? `${c.name} 副本` : c.name, edited: true, anchorRaw: '', chartRaw: '' }))
+        if (picCopies.length) onChange(list => [...list, ...picCopies])
+        if (chartCopies.length) onChangeCharts(list => [...list, ...chartCopies])
       }
     }
 
@@ -351,42 +378,51 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
         }
       }
       const fx = dx, fy = dy
-      onChange(list => list.map(q => {
-        const r0 = d.startRects[q.id]
-        if (!r0) return q
-        return setPicRect(q, g, { x: r0.x + fx, y: r0.y + fy, w: r0.w, h: r0.h })
-      }), 'pos')
+      const rects: Record<string, PicRect> = {}
+      for (const id of Object.keys(d.startRects)) {
+        const r0 = d.startRects[id]
+        rects[id] = { x: r0.x + fx, y: r0.y + fy, w: r0.w, h: r0.h }
+      }
+      applyRects(rects)
       return
     }
 
     if (d.kind === 'resize' && d.handle) {
       const ids = Object.keys(d.startRects)
-      const cur = picsRef.current
       if (ids.length === 1) {
-        const q = cur.find(x => x.id === ids[0])
-        const r0 = d.startRects[ids[0]]
-        if (!q || !r0) return
-        const corner = d.handle.length === 2
+        const id = ids[0]
+        const q = picsRef.current.find(x => x.id === id)
+        const c = q ? null : chartsRef.current.find(x => x.id === id)
+        const r0 = d.startRects[id]
+        if ((!q && !c) || !r0) return
+        // 图表不锁纵横比（Excel 图表自由缩放）；图片按锁定/Shift 规则
         let keepRatio: number | null = null
-        if (corner && ev.shiftKey && q.natW && q.natH) keepRatio = q.natW / q.natH
-        else if (q.lockAspect) keepRatio = r0.w / r0.h
-        const nr = resizeRect(r0, d.handle, dx, dy, q.rot, { keepRatio, fromCenter: ev.ctrlKey || ev.metaKey })
-        onChange(list => list.map(x => x.id === q.id ? setPicRect(touchPic(x, 'pos'), g, nr) : x), 'pos')
+        if (q) {
+          const corner = d.handle.length === 2
+          if (corner && ev.shiftKey && q.natW && q.natH) keepRatio = q.natW / q.natH
+          else if (q.lockAspect) keepRatio = r0.w / r0.h
+        }
+        const nr = resizeRect(r0, d.handle, dx, dy, q ? q.rot : 0, { keepRatio, fromCenter: ev.ctrlKey || ev.metaKey })
+        applyRects({ [id]: nr })
       } else {
-        const list0 = cur.filter(x => d.startRects[x.id])
-        const bb0 = bboxOf(list0.map(x => d.startRects[x.id]))
+        const objs: { id: string; lockAspect?: boolean }[] = [
+          ...picsRef.current.filter(x => d.startRects[x.id]),
+          ...chartsRef.current.filter(x => d.startRects[x.id]),
+        ]
+        const bb0 = bboxOf(objs.map(x => d.startRects[x.id]))
         if (!bb0) return
-        const keepRatio = list0.some(x => x.lockAspect) ? bb0.w / bb0.h : null
+        const keepRatio = objs.some(x => x.lockAspect) ? bb0.w / bb0.h : null
         const nb = resizeRect(bb0, d.handle, dx, dy, 0, { keepRatio, fromCenter: ev.ctrlKey || ev.metaKey })
         const sx = bb0.w ? nb.w / bb0.w : 1, sy = bb0.h ? nb.h / bb0.h : 1
-        onChange(list => list.map(x => {
+        const rects: Record<string, PicRect> = {}
+        for (const x of objs) {
           const r0 = d.startRects[x.id]
-          if (!r0) return x
-          return setPicRect(touchPic(x, 'pos'), g, {
+          rects[x.id] = {
             x: nb.x + (r0.x - bb0.x) * sx, y: nb.y + (r0.y - bb0.y) * sy,
             w: Math.max(1, r0.w * sx), h: Math.max(1, r0.h * sy),
-          })
-        }), 'pos')
+          }
+        }
+        applyRects(rects)
       }
       return
     }
@@ -464,6 +500,8 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
     drag.current = null
     detachDrag()
   }, [detachDrag, onSelect])
+  onDragMoveRef.current = onDragMove
+  onDragUpRef.current = onDragUp
 
   // sel 的 ref（pointerup 里用）
   const selRef = useRef(sel); selRef.current = sel
@@ -522,17 +560,69 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
     beginDrag(e, p, 'move', false)
   }
 
-  const onHandleMouseDown = (e: React.MouseEvent, p: SheetPicture, handle: PicHandle) => {
+  /** 图表按下：与图片同一套选择/拖动状态机（无裁剪/旋转） */
+  const onChartMouseDown = (e: React.MouseEvent, c: ChartSpec) => {
+    if (e.button === 2) {
+      if (!selSet.has(c.id)) onSelect([c.id], c.id)
+      return
+    }
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     onActivate()
-    const list = selSet.has(p.id) && selRef.current.length > 1 ? picsRef.current.filter(q => selSet.has(q.id)) : [p]
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey
+    if (additive) {
+      if (selSet.has(c.id)) {
+        beginChartDrag(e, c, 'move', true)
+        drag.current!.pendingToggleOff = c.id
+        drag.current!.copyLeft = e.ctrlKey || e.metaKey
+        drag.current!.pendingCollapse = null
+        return
+      }
+      onSelect([...selRef.current, c.id], c.id)
+    } else if (!selSet.has(c.id)) {
+      onSelect([c.id], c.id)
+    }
+    beginChartDrag(e, c, 'move', false)
+  }
+
+  const beginChartDrag = (e: React.MouseEvent, c: ChartSpec, kind: 'move', additiveCtx = false) => {
+    const s = toSheet(e.clientX, e.clientY)
+    const list = kind === 'move'
+      ? [...chartsRef.current.filter(q => selSet.has(q.id) || q.id === c.id)]
+      : [c]
     const startRects: Record<string, PicRect> = {}
     const startPics: Record<string, SheetPicture> = {}
     for (const q of list) {
-      startRects[q.id] = picRect(q, geomRef.current)
-      startPics[q.id] = q
+      startRects[q.id] = chartRect(q, geomRef.current)
+      startPics[q.id] = q as unknown as SheetPicture
+    }
+    drag.current = {
+      kind, startX: s.x, startY: s.y, startClientX: e.clientX, startClientY: e.clientY,
+      startRects, startPics,
+      copyLeft: kind === 'move' && (e.ctrlKey || e.metaKey),
+      pendingToggleOff: null,
+      pendingCollapse: kind === 'move' && !additiveCtx && selRef.current.length > 1 ? c.id : null,
+      moved: false,
+    }
+    attachDrag()
+  }
+
+  const onHandleMouseDown = (e: React.MouseEvent, p: { id: string }, handle: PicHandle) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    onActivate()
+    // 多选时拖任意成员的柄 = 缩放整组（图片 + 图表一起）
+    const list: { id: string }[] = selSet.has(p.id) && selRef.current.length > 1
+      ? [...picsRef.current.filter(q => selSet.has(q.id)), ...chartsRef.current.filter(q => selSet.has(q.id))]
+      : [...picsRef.current.filter(q => q.id === p.id), ...chartsRef.current.filter(q => q.id === p.id)]
+    const startRects: Record<string, PicRect> = {}
+    const startPics: Record<string, SheetPicture> = {}
+    for (const q of list) {
+      const isChart = chartsRef.current.some(c => c.id === q.id)
+      startRects[q.id] = isChart ? chartRect(q as unknown as ChartSpec, geomRef.current) : picRect(q as SheetPicture, geomRef.current)
+      startPics[q.id] = q as unknown as SheetPicture
     }
     drag.current = {
       kind: 'resize', handle, startX: toSheet(e.clientX, e.clientY).x, startY: toSheet(e.clientX, e.clientY).y,
@@ -577,6 +667,13 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
     onMenu(e.clientX, e.clientY, p.id)
   }
 
+  const onChartCtx = (e: React.MouseEvent, c: ChartSpec) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!selSet.has(c.id)) onSelect([c.id], c.id)
+    onMenu(e.clientX, e.clientY, c.id)
+  }
+
   return (
     <div
       ref={layerRef}
@@ -607,6 +704,19 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
         return (
           <PicSvg key={p.id} p={p} r={r} onNativeSize={onNativeSize}
             onDown={e => onPicMouseDown(e, p)} onCtx={e => onCtx(e, p)} />
+        )
+      })}
+
+      {/* round61：浮动图表（渲染在图片之上；与图片同一选择/拖拽状态机） */}
+      {charts.map(c => {
+        const r = chartRect(c, geom)
+        return (
+          <div key={c.id} data-chart-id={c.id}
+            style={{ position: 'absolute', left: r.x, top: r.y, width: Math.max(60, r.w), height: Math.max(50, r.h), cursor: 'move' }}
+            onMouseDown={e => onChartMouseDown(e, c)}
+            onContextMenu={e => onChartCtx(e, c)}>
+            <ChartRenderer spec={c} w={Math.max(60, r.w)} h={Math.max(50, r.h)} />
+          </div>
         )
       })}
 
@@ -687,6 +797,39 @@ const PictureLayer: React.FC<PictureLayerProps> = ({
                 fontSize: 10, padding: '0 4px', borderRadius: 2, whiteSpace: 'nowrap',
               }}>
                 {p.name || '图片'}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* round61：图表选择框（8 尺寸柄，图表无旋转柄） */}
+      {charts.map(c => {
+        if (!selSet.has(c.id)) return null
+        const r = chartRect(c, geom)
+        return (
+          <div key={`fc${c.id}`} data-testid={`pic-frame-${c.id}`}
+            style={{ position: 'absolute', left: r.x, top: r.y, width: r.w, height: r.h, pointerEvents: 'none' }}>
+            <div style={{ position: 'absolute', inset: 0, border: '1px solid var(--color-primary,#2563eb)' }} />
+            {HANDLES.map(h => {
+              const [hx, hy] = HANDLE_POS[h]
+              return (
+                <div key={h} data-handle={h}
+                  style={{
+                    position: 'absolute', left: `calc(${hx * 100}% - 4px)`, top: `calc(${hy * 100}% - 4px)`,
+                    width: 8, height: 8, background: '#fff', border: '1px solid #8ea9db',
+                    pointerEvents: 'auto', cursor: CURSOR[h], boxShadow: '0 0 1px rgba(0,0,0,.35)',
+                  }}
+                  onMouseDown={e => onHandleMouseDown(e, c, h)}
+                />
+              )
+            })}
+            {selRef.current.length > 1 && (
+              <div style={{
+                position: 'absolute', left: 0, top: -20, background: 'var(--color-primary,#2563eb)', color: '#fff',
+                fontSize: 10, padding: '0 4px', borderRadius: 2, whiteSpace: 'nowrap',
+              }}>
+                {c.name || '图表'}
               </div>
             )}
           </div>
