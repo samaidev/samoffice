@@ -76,6 +76,14 @@ export interface SlideData {
   bgImg?: string        // round58：背景纹理图（data URL，bgRef → 主题 blipFill）
   bgImgTileW?: number   // 平铺宽（1/100000 %，0 = stretch）
   bgImgTileH?: number
+  handoutMaster?: {     // round66：讲义母版（随首页携带；讲义母版视图编辑，打印讲义时应用）
+    header: string      // 页眉
+    footer: string      // 页脚
+    date: string        // 日期
+    pageOn: boolean     // 页码开关
+    fontSize: number    // 字号 pt
+    color: string       // 文字颜色
+  }
 }
 
 export interface OpenDecision {
@@ -228,6 +236,9 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
         bgImgTileW: typeof (d as any).bgImgTileW === 'number' ? (d as any).bgImgTileW : undefined,
         bgImgTileH: typeof (d as any).bgImgTileH === 'number' ? (d as any).bgImgTileH : undefined,
         masterShapes: Array.isArray((d as any).masterShapes) ? (d as any).masterShapes : undefined,
+        // round66：讲义母版（随首页携带 —— 讲义母版视图编辑/恢复）
+        handoutMaster: (d as any).handoutMaster && typeof (d as any).handoutMaster === 'object' && slides.length === 0
+          ? (d as any).handoutMaster : undefined,
       })
     }
   }

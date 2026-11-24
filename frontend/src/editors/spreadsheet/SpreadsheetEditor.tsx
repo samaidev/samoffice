@@ -7,6 +7,7 @@ import PictureRibbon, { PicCommand } from './PictureRibbon'
 import PicturePane from './PicturePane'
 import IconLibrary from './IconLibrary'
 import ChartRibbon, { ChartCommand } from './ChartRibbon'
+import ChartRenderer from './ChartRenderer'
 import {
   ChartSpec, ChartSpecJSON, ChartType, chartFromJSON, chartToJSON, defaultChart, newChartId,
   seriesFromRange, refreshChartSeries, absRefsForSeries, CHART_TYPES, chartRect, setChartRect,
@@ -1005,18 +1006,69 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           const cellH = innerH / gridRows
           const Kc = Math.min(cellW / innerW, cellH / innerH)
           const padCss = `${settings.margins.top * 1.5}px ${settings.margins.right * 1.5}px ${settings.margins.bottom * 1.5}px ${settings.margins.left * 1.5}px`
-          // 单页内容（表格 + 页脚），perPage=1 时直接作为纸卡内容
+          // round66（问题1：打印预览看不到图表/图片）：页体改成两层结构 ——
+          // 底层表格（原逻辑不动），上层浮层容器叠放浮动图片与图表（绝对定位
+          // 按 picGeom 工作表坐标 → 页内偏移，与编辑视图同源几何，缩放与
+          // 表格列宽缩放系数一致 0.6）。
+          // 图表直接复用 ChartRenderer（交互裁掉，只出 SVG）；图片用纯
+          // img/svg 引用（PicSvg 带编辑态裁剪手柄等，不适合打印场景）。
+          // Excel 语义：浮层对象不参与行分页（跨页对象整块落首页），对齐
+          // Excel 打印中图片覆盖在网格之上。
           const pageBody = (pi: number, from: number, to: number) => {
             const rowIdxs = pi === 0
               ? Array.from({ length: to - from + 1 }, (_, i) => from + i)
               : [...Array.from({ length: titleN }, (_, i) => i), ...Array.from({ length: to - from + 1 }, (_, i) => from + i)]
+            // 该页可视行范围（工作表坐标 y 区间）→ 过滤落页内/跨到本页的浮层对象
+            const pageY0 = heights.slice(0, from).reduce((a, b) => a + b, 0)
+            const pageY1 = pageY0 + heights.slice(from, to + 1).reduce((a, b) => a + b, 0)
+            const SC = 0.6 // 浮层缩放系数（与 cellTd 列宽 0.6 同源）
+            const floatObj = (r2: { x: number; y: number; w: number; h: number }, k: string, node: React.ReactNode) => {
+              // 对象工作表坐标 → 页内坐标（x 列宽同 0.6 缩放；y 行高 1:1）
+              const x = r2.x * SC, y = r2.y - pageY0
+              const w = r2.w * SC, h = r2.h
+              // 与页面相交才渲染（跨页对象整体在本页可见部分即画）
+              if (y + h < 0 || y > (to - from + 1) * 1e6) return null
+              return (
+                <div key={k} style={{ position: 'absolute', left: x, top: y, width: Math.max(8, w), height: Math.max(8, h), pointerEvents: 'none' }}>
+                  {node}
+                </div>
+              )
+            }
+            const floatPics = curPics.filter(p => {
+              if (p.hidden) return false
+              const r2 = picRect(p, picGeom)
+              return r2.y + r2.h >= pageY0 && r2.y <= pageY1
+            }).map(p => {
+              const r2 = picRect(p, picGeom)
+              const inner = p.svgSrc
+                ? <img src={p.svgSrc} width="100%" height="100%" style={{ objectFit: 'fill', display: 'block' }} alt="" />
+                : p.src
+                  ? <img src={p.src} width="100%" height="100%" style={{ objectFit: 'fill', display: 'block' }} alt="" />
+                  : <div style={{ width: '100%', height: '100%', border: '1px dashed #b9b9b9', background: 'repeating-linear-gradient(45deg,#f3f4f6 0 8px,#e5e7eb 8px 16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontSize: 9 }}>{(p.ext || 'img').toUpperCase()}</div>
+              return floatObj(r2, `fp${p.id}`, inner)
+            }).filter(Boolean)
+            const floatCharts = curCharts.filter(c => {
+              const r2 = chartRect(c, picGeom)
+              return r2.y + r2.h >= pageY0 && r2.y <= pageY1
+            }).map(c => {
+              const r2 = chartRect(c, picGeom)
+              return floatObj(r2, `fc${c.id}`, <ChartRenderer spec={c} w={Math.max(60, r2.w * SC)} h={Math.max(50, r2.h)} />)
+            }).filter(Boolean)
             return (
               <>
-                <table className="border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
-                  <tbody>
-                    {rowIdxs.map((r, i) => renderRow(rOff + r, `p${pi}i${i}`))}
-                  </tbody>
-                </table>
+                <div style={{ position: 'relative' }}>
+                  <table className="border-collapse" style={{ tableLayout: 'fixed', width: '100%' }}>
+                    <tbody>
+                      {rowIdxs.map((r, i) => renderRow(rOff + r, `p${pi}i${i}`))}
+                    </tbody>
+                  </table>
+                  {(floatPics.length > 0 || floatCharts.length > 0) && (
+                    <div style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, pointerEvents: 'none', overflow: 'visible' }}>
+                      {floatPics}
+                      {floatCharts}
+                    </div>
+                  )}
+                </div>
                 {chunks.length > 1 && (
                   <div style={{ textAlign: 'center', fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
                     {t('print.pageOf', { n: pi + 1, total: chunks.length }) || `第 ${pi + 1} 页 / 共 ${chunks.length} 页`}{pi > 0 && titleN > 0 ? ` · ${t('print.titleRepeated') || '标题行已重复'}` : ''}
@@ -4182,6 +4234,18 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                   // 冻结格改用【透明边框 + inset box-shadow 画边】：阴影跟随元素盒模型，
                   // 停在冻结位置永远正确。只画朝向非冻结邻居的边（外缘/冻结分界线），
                   // 冻结带内部相邻格共边不重复画（否则内部线 2px 变粗）。
+                  // round66（用户报告：调边框色后首行首列【最外围】边框消失）：
+                  // 同一渲染缺陷的非冻结形态 —— border-collapse 下表格首行上边/首列
+                  // 左边是与表头/表格边缘合并的边，部分 Chromium 版本（WebView2）会
+                  // 把它判给相邻元素（thead 或容器）而数据格自身丢失。首行/首列的
+                  // 外围边（r===0 上边、c===0 左边）用 inset box-shadow 兜底重画 ——
+                  // 阴影跟随元素盒模型，不受合并规则影响；内部边保持 border-collapse
+                  // 合并（不双画）。仅在格子带自定义边框时兜底（网格线本身浅色无感）。
+                  if (cell.border && cell.border !== 'none' && !isFrozenCell && (r === 0 || c === 0)) {
+                    const bc2 = cell.borderColor || '#000'
+                    if (r === 0) shadowParts.push(`inset 0 ${bw} 0 0 ${bc2}`)
+                    if (c === 0) shadowParts.push(`inset ${bw} 0 0 0 ${bc2}`)
+                  }
                   if (isFrozenCell) {
                     const isFz = (rr: number, cc: number) => frozen && (rr < freezeAt!.r || cc < freezeAt!.c)
                     const hasCellBorder = !!cell.border && cell.border !== 'none'

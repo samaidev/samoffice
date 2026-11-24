@@ -106,6 +106,29 @@ interface AnimItem {
   target: string; effect: string; category: string; delay: number; sound?: string
 }
 
+// round66：讲义母版（对齐 MS PPT「讲义母版视图」）—— 页眉/页脚/日期/页码四占位符。
+// 打印讲义（pptContent=handout）时把四要素渲染到纸张页缘；随 deck 保存往返。
+interface HandoutMaster {
+  header: string        // 页眉（纸张右上）
+  footer: string        // 页脚（纸张左下）
+  date: string          // 日期（纸张左上；空 = 不打印）
+  pageOn: boolean       // 页码开关（纸张右下，打印时自动编号）
+  fontSize: number      // 四要素字号 pt
+  color: string         // 四要素文字颜色
+}
+
+function normalizeHandout(h: any): HandoutMaster {
+  if (!h || typeof h !== 'object') return { header: '', footer: '', date: '', pageOn: true, fontSize: 10, color: '#333333' }
+  return {
+    header: typeof h.header === 'string' ? h.header : '',
+    footer: typeof h.footer === 'string' ? h.footer : '',
+    date: typeof h.date === 'string' ? h.date : '',
+    pageOn: h.pageOn !== false,
+    fontSize: Number.isFinite(Number(h.fontSize)) && Number(h.fontSize) > 0 ? Number(h.fontSize) : 10,
+    color: typeof h.color === 'string' && h.color ? h.color : '#333333',
+  }
+}
+
 type RibbonTab = 'home' | 'insert' | 'design' | 'modern' | 'animations' | 'transition' | 'view'
 
 // prstGeom/内部形状 → 缩略图 clip-path（与主画布保持一致的视觉）
@@ -505,6 +528,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '8px 0 16px' }}>
               {papers.map((paperSlides, pi) => (
                 <div key={pi} className="print-paper" style={{ width: pageWpx, minHeight: pageHpx, background: '#fff', boxShadow: '0 4px 16px rgba(15,23,42,0.18)', padding: pad, boxSizing: 'border-box', position: 'relative' }}>
+                  {/* round66：讲义母版四要素（页眉/页脚/日期/页码 —— 讲义母版视图编辑，
+                      打印讲义时应用到每张纸的页缘；与 MS PPT 讲义打印一致） */}
+                  <div data-testid="handout-print-dt" style={{ position: 'absolute', left: 10, top: 4, fontSize: handout.fontSize, color: handout.color }}>{handout.date}</div>
+                  <div data-testid="handout-print-hdr" style={{ position: 'absolute', right: 10, top: 4, fontSize: handout.fontSize, color: handout.color }}>{handout.header}</div>
+                  <div data-testid="handout-print-ftr" style={{ position: 'absolute', left: 10, bottom: 4, fontSize: handout.fontSize, color: handout.color }}>{handout.footer}</div>
+                  {handout.pageOn && <div data-testid="handout-print-num" style={{ position: 'absolute', right: 10, bottom: 4, fontSize: handout.fontSize, color: handout.color }}>{pi + 1}</div>}
                   <div className="flex flex-wrap justify-center items-start" style={{ gap: 8 }}>
                     {paperSlides.map((s, i) => <SlideThumb key={i} slide={s} deco={s.deco} width={thumbW} aspect={aspect} />)}
                     {Array.from({ length: per - paperSlides.length }).map((_, k) => (
@@ -531,6 +560,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     return emuShapesToItems(first?.masterShapes, first?.pageW || 12192000, first?.pageH || 6858000)
   })
   const [masterView, setMasterView] = useState(false)
+  // round66：讲义母版（对齐 MS PPT 讲义母版视图）：页眉/页脚/日期/页码四占位符。
+  // 状态随 deck 持有（打印讲义时应用）；初始从 initialSlides[0].handoutMaster 恢复（保存往返）。
+  const [handoutView, setHandoutView] = useState(false)
+  const [handout, setHandout] = useState<HandoutMaster>(() => {
+    const first = (initialSlides && initialSlides[0]) as any
+    return normalizeHandout(first?.handoutMaster)
+  })
   // 幻灯片页面尺寸（EMU）——设计选项卡的宽屏/标准/自定义真实生效
   const [deckW, setDeckW] = useState(() => {
     const first = (initialSlides && initialSlides[0]) as any
@@ -783,9 +819,11 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             rotation: msh.rotation || undefined,
           } as SlideShape
         }) : undefined,
+        // round66：讲义母版随首页携带（页眉/页脚/日期/页码/字号/颜色 —— 保存往返）
+        handoutMaster: i === 0 ? { ...handout } : undefined,
       }
     })
-  }, [deckW, deckH, masterShapes])
+  }, [deckW, deckH, masterShapes, handout])
 
   // 幻灯片变化时回传给 App（用于保存）
   useEffect(() => {
@@ -1925,8 +1963,13 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           <RibbonGroup label={t('slide.masterView') || '母版视图'}>
             {/* 对齐 MS PPT：母版视图下画布编辑母版形状，普通视图每页底层渲染母版装饰 */}
             <RibbonButton icon="🧬" label={masterView ? (t('slide.exitMaster') || '退出母版视图') : (t('slide.masterView') || '幻灯片母版')}
-              onClick={() => { setMasterView(!masterView); setSelectedEl(null) }} active={masterView}
+              onClick={() => { setMasterView(!masterView); setHandoutView(false); setSelectedEl(null) }} active={masterView}
               title={t('slide.masterTitle') || '母版形状会出现在每页幻灯片底层，保存后写盘 slideMaster1'} />
+            {/* round66：讲义母版（对齐 MS PPT「讲义母版视图」—— 母版家族三件套补齐）。
+                讲义母版编辑页眉/页脚/日期/页码四占位符的文本/字号/颜色；打印讲义时应用。 */}
+            <RibbonButton icon="🗒" label={handoutView ? (t('slide.exitHandoutMaster') || '退出讲义母版') : (t('slide.handoutMaster') || '讲义母版')}
+              onClick={() => { setHandoutView(!handoutView); setMasterView(false); setSelectedEl(null) }} active={handoutView}
+              title={t('slide.handoutTitle') || '讲义页的页眉/页脚/日期/页码，打印讲义时应用'} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.zoom')}>
             <RibbonButton icon="−" label={t('slide.zoomOut')} onClick={() => setZoom(Math.max(50, zoom - 25))} />
@@ -2037,6 +2080,67 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
 
         {/* 中间画布（高度随页面比例：宽 808 固定，高 = 808·pageH/pageW） */}
         <div className="flex-1 flex items-center justify-center p-3 sm:p-6 overflow-auto min-h-0" style={{ background: 'var(--color-bg-alt)' }}>
+          {handoutView ? (
+            /* round66：讲义母版视图（对齐 MS PPT「讲义母版」）—— A4 纵向纸张编辑卡：
+               四占位符（日期左上/页眉右上/页脚左下/页码右下）+ 样式（字号/颜色），
+               中央为讲义缩略布局示意（浅色幻灯片框 + 虚线提示区）。 */
+            <div className="handout-master-canvas bg-white shadow-xl rounded-lg animate-fade-in relative flex flex-col"
+              style={{ width: 595, height: 842, flexShrink: 0 }}>
+              {/* 顶部两占位：日期（左）/ 页眉（右） */}
+              <div className="flex items-start justify-between px-8 pt-6" style={{ gap: 16 }}>
+                <label className="flex flex-col items-start" style={{ minWidth: 0 }}>
+                  <span className="text-[9px] opacity-50 mb-0.5">{t('slide.handoutDtLabel') || '日期'}</span>
+                  <input data-testid="handout-date" value={handout.date} onChange={e => setHandout(h => ({ ...h, date: e.target.value }))}
+                    className="text-xs outline-none bg-transparent border-b border-dashed py-0.5" style={{ width: 170, color: handout.color, fontSize: handout.fontSize, borderColor: 'var(--color-border)' }}
+                    placeholder="2026-11-24" />
+                </label>
+                <label className="flex flex-col items-end text-right" style={{ minWidth: 0 }}>
+                  <span className="text-[9px] opacity-50 mb-0.5">{t('slide.handoutHdrLabel') || '页眉'}</span>
+                  <input data-testid="handout-header" value={handout.header} onChange={e => setHandout(h => ({ ...h, header: e.target.value }))}
+                    className="text-xs outline-none bg-transparent border-b border-dashed py-0.5 text-right" style={{ width: 170, color: handout.color, fontSize: handout.fontSize, borderColor: 'var(--color-border)' }}
+                    placeholder={t('slide.handoutHdrLabel') || '页眉'} />
+                </label>
+              </div>
+              {/* 中央：讲义缩略布局示意（1/2/3/4/6/9 张每页的排布示意线框） */}
+              <div className="flex-1 flex items-center justify-center px-10 py-6">
+                <div className="w-full h-full rounded border-2 border-dashed flex items-center justify-center text-[10px]"
+                  style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}>
+                  {t('slide.handoutPreview') || '讲义页预览（A4 纵向）'} · {slides.length} {t('slide.slideCount') || '页'}
+                </div>
+              </div>
+              {/* 底部两占位：页脚（左）/ 页码（右） */}
+              <div className="flex items-end justify-between px-8 pb-6" style={{ gap: 16 }}>
+                <label className="flex flex-col items-start" style={{ minWidth: 0 }}>
+                  <span className="text-[9px] opacity-50 mb-0.5">{t('slide.handoutFtrLabel') || '页脚'}</span>
+                  <input data-testid="handout-footer" value={handout.footer} onChange={e => setHandout(h => ({ ...h, footer: e.target.value }))}
+                    className="text-xs outline-none bg-transparent border-b border-dashed py-0.5" style={{ width: 170, color: handout.color, fontSize: handout.fontSize, borderColor: 'var(--color-border)' }}
+                    placeholder={t('slide.handoutFtrLabel') || '页脚'} />
+                </label>
+                <label className="flex flex-col items-end text-right" style={{ minWidth: 0 }}>
+                  <span className="text-[9px] opacity-50 mb-0.5">{t('slide.handoutNumLabel') || '页码'}</span>
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" data-testid="handout-pageon" checked={handout.pageOn} onChange={e => setHandout(h => ({ ...h, pageOn: e.target.checked }))} />
+                    <span data-testid="handout-page-sample" className="border-b border-dashed py-0.5" style={{ minWidth: 40, textAlign: 'right', color: handout.color, fontSize: handout.fontSize, borderColor: 'var(--color-border)' }}>1</span>
+                  </div>
+                </label>
+              </div>
+              {/* 样式工具行（字号 + 颜色） */}
+              <div className="flex items-center gap-4 px-8 pb-5 pt-3 border-t" style={{ borderColor: 'var(--color-border)' }}>
+                <label className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--color-text)' }}>
+                  <span className="opacity-60">{t('slide.handoutFontLabel') || '字号 (pt)'}</span>
+                  <input type="number" min={6} max={36} data-testid="handout-fontsize" value={handout.fontSize}
+                    onChange={e => setHandout(h => ({ ...h, fontSize: Math.max(6, Math.min(36, Number(e.target.value) || 10)) }))}
+                    className="w-14 rounded border px-1 py-0.5 text-[10px]" style={{ borderColor: 'var(--color-border)' }} />
+                </label>
+                <label className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--color-text)' }}>
+                  <span className="opacity-60">{t('slide.handoutColorLabel') || '文字颜色'}</span>
+                  <input type="color" data-testid="handout-color" value={handout.color} onChange={e => setHandout(h => ({ ...h, color: e.target.value }))}
+                    className="h-5 w-8 rounded border" style={{ borderColor: 'var(--color-border)' }} />
+                </label>
+              </div>
+            </div>
+          ) : (
+          <>
           {/* slide-canvas：打印选择器锚点（PrintDialog printSelector 与 e2e 依赖） */}
           <div className="slide-canvas bg-white shadow-xl rounded-lg animate-fade-in relative overflow-hidden"
             style={{ width: 808, height: canvasH, background: current.bg, boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)', transform: `scale(${zoom / 100})`, transformOrigin: 'center', flexShrink: 0 }}>
@@ -2223,6 +2327,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               )}
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
 

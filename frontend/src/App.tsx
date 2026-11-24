@@ -1155,11 +1155,13 @@ ${t('sample.md.more')}
         const snap0 = snaps[0] as any
         const pageW = snap0?.pageW && snap0.pageW > 0 ? Number(snap0.pageW) : 12192000
         const pageH = snap0?.pageH && snap0.pageH > 0 ? Number(snap0.pageH) : 6858000
+        // round66：讲义母版随保存 JSON 传递（首页 handoutMaster → writePPTX.HandoutMaster）
+        const handoutMaster = snap0?.handoutMaster && typeof snap0.handoutMaster === 'object' ? snap0.handoutMaster : undefined
         // 形态3（wasm）：主模块内存生成 pptx 字节后浏览器下载（无服务端）。
         // 与桌面版 WritePPTX binding / HTTP /api/pptx/save 同一 JSON 契约。
         if (backend.mode === 'wasm') {
           const title = (activeWindow?.title || 'untitled').replace(/\.(pptx?|ppsx?)$/i, '')
-          await (backend as any).writePPTX(`${title}.pptx`, JSON.stringify({ pageW, pageH, slides: snaps }))
+          await (backend as any).writePPTX(`${title}.pptx`, JSON.stringify({ pageW, pageH, slides: snaps, handoutMaster }))
           showToast(t('app.exported', { format: 'PPTX' }))
           return
         }
@@ -1167,7 +1169,7 @@ ${t('sample.md.more')}
         const resp = await fetch(`${base}/api/pptx/save`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pageW, pageH, slides: snaps }),
+          body: JSON.stringify({ pageW, pageH, slides: snaps, handoutMaster }),
         })
         if (!resp.ok) {
           showToast(t('app.exportFailed', { msg: (await resp.text()).slice(0, 150) }))

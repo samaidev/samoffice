@@ -26,6 +26,18 @@ type writePPTX struct {
         Slides []slideWrite `json:"slides"`
         // 母版形状（母版视图编辑的装饰层；写盘进 slideMaster1.xml spTree，对齐 MS PPT 母版）
         MasterShapes []shapeWrite `json:"masterShapes,omitempty"`
+        // round66：讲义母版（讲义母版视图编辑；写盘进 handoutMaster1.xml 占位符文本/字号/颜色）
+        HandoutMaster *handoutWrite `json:"handoutMaster,omitempty"`
+}
+
+// round66：讲义母版写盘模型（与前端 HandoutMaster 一一对应）
+type handoutWrite struct {
+        Header   string `json:"header,omitempty"`
+        Footer   string `json:"footer,omitempty"`
+        Date     string `json:"date,omitempty"`
+        PageOn   *bool  `json:"pageOn,omitempty"` // nil = 默认开
+        FontSize int    `json:"fontSize,omitempty"`
+        Color    string `json:"color,omitempty"`
 }
 
 type slideWrite struct {
@@ -122,6 +134,8 @@ func pptxBytesFromJSON(jsonStr string) ([]byte, error) {
 	if err := builder.build(data.Slides, data.MasterShapes); err != nil {
 		return nil, err
 	}
+	// round66：讲义母版（写盘占位符文本/样式）
+	builder.handout = data.HandoutMaster
 	var buf bytes.Buffer
 	if err := builder.writeTo(&buf); err != nil {
 		return nil, err
@@ -144,6 +158,8 @@ type pptxWriter struct {
         media   []mediaFile
         bgMedia []string     // 每页背景图的 media 名（无背景图为空串），与 slides 一一对应
         master  []shapeWrite // 母版形状（母版视图编辑，写盘进 slideMaster1.xml）
+        // round66：讲义母版（讲义母版视图编辑，写盘进 handoutMaster1.xml）
+        handout *handoutWrite
 }
 
 // prstGeom 把前端类型映射为 PPTX 预设几何名
@@ -823,6 +839,22 @@ func (w *pptxWriter) writeTo(dst io.Writer) error {
         if err := writeZip(zw, "ppt/slideMasters/_rels/slideMaster1.xml.rels", masterRels); err != nil {
                 return err
         }
+        // round66：讲义母版 + 备注母版（对齐 MS PPT 母版家族：幻灯片/讲义/备注三母版）。
+        // 讲义母版承载讲义页的页眉/页脚/日期/页码占位符（打印讲义时应用）；
+        // 备注母版承载备注页版式。均为标准 OOXML 部件 —— 之前缺失，用户在 MS PPT
+        // 里看到的"讲义母版视图"在本工程保存的文件里不存在，保存往返丢配置。
+        if err := writeZip(zw, "ppt/handoutMasters/handoutMaster1.xml", w.buildHandoutMasterXML(w.handout)); err != nil {
+                return err
+        }
+        if err := writeZip(zw, "ppt/handoutMasters/_rels/handoutMaster1.xml.rels", handoutMasterRels); err != nil {
+                return err
+        }
+        if err := writeZip(zw, "ppt/notesMasters/notesMaster1.xml", buildNotesMasterXML()); err != nil {
+                return err
+        }
+        if err := writeZip(zw, "ppt/notesMasters/_rels/notesMaster1.xml.rels", notesMasterRels); err != nil {
+                return err
+        }
         if err := writeZip(zw, "ppt/slideLayouts/slideLayout1.xml", layoutXML); err != nil {
                 return err
         }
@@ -909,6 +941,13 @@ func (w *pptxWriter) presentation(n int) (string, string) {
         body.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
         body.WriteString(`<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">`)
         body.WriteString(`<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>`)
+        // round66：讲义/备注母版注册（notesMasterIdLst CT_IndexList，讲义母版通过
+        // presentation.xml.rels 直接引用 —— 无 presentation 内引用元素；notesMasterIdLst
+        // 挂备注母版。二者 PowerPoint 均要求存在）。rId 用 slides 之后的首两个
+        //（rId(N+4)、rId(N+5)）—— 保持全数字序列，最大化 PowerPoint 兼容。
+        handoutRId := fmt.Sprintf("rId%d", n+4)
+        notesRId := fmt.Sprintf("rId%d", n+5)
+        body.WriteString(`<p:notesMasterIdLst><p:notesMasterId id="2147483649" r:id="` + notesRId + `"/></p:notesMasterIdLst>`)
         body.WriteString(`<p:sldIdLst>`)
         for i := 0; i < n; i++ {
                 id := 256 + i
@@ -925,6 +964,10 @@ func (w *pptxWriter) presentation(n int) (string, string) {
         rels.WriteString(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slides/slideMaster1.xml"/>`)
         rels.WriteString(`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="slides/slideLayout1.xml"/>`)
         rels.WriteString(`<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`)
+        // round66：讲义母版 + 备注母版关系（slides 之后的两个数字 rId，与上方
+        // notesMasterIdLst/notesRId 一致；讲义母版无 presentation 内元素只挂 rels）
+        rels.WriteString(`<Relationship Id="` + handoutRId + `" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/handoutMaster" Target="handoutMasters/handoutMaster1.xml"/>`)
+        rels.WriteString(`<Relationship Id="` + notesRId + `" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="notesMasters/notesMaster1.xml"/>`)
         for i := 0; i < n; i++ {
                 rels.WriteString(fmt.Sprintf(`<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide%d.xml"/>`, i+4, i+1))
         }
@@ -976,6 +1019,9 @@ func (w *pptxWriter) contentTypes() string {
         b.WriteString(`<Default Extension="webp" ContentType="image/webp"/>`)
         b.WriteString(`<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>`)
         b.WriteString(`<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>`)
+        // round66：讲义/备注母版部件类型注册
+        b.WriteString(`<Override PartName="/ppt/handoutMasters/handoutMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.handoutMaster+xml"/>`)
+        b.WriteString(`<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml"/>`)
         b.WriteString(`<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>`)
         b.WriteString(`<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>`)
         for i := range w.slides {
@@ -1070,6 +1116,125 @@ const layoutRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
         `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>` +
         `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>` +
         `</Relationships>`
+
+// round66：讲义/备注母版（对齐 MS PPT「讲义母版视图」「备注母版视图」）。
+// 讲义母版标准占位符四件套（与 PowerPoint 默认 handoutMaster 一致）：
+//   页眉（hdr 顶部左）/ 页脚（ftr 底部左）/ 日期（dt 顶部左上）/ 页码（sldNum 底部右）。
+// notesSz 纵向 A4（6858000×9144000 EMU = 7.5×10 英寸）与 presentation.xml 一致。
+
+const handoutMasterRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>` +
+        `</Relationships>`
+
+const notesMasterRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>` +
+        `</Relationships>`
+
+// 占位符 sp 生成（type=hdr/ftr/dt/sldNum + 位置 + 默认字号）。文本为空 ——
+// PowerPoint 打开时按幻灯片母版页脚设置渲染实际内容（讲义母版只管样式与布局）。
+const handoutNS = `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+
+func handoutPlaceholder(id int, name, phType, phIdx string, x, y, cx, cy int, align string) string {
+        algn := ""
+        if align != "" {
+                algn = `<a:pPr algn="` + align + `"/>`
+        }
+        return `<p:sp><p:nvSpPr><p:cNvPr id="` + fmt.Sprintf("%d", id) + `" name="` + name + `"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="` + phType + `"` +
+                func() string { if phIdx != "" { return ` idx="` + phIdx + `"` } ; return `` }() + `/></p:nvPr></p:nvSpPr>` +
+                `<p:spPr><a:xfrm><a:off x="` + fmt.Sprintf("%d", x) + `" y="` + fmt.Sprintf("%d", y) + `"/><a:ext cx="` + fmt.Sprintf("%d", cx) + `" cy="` + fmt.Sprintf("%d", cy) + `"/></a:xfrm>` +
+                `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>` +
+                `<p:txBody ` + handoutNS + `><a:bodyPr/><a:lstStyle/><a:p>` + algn + `<a:r><a:rPr lang="zh-CN" sz="1200"/><a:t></a:t></a:r></a:p></p:txBody></p:sp>`
+}
+
+// round66：带文本/样式/页码字段（fld）的占位符 —— 讲义母版编辑态写出。
+// text = 占位符文字（页码传 "<fld>" 特殊值 → 输出 a:fld slidenc 自动页码）。
+func handoutPlaceholderText(id int, name, phType string, x, y, cx, cy int, align, text, rPrFull string) string {
+        algn := ""
+        if align != "" {
+                algn = `<a:pPr algn="` + align + `"/>`
+        }
+        var run string
+        if text == "<Compatible:页码自动>" {
+                // sldNum 占位符用字段（PowerPoint 自动填页码）—— 对齐 MS PPT 讲义母版
+                run = `<a:fld id="{28B5D1D5-31BE-4CE5-BFBB-D6AC9A1AF02B}" type="slidenum">` + rPrFull + `<a:t>1</a:t></a:fld>`
+        } else if text != "" {
+                run = `<a:r>` + rPrFull + `<a:t>` + xmlEsc(text) + `</a:t></a:r>`
+        } else {
+                run = `<a:endParaRPr lang="zh-CN" sz="1200"/>`
+        }
+        return `<p:sp><p:nvSpPr><p:cNvPr id="` + fmt.Sprintf("%d", id) + `" name="` + name + `"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="` + phType + `"/></p:nvPr></p:nvSpPr>` +
+                `<p:spPr><a:xfrm><a:off x="` + fmt.Sprintf("%d", x) + `" y="` + fmt.Sprintf("%d", y) + `"/><a:ext cx="` + fmt.Sprintf("%d", cx) + `" cy="` + fmt.Sprintf("%d", cy) + `"/></a:xfrm>` +
+                `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>` +
+                `<p:txBody ` + handoutNS + `><a:bodyPr/><a:lstStyle/><a:p>` + algn + run + `</a:p></p:txBody></p:sp>`
+}
+
+// buildHandoutMasterXML：讲义母版（页眉/页脚/日期/页码四占位符，纵向 A4 版面）。
+// round66：接受编辑态（页眉/页脚/日期文本 + 字号/颜色写进占位符 rPr；页码开关
+// 映射 sldNum 占位符的文本 —— 关时输出空占位符保留结构）。
+func (w *pptxWriter) buildHandoutMasterXML(h *handoutWrite) string {
+        // A4 纵向 6858000×9144000；占位符条位于页缘（页眉 y=612940 上部 / 页脚 y=8429400 底部）
+        const bandH = 457200 // 0.5in
+        // 编辑态归一化（nil = 全默认）
+        hdrText, ftrText, dtText := "", "", ""
+        sz := 1200 // 12pt
+        colr := ""
+        if h != nil {
+                hdrText, ftrText, dtText = h.Header, h.Footer, h.Date
+                if h.FontSize > 0 && h.FontSize <= 400 {
+                        sz = h.FontSize * 100
+                }
+                colr = strings.TrimPrefix(h.Color, "#")
+                if len(colr) == 6 {
+                        colr = strings.ToUpper(colr)
+                } else {
+                        colr = ""
+                }
+        }
+        rPrFull := func() string {
+                s := fmt.Sprintf(` sz="%d"`, sz)
+                if colr != "" {
+                        s += fmt.Sprintf(`<a:solidFill><a:srgbClr val="%s"/></a:solidFill>`, colr)
+                }
+                return s
+        }
+        ph := make([]string, 0, 4)
+        ph = append(ph, handoutPlaceholderText(2, "Date Placeholder 1", "dt", 457200, 612940, 2133600, bandH, "", dtText, rPrFull()))
+        ph = append(ph, handoutPlaceholderText(3, "Header Placeholder 2", "hdr", 4267200, 612940, 2133600, bandH, "r", hdrText, rPrFull()))
+        ph = append(ph, handoutPlaceholderText(4, "Footer Placeholder 3", "ftr", 457200, 8429400, 2133600, bandH, "", ftrText, rPrFull()))
+        ph = append(ph, handoutPlaceholderText(5, "Slide Number Placeholder 4", "sldNum", 4267200, 8429400, 2133600, bandH, "r", "<Compatible:页码自动>", rPrFull()))
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+                `<p:handoutMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">` +
+                `<p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>` +
+                `<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>` +
+                strings.Join(ph, "") +
+                `</p:spTree></p:cSld>` +
+                `<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>` +
+                `</p:handoutMaster>`
+}
+
+// buildNotesMasterXML：备注母版（幻灯片图像区 + 备注文本区 + 页眉/页脚/日期/页码）。
+func buildNotesMasterXML() string {
+        const W = 6858000
+        const H = 9144000
+        ph := make([]string, 0, 6)
+        // 幻灯片图像区（sldImg 上半部居中）+ 备注正文（body 下半部）
+        ph = append(ph, `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Slide Image Placeholder 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="685800" y="685800"/><a:ext cx="5486400" cy="2743200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="zh-CN"/></a:p></p:txBody></p:sp>`)
+        ph = append(ph, `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="685800" y="3657600"/><a:ext cx="5486400" cy="4114800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="1200"/><a:t></a:t></a:r></a:p></p:txBody></p:sp>`)
+        ph = append(ph, handoutPlaceholder(4, "Date Placeholder 3", "dt", "", 457200, 612940, 2133600, 457200, ""))
+        ph = append(ph, handoutPlaceholder(5, "Slide Number Placeholder 4", "sldNum", "", 4267200, 8429400, 2133600, 457200, "r"))
+        ph = append(ph, handoutPlaceholder(6, "Footer Placeholder 5", "ftr", "", 457200, 8429400, 2133600, 457200, ""))
+        ph = append(ph, handoutPlaceholder(7, "Header Placeholder 6", "hdr", "", 4267200, 612940, 2133600, 457200, "r"))
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+                `<p:notesMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">` +
+                `<p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>` +
+                `<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>` +
+                strings.Join(ph, "") +
+                `</p:spTree></p:cSld>` +
+                `<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>` +
+                `</p:notesMaster>`
+}
 
 // ---------- zip 助手 ----------
 

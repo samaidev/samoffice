@@ -1937,6 +1937,28 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 		}
 	}
 
+	// round66：讲义母版（handoutMaster1.xml → 前端 SlideData.handoutMaster 往返）。
+	// 解析四占位符文本（dt/hdr/ftr）+ rPr 字号/颜色；sldNum 用 fld 存在即 pageOn=true。
+	var handoutInfo map[string]any
+	{
+		hmPath := ""
+		for name := range files {
+			if strings.HasPrefix(name, "ppt/handoutMasters/handoutMaster") && strings.HasSuffix(name, ".xml") {
+				if hmPath == "" || name < hmPath {
+					hmPath = name
+				}
+			}
+		}
+		if hmPath != "" {
+			if hf, ok := files[hmPath]; ok {
+				if hrc, herr := hf.Open(); herr == nil {
+					handoutInfo = parseHandoutMaster(hrc)
+					hrc.Close()
+				}
+			}
+		}
+	}
+
 	// 解析每张幻灯片
 	for _, slideName := range slideNames {
 		f := files[slideName]
@@ -2062,6 +2084,8 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 				"bgImgTileH": slide.BgImg.TileH,
 				"pageW":        pageWEMU,
 				"pageH":        pageHEMU,
+				// round66：讲义母版（随首页携带 —— SlideEditor 讲义母版视图恢复）
+				"handoutMaster": handoutInfo,
 			},
 		})
 	}
@@ -2078,6 +2102,103 @@ func slideRelsName(slideName string) string {
 		return dir + "/_rels/" + file + ".rels"
 	}
 	return "_rels/" + base + ".rels"
+}
+
+// parseHandoutMaster 解析讲义母版（round66：页眉/页脚/日期/页码占位符 → 前端模型）。
+// 流式解码（本包风格，无 DOM 树工具）：状态机 —— 进入 <p:ph type=…> 记录当前占位符
+// 类型，随后首个 <a:t> 文本归它；rPr 的 sz/srgbClr 作为样式。sldNum 出现 = pageOn。
+// 解析失败返回 nil（前端 normalizeHandout 兜底默认值）。
+func parseHandoutMaster(rc io.Reader) map[string]any {
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil
+	}
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	out := map[string]any{}
+	pageOn := false
+	curPh := ""      // 当前占位符类型（dt/hdr/ftr/sldNum）
+	textDone := false // 当前占位符的文本已取
+	var rPrAttr []xml.Attr // 当前 rPr 的属性（含子元素 srgbClr 的 val 以 Attr 模拟）
+	curSrgb := ""
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "ph":
+				for _, a := range t.Attr {
+					if a.Name.Local == "type" {
+						curPh = a.Value
+						textDone = false
+						if curPh == "sldNum" {
+							pageOn = true
+						}
+					}
+				}
+			case "rPr":
+				if curPh != "" {
+					rPrAttr = t.Attr
+				}
+			case "srgbClr":
+				if curPh != "" {
+					for _, a := range t.Attr {
+						if a.Name.Local == "val" {
+							curSrgb = a.Value
+						}
+					}
+				}
+			case "t":
+				if curPh != "" && !textDone {
+					// 读取下一个 token（CharData）作为占位符文本
+					if next, err2 := dec.Token(); err2 == nil {
+						if cd, ok := next.(xml.CharData); ok {
+							text := strings.TrimSpace(string(cd))
+							switch curPh {
+							case "dt":
+								out["date"] = text
+							case "hdr":
+								out["header"] = text
+							case "ftr":
+								out["footer"] = text
+							}
+							textDone = true
+						}
+					}
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "sp" {
+				curPh = ""
+				textDone = false
+			}
+			if t.Name.Local == "txBody" || t.Name.Local == "p" {
+				if curPh != "" && len(rPrAttr) > 0 {
+					for _, a := range rPrAttr {
+						if a.Name.Local == "sz" {
+							if n := atoiSafe(a.Value); n > 0 {
+								out["fontSize"] = int(n) / 100
+							}
+						}
+					}
+					if len(curSrgb) == 6 {
+						out["color"] = "#" + strings.ToUpper(curSrgb)
+					}
+					rPrAttr = nil
+					curSrgb = ""
+				}
+			}
+		}
+	}
+	if pageOn {
+		out["pageOn"] = true
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // parsePresentationSize 读取 ppt/presentation.xml 的 <p:sldSz cx cy/>（EMU）。
