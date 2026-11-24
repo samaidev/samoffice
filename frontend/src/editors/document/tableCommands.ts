@@ -571,51 +571,131 @@ function decodeSides(enc: string): boolean[] {
 // top 上框线 | bottom 下框线 | left 左框线 | right 右框线
 // innerH 内部横线 | innerV 内部竖线
 // opts.color / opts.width 提供时同时设置线色（hex）/线宽（pt，0=恢复默认 1px）。
+//
+// round68 修复（用户主诉"不管选左框线还是右框线，所有边框按钮都失效，
+// 都会弄成全边框"）—— 两个根因：
+// ① 旧实现对方位预设只做"加线"（sides[n]=true），而新表格单元格未自定义
+//    边框时 decodeSides 默认四边全有 → 左/右/上/下/内部/外侧点了都还是
+//    全边框，视觉上"全部失效"。MS Word 的预设是【切换】语义：参与边当前
+//    全开 → 全部去掉；否则 → 全部加上（all/none 保持绝对设置）。
+// ② 表格是 border-collapse:collapse（schema.ts table toDOM），折叠模式下
+//    共享边由相邻两格中"较强"一侧绘制 —— 只关掉本格的边，邻居的反向边
+//    仍把线画出来。因此去线必须【双侧同删】：关掉某格的边时同步关掉
+//    相邻格的反向边（对齐 Word 的共享边模型）。
 export function setCellBorders(state: any, dispatch: any, preset: string, opts?: { color?: string; width?: number }): boolean {
   if (!dispatch) return !!getTableInfo(state)
   const info = getTableInfo(state)
   if (!info) return false
-  const { startRow, startCol, endRow, endCol } = info
+  const { tableNode, tablePos, startRow, startCol, endRow, endCol } = info
   const tr = state.tr
-  let changed = false
-  forEachCellInSelection(state, tr, (cell, r, c, pos, trRef) => {
-    let sides = decodeSides(cell.attrs.borders)
-    switch (preset) {
-      case 'all': sides = [true, true, true, true]; break
-      case 'none': sides = [false, false, false, false]; break
-      case 'outer':
-        // 外侧框线：仅选区外边缘有线，内部边缘保持原样（对齐 MS Word"外侧框线"）
-        sides = [
-          r === startRow ? true : sides[0],
-          c === endCol ? true : sides[1],
-          r === endRow ? true : sides[2],
-          c === startCol ? true : sides[3],
-        ]
-        break
-      case 'inner':
-        // 内部框线：仅内部边缘有线，外边缘保持原样（对齐 MS Word"内部框线"）
-        sides = [
-          r > startRow ? true : sides[0],
-          c < endCol ? true : sides[1],
-          r < endRow ? true : sides[2],
-          c > startCol ? true : sides[3],
-        ]
-        break
-      case 'innerH': sides = [r > startRow ? true : sides[0], sides[1], r < endRow ? true : sides[2], sides[3]]; break
-      case 'innerV': sides = [sides[0], c < endCol ? true : sides[1], sides[2], c > startCol ? true : sides[3]]; break
-      case 'top': if (r === startRow) sides[0] = true; break
-      case 'bottom': if (r === endRow) sides[2] = true; break
-      case 'left': if (c === startCol) sides[3] = true; break
-      case 'right': if (c === endCol) sides[1] = true; break
-      default: return
+
+  // 全表网格坐标图（rowspan/colspan 展开到格子坐标）：grid[r][c] = { pos, attrs }
+  const grid: { pos: number; attrs: any }[][] = []
+  let rowOffset = 0
+  for (let r = 0; r < tableNode.childCount; r++) {
+    const row = tableNode.child(r)
+    let cellOffset = 0
+    let c = 0
+    if (!grid[r]) grid[r] = []
+    for (let i = 0; i < row.childCount; i++) {
+      const cell = row.child(i)
+      const rs = cell.attrs.rowspan || 1
+      const cs = cell.attrs.colspan || 1
+      while (grid[r][c]) c++
+      for (let ri = r; ri < r + rs; ri++) {
+        if (!grid[ri]) grid[ri] = []
+        for (let ci = c; ci < c + cs; ci++) grid[ri][ci] = { pos: tablePos + 1 + rowOffset + 1 + cellOffset, attrs: cell.attrs }
+      }
+      c += cs
+      cellOffset += cell.nodeSize
     }
-    const enc = sides.map(b => (b ? '1' : '0')).join('')
-    const next: any = { ...cell.attrs, borders: enc }
-    if (opts && opts.color) next.borderColor = opts.color
-    if (opts && opts.width !== undefined) next.borderW = opts.width
-    trRef.setNodeMarkup(pos, undefined, next)
+    rowOffset += row.nodeSize
+  }
+
+  // 预设"参与边"矩阵（true/false=该边由本预设管辖，undefined=不管辖）；
+  // 边序 [top,right,bottom,left]。单格点内部框线/横线/竖线时全表均无参与边。
+  const part = (r: number, c: number): (boolean | undefined)[] => {
+    switch (preset) {
+      case 'all': case 'none': return [true, true, true, true]
+      case 'outer': return [r === startRow, c === endCol, r === endRow, c === startCol]
+      case 'inner': return [r > startRow, c < endCol, r < endRow, c > startCol]
+      case 'innerH': return [r > startRow, undefined, r < endRow, undefined]
+      case 'innerV': return [undefined, c < endCol, undefined, c > startCol]
+      case 'top': return [r === startRow, undefined, undefined, undefined]
+      case 'bottom': return [undefined, undefined, r === endRow, undefined]
+      case 'left': return [undefined, undefined, undefined, c === startCol]
+      case 'right': return [undefined, c === endCol, undefined, undefined]
+      default: return []
+    }
+  }
+
+  // 选区矩形覆盖的格子（按节点去重，colspan 只处理一次）
+  const sel = new Map<number, { sides: boolean[]; attrs: any; p: (boolean | undefined)[] }>()
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      const g = grid[r] && grid[r][c]
+      if (!g || sel.has(g.pos)) continue
+      sel.set(g.pos, { sides: decodeSides(g.attrs.borders), attrs: g.attrs, p: part(r, c) })
+    }
+  }
+
+  // 切换决策（MS Word 语义）：所有参与边当前全开 → 关；否则 → 开。
+  const decision = preset === 'all' ? true
+    : preset === 'none' ? false
+    : (() => {
+      let any = false, allOn = true
+      for (const it of sel.values()) it.p.forEach((pj, i) => { if (pj) { any = true; if (!it.sides[i]) allOn = false } })
+      return any ? !allOn : null // 无参与边（如单格点"内部框线"）：无事可做
+    })()
+  if (decision === null) return false
+
+  let changed = false
+  const mkAttrs = (attrs: any, sides: boolean[]): any => {
+    const nxt: any = { ...attrs, borders: sides.map(b => (b ? '1' : '0')).join('') }
+    if (opts && opts.color) nxt.borderColor = opts.color
+    if (opts && opts.width !== undefined) nxt.borderW = opts.width
+    return nxt
+  }
+  // 选区外邻居的待写状态（可能被多条传播请求命中，需累积）
+  const out = new Map<number, { attrs: any; sides: boolean[] }>()
+  const neighborOff = (r: number, c: number, side: number) => {
+    const g = grid[r] && grid[r][c]
+    if (!g || sel.has(g.pos)) return // 选区内邻居的边由决策统一处理
+    const cur = out.get(g.pos) || { attrs: g.attrs, sides: decodeSides(g.attrs.borders) }
+    if (!cur.sides[side]) return
+    cur.sides[side] = false
+    out.set(g.pos, cur)
+  }
+  // 按网格坐标遍历：写盘（按节点去重，colspan 一格一次）+ 去线传播（需要坐标定位邻居）
+  const done = new Set<number>()
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      const g = grid[r] && grid[r][c]
+      if (!g) continue
+      const it = sel.get(g.pos)!
+      if (!done.has(g.pos)) {
+        done.add(g.pos)
+        const next = [...it.sides]
+        it.p.forEach((pj, i) => { if (pj) next[i] = decision })
+        if (next.map(b => (b ? '1' : '0')).join('') !== it.sides.map(b => (b ? '1' : '0')).join('')) {
+          tr.setNodeMarkup(g.pos, undefined, mkAttrs(it.attrs, next))
+          changed = true
+        }
+      }
+      // 去线传播：本格被关掉的边，把选区外邻居的反向边一并关掉
+      // （collapse 模式下共享边由较强一侧绘制，单侧关不掉）
+      if (!decision) {
+        if (it.p[0]) neighborOff(r - 1, c, 2)
+        if (it.p[1]) neighborOff(r, c + 1, 3)
+        if (it.p[2]) neighborOff(r + 1, c, 0)
+        if (it.p[3]) neighborOff(r, c - 1, 1)
+      }
+    }
+  }
+  for (const [pos, cur] of out) {
+    tr.setNodeMarkup(pos, undefined, mkAttrs(cur.attrs, cur.sides))
     changed = true
-  })
+  }
   if (!changed) return false
   dispatch(tr)
   return true

@@ -3909,6 +3909,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           return (
             <input
               ref={fbInputRef}
+              data-testid="formula-bar-input"
               value={display}
               onFocus={() => { setFormulaBarFocused(true); if (editCell) editViaRef.current = 'bar' }}
               onBlur={() => setFormulaBarFocused(false)}
@@ -4292,7 +4293,25 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
                         // 落在选区外由 onContextMenu 把选区移到该格。左键以下逻辑照常。
                         if (e.button !== 0) return
                         // 公式引用点选：编辑以 = 开头的内容时，点击单元格插入其引用（Excel 行为）
-                        if (refModeActive) { e.preventDefault(); insertCellRef(r, c, e.shiftKey || !!refDragRef.current); return }
+                        if (refModeActive) {
+                          // round68 修复（用户主诉"再编辑公式所在格子会无法编辑，
+                          // 且不断把 b4 塞进公式"）：点【公式所在格自身】= 提交编辑、
+                          // 退出引用点选，而不是把自己的地址插进公式。旧版对自身
+                          // 格照常 insertCellRef —— 每点一次塞一个 "B4"；且网格
+                          // mousedown 全部 preventDefault，公式栏永不 blur、
+                          // formulaBarFocused 永真，引用模式鼠标路径完全退不出。
+                          const ownCell = editCell
+                            ? (editCell.r === r && editCell.c === c)
+                            : !!(formulaBarFocused && active && active.r === r && active.c === c)
+                          if (ownCell) {
+                            e.preventDefault()
+                            if (editCell) commitEdit()
+                            else { try { fbInputRef.current?.blur() } catch { /* ignore */ } }
+                            focusGrid()
+                            return
+                          }
+                          e.preventDefault(); insertCellRef(r, c, e.shiftKey || !!refDragRef.current); return
+                        }
                         // ★ round22 修复（用户报告：编辑一格后点下一格，上一格内容丢失）：
                         // 编辑态中单击另一格 —— Excel 行为是【先提交当前编辑】再切换选区。
                         // 旧版直接换选区，editCell 悬空未提交，输入的缓冲随下一次

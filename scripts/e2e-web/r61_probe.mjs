@@ -53,7 +53,7 @@ const chartLayoutBox = () => page.evaluate(() => {
   return { x: lr.left + num(el.style.left) * scale, y: lr.top + num(el.style.top) * scale, w: num(el.style.width) * scale, h: num(el.style.height) * scale }
 })
 const chartTexts = () => page.evaluate(() => Array.from(document.querySelectorAll('svg[data-chart-id] text')).map(t => t.textContent).join('|'))
-const chartSvg = () => page.evaluate(() => document.querySelector('svg[data-chart-id]')?.innerHTML || '')
+const chartSvg = () => page.evaluate(() => document.querySelector('[data-testid="pic-layer"] svg[data-chart-id]')?.innerHTML || '')
 
 try {
   // ============ 打开数据表 ============
@@ -78,7 +78,7 @@ try {
   await page.click('[data-testid="sheet-btn-chart"]')
   await page.waitForSelector('[data-testid="insert-chart-column"]')
   await page.click('[data-testid="insert-chart-column"]')
-  await page.waitForSelector('svg[data-chart-id]', { timeout: 15000 })
+  await page.waitForSelector('[data-testid="pic-layer"] svg[data-chart-id]', { timeout: 15000 })
   await page.waitForTimeout(500)
 
   const svg0 = await chartSvg()
