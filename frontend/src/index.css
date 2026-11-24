@@ -1939,3 +1939,9 @@ img[data-float="center"] { display: block; margin: 0 auto; }
   font-weight: 600;
   color: var(--color-primary, #4f46e5);
 }
+
+/* round64：表格边框拖拽光标（class 驱动 —— table.style.cursor 会被分页装饰/NodeView 重写冲掉） */
+table.pm-table.pm-col-resize,
+table.pm-table.pm-col-resize * { cursor: col-resize !important; }
+table.pm-table.pm-row-resize,
+table.pm-table.pm-row-resize * { cursor: row-resize !important; }

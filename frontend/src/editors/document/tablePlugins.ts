@@ -88,23 +88,33 @@ export class DocTableView {
     this.table.appendChild(this.contentDOM)
     this.syncAttrs(node)
     this.attachHandle()
+    this.attachResizeHandle()
   }
 
-  /** 应用 table 节点属性到 <table>（与 schema.table.toDOM 同源）。 */
+  /** 应用 table 节点属性到 <table>（与 schema.table.toDOM 同源）。
+   * round64 修复（用户报告：表格无法拖边框调行高列宽）：
+   * 旧实现 style.cssText = ... 全量覆写 —— 拖边框插件在 table 上设置的
+   * cursor（col-resize/row-resize）随任何 NodeView update() 被清掉
+   * （拖拽/对齐等任何事务都触发 update），光标闪烁/消失，用户感知
+   * 「拖不动」。改为逐属性赋值：cursor 等运行时状态与布局属性解耦。 */
   private syncAttrs(node: PMNode) {
     const align = node.attrs.align
-    let style = 'border-collapse: collapse; margin: 8px 0'
-    if (align === 'center') style += '; margin-left: auto; margin-right: auto'
-    else if (align === 'right') style += '; margin-left: auto'
-    else if (align === 'left') style += '; margin-right: auto'
+    const st = this.table.style
+    st.borderCollapse = 'collapse'
+    st.margin = '8px 0'
+    if (align === 'center') { st.marginLeft = 'auto'; st.marginRight = 'auto' }
+    else if (align === 'right') { st.marginLeft = 'auto'; st.marginRight = '' }
+    else if (align === 'left') { st.marginRight = 'auto'; st.marginLeft = '' }
+    else { st.marginLeft = ''; st.marginRight = '' }
     const grid = buildGrid(node)
     const allW = grid.cols > 0 && grid.colWidths.every((w) => (w || 0) > 0)
     if (allW) {
       const sum = grid.colWidths.reduce((a: number, w) => a + (w || 0), 0)
-      if (sum > 0) style += '; table-layout: fixed; width: ' + Math.round(sum) + 'px'
+      if (sum > 0) { st.tableLayout = 'fixed'; st.width = Math.round(sum) + 'px' }
+    } else {
+      st.tableLayout = ''; st.width = ''
     }
-    this.table.style.cssText = style
-    this.table.className = 'pm-table'
+    if (!this.table.classList.contains('pm-table')) this.table.classList.add('pm-table')
     this.table.setAttribute('data-align', (align || 'left') as string)
     this.syncColgroup(grid, allW)
   }
@@ -121,11 +131,237 @@ export class DocTableView {
     })
   }
 
+  /**
+   * round64：右下角整体缩放手柄（用户报告：表格无法调整整体大小）。
+   * 悬停表格显示（同手柄显示条件），拖动改变表格【总宽】——列宽按当前
+   * 比例分配（Word 拖右下角控点的语义：等比缩放，不改变列宽比）。
+   * 高度不锁定：行高由内容决定，拖动仅改宽度。拖动中 rAF 提交
+   * （addToHistory:false），松开一次正式提交（一步撤销）。
+   */
+  private attachResizeHandle() {
+    const rh = document.createElement('div')
+    rh.className = 'pm-table-resize'
+    rh.setAttribute('contenteditable', 'false')
+    rh.title = '拖动调整表格整体大小'
+    rh.style.cssText = 'position:absolute;width:10px;height:10px;background:#2563eb;border:2px solid #fff;border-radius:2px;cursor:nwse-resize;z-index:20;display:none;pointer-events:auto'
+    const host = this.view.dom.parentElement
+    if (!host) { this.dom.appendChild(rh); return }
+    host.appendChild(rh)
+    // 与全选手柄共用几何同步节流（表格位置变化时跟随右下角）
+    let syncRaf = 0
+    const syncPos = () => {
+      if (syncRaf) return
+      syncRaf = requestAnimationFrame(() => {
+        syncRaf = 0
+        if (!rh.isConnected || !this.dom.isConnected) return
+        const tr2 = this.table.getBoundingClientRect()
+        const hr = host.getBoundingClientRect()
+        rh.style.left = (tr2.right - hr.left - 5) + 'px'
+        rh.style.top = (tr2.bottom - hr.top - 5) + 'px'
+        rh.style.display = rh.classList.contains('pm-shown') ? 'block' : 'none'
+      })
+    }
+    const ro = new ResizeObserver(syncPos)
+    ro.observe(this.table)
+    const scheduleSync = () => syncPos()
+    window.addEventListener('resize', scheduleSync)
+    const scrollRoot = this.view.dom.closest('.overflow-auto')
+    scrollRoot?.addEventListener('scroll', scheduleSync, { passive: true })
+    // 显示管理：表格悬停显示（与全选手柄一致），离开隐藏 —— 同样走
+    // pm-shown 类；resize 手柄与全选手柄互不干扰（不同元素）。
+    let hideTimer = 0
+    const show = () => {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0 }
+      rh.classList.add('pm-shown')
+      syncPos()
+    }
+    const scheduleHide = () => {
+      if (hideTimer) clearTimeout(hideTimer)
+      hideTimer = window.setTimeout(() => { hideTimer = 0; rh.classList.remove('pm-shown'); syncPos() }, 180)
+    }
+    this.dom.addEventListener('mouseenter', show)
+    this.dom.addEventListener('mouseleave', scheduleHide)
+    this.table.addEventListener('mouseenter', show)
+    this.table.addEventListener('mouseleave', scheduleHide)
+    rh.addEventListener('mouseenter', show)
+    rh.addEventListener('mouseleave', scheduleHide)
+    // document 级几何兜底（与全选手柄 onDocMove 同法）：mouseenter 链在
+    // 分步移动/触屏下不完整 —— 按坐标判定表格包围盒 ±26px 热区显示。
+    const onDocMove = (e: MouseEvent) => {
+      const r = this.table.getBoundingClientRect()
+      const inTable = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+      const inCorner = e.clientX >= r.right - 26 && e.clientX <= r.right + 26 && e.clientY >= r.bottom - 26 && e.clientY <= r.bottom + 26
+      const inHandle = (() => { const hr = rh.getBoundingClientRect(); return e.clientX >= hr.left && e.clientX <= hr.right && e.clientY >= hr.top && e.clientY <= hr.bottom })()
+      if (inTable || inCorner || inHandle) show()
+      else if (rh.classList.contains('pm-shown')) scheduleHide()
+    }
+    window.document.addEventListener('mousemove', onDocMove)
+
+    rh.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const startX = e.clientX
+      const startW = this.table.getBoundingClientRect().width
+      const zoomRatio = Math.max(0.1, (window as any).__docZoom || 1)
+      let pending = 0
+      let raf = 0
+      const commit = () => {
+        raf = 0
+        if (!pending) return
+        const w = pending
+        const pos = this.getPos()
+        if (pos === undefined || pos < 0) return
+        const node = this.view.state.doc.nodeAt(pos)
+        if (!node) return
+        const grid = buildGrid(node)
+        // 未固化列宽：先按当前渲染比例初始化，再缩放
+        let widths: number[] = []
+        const allSet = grid.colWidths.length > 0 && grid.colWidths.every((c) => (c || 0) > 0)
+        if (allSet) {
+          const sum = grid.colWidths.reduce((a: number, b: number | null) => a + (b || 0), 0)
+          widths = grid.colWidths.map((c) => Math.round((c || 0) * w / sum))
+        } else {
+          const firstRow = this.table.rows[0]
+          if (!firstRow) return
+          const tRect = this.table.getBoundingClientRect()
+          let prev = 0
+          let g = 0
+          for (const td of Array.from(firstRow.cells)) {
+            const cs = parseInt(td.getAttribute('colspan') || '1', 10) || 1
+            const r = td.getBoundingClientRect()
+            const right = (r.right - tRect.left) / zoomRatio
+            const cw = Math.max(CELL_MIN_W, Math.round(right - prev))
+            for (let k = 0; k < cs && g + k < grid.cols; k++) widths[g + k] = cw
+            prev = right
+            g += cs
+          }
+          const sumW = widths.reduce((a, b) => a + (b || 0), 0)
+          widths = widths.map((c) => Math.max(CELL_MIN_W, Math.round((c || CELL_MIN_W) * w / (sumW || w))))
+        }
+        // 末列吸收取整误差
+        const diff = Math.round(w - widths.reduce((a, b) => a + (b || 0), 0))
+        if (widths.length) widths[widths.length - 1] = Math.max(CELL_MIN_W, widths[widths.length - 1] + diff)
+        const tr3 = this.view.state.tr
+        let rowOff = pos + 1
+        node.forEach((row: PMNode) => {
+          let cellOff = rowOff + 1
+          let c = 0
+          row.forEach((cell: PMNode) => {
+            const cs = cell.attrs.colspan || 1
+            let cw = 0
+            for (let k = 0; k < cs; k++) cw += widths[c + k] || 0
+            if (cw > 0) tr3.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(cw)) })
+            c += cs
+            cellOff += cell.nodeSize
+          })
+          rowOff += row.nodeSize
+        })
+        this.view.dispatch(tr3.setMeta('addToHistory', false))
+      }
+      const onMove = (ev: MouseEvent) => {
+        const dw = (ev.clientX - startX) / zoomRatio
+        pending = Math.max(3 * CELL_MIN_W, Math.round(startW + dw))
+        if (!raf) raf = requestAnimationFrame(commit)
+      }
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        if (raf) cancelAnimationFrame(raf)
+        raf = 0
+        // 最终提交（进历史）：把 pending 置 0 前再 commit 一次正式事务
+        const w = pending
+        pending = 0
+        if (w > 0) {
+          const pos = this.getPos()
+          if (pos !== undefined && pos >= 0) {
+            const node = this.view.state.doc.nodeAt(pos)
+            if (node) {
+              const tr3 = this.view.state.tr
+              // 用最后一次视觉宽度重建 widths（与 commit 同算法，正式入历史）
+              const firstRow = this.table.rows[0]
+              const grid = buildGrid(node)
+              let widths: number[] = []
+              const allSet = grid.colWidths.length > 0 && grid.colWidths.every((c) => (c || 0) > 0)
+              if (allSet) {
+                const sum = grid.colWidths.reduce((a: number, b: number | null) => a + (b || 0), 0)
+                widths = grid.colWidths.map((c) => Math.round((c || 0) * w / sum))
+              } else if (firstRow) {
+                const tRect = this.table.getBoundingClientRect()
+                let prev = 0
+                let g = 0
+                for (const td of Array.from(firstRow.cells)) {
+                  const cs = parseInt(td.getAttribute('colspan') || '1', 10) || 1
+                  const r = td.getBoundingClientRect()
+                  const right = (r.right - tRect.left) / zoomRatio
+                  const cw = Math.max(CELL_MIN_W, Math.round(right - prev))
+                  for (let k = 0; k < cs && g + k < grid.cols; k++) widths[g + k] = cw
+                  prev = right
+                  g += cs
+                }
+                const sumW = widths.reduce((a, b) => a + (b || 0), 0)
+                widths = widths.map((c) => Math.max(CELL_MIN_W, Math.round((c || CELL_MIN_W) * w / (sumW || w))))
+              }
+              const diff = Math.round(w - widths.reduce((a, b) => a + (b || 0), 0))
+              if (widths.length) widths[widths.length - 1] = Math.max(CELL_MIN_W, widths[widths.length - 1] + diff)
+              let rowOff = pos + 1
+              node.forEach((row: PMNode) => {
+                let cellOff = rowOff + 1
+                let c = 0
+                row.forEach((cell: PMNode) => {
+                  const cs = cell.attrs.colspan || 1
+                  let cw = 0
+                  for (let k = 0; k < cs; k++) cw += widths[c + k] || 0
+                  if (cw > 0) tr3.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(cw)) })
+                  c += cs
+                  cellOff += cell.nodeSize
+                })
+                rowOff += row.nodeSize
+              })
+              this.view.dispatch(tr3)
+            }
+          }
+        }
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    })
+
+    const prevDestroy = this.destroyFn
+    this.destroyFn = () => {
+      try { prevDestroy?.() } catch { /* */ }
+      if (hideTimer) clearTimeout(hideTimer)
+      if (syncRaf) cancelAnimationFrame(syncRaf)
+      window.removeEventListener('resize', scheduleSync)
+      scrollRoot?.removeEventListener('scroll', scheduleSync)
+      window.document.removeEventListener('mousemove', onDocMove)
+      ro.disconnect()
+      rh.remove()
+    }
+  }
+
   update(node: PMNode): boolean {
     if (node.type.name !== 'table') return false
     this.node = node
     this.syncAttrs(node)
     return true
+  }
+
+  /**
+   * round64 修复（用户报告：表格无法拖边框调行高列宽）：
+   * PM 的 DOM Observer 监听到 <table> 上 class/attribute 变化（拖拽插件
+   * 写入 pm-col-resize / pm-row-resize 光标类）时，默认视为【外部 DOM 篡改】
+   * —— 触发 view desc 重建，<table> 元素被整体替换，刚写入的 class 丢失，
+   * 拖拽光标/拖拽会话瞬间失效（探针实测：class 写入成功 → 500ms 内元素
+   * 换新）。ignoreMutation 告知 PM：本 NodeView 自有属性（class/style/
+   * colgroup 变化）都在掌控内，不要重建。这是自定义 NodeView 的 PM 标准
+   * 义务（TableView 原版未覆盖 —— 其列宽走 col attrs 由 PM 同步）。
+   */
+  ignoreMutation(mutation: any): boolean {
+    if (mutation.type === 'childList' && mutation.target === this.contentDOM) return false // 内容编辑走 PM 正常流程
+    if (mutation.type === 'attributes' && mutation.target === this.table) return true // class/style/colgroup 自有属性
+    if (mutation.type === 'attributes') return true // wrapper 上的装饰属性（分页 pg-brk 等）
+    return mutation.type !== 'childList' || !this.dom.contains(mutation.target)
   }
 
   /** 左上角全选/移动手柄（对齐 MS Word 表格移动十字柄）：悬停表格时出现。
@@ -714,13 +950,13 @@ export function createTableDragResizePlugin(getZoom: () => number) {
     }
     document.body.style.cursor = kind === 'col' ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
-    tableEl.style.cursor = ''
   }
 
   const finishDrag = () => {
     if (!drag) return
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
+    if (drag.tableEl) { drag.tableEl.classList.remove('pm-col-resize', 'pm-row-resize'); drag.tableEl.classList.add(drag.kind === 'col' ? 'pm-col-resize' : 'pm-row-resize') }
     const d = drag
     drag = null
     if (d.raf) cancelAnimationFrame(d.raf)
@@ -764,7 +1000,108 @@ export function createTableDragResizePlugin(getZoom: () => number) {
     }
   }
 
+  // round64 修复（用户报告：表格无法拖边框调行高列宽）：
+  // clickbridge 接管层（z-index:7，悬停格上 pointer-events:auto）挂在
+  // view.dom.parentElement 上 —— 事件 target 是层时【不在 view.dom 子树】，
+  // PM 的 eventBelongsToView 判 false，handleDOMEvents 永远收不到
+  // mousemove/mousedown —— 拖拽插件在表格上"失聪"。补 document 级
+  // capture 监听（与插件 handler 同逻辑），层截获场景仍能拖拽。
+  let docListenersBound = false
+  const bindDocListeners = (getView: () => EditorView | null) => {
+    if (docListenersBound) return
+    docListenersBound = true
+    const pierce = (e: MouseEvent, view: EditorView): HTMLTableElement | null => {
+      // round64：桥层是无内容 DIV —— 事件 target 不在 td 里，用 elementsFromPoint
+      // 穿层定位真实 TD/表格（层的下方元素）。返回 null = 该点不在任何表格边框。
+      const stack = (document as any).elementsFromPoint(e.clientX, e.clientY) as HTMLElement[]
+      const td = (stack || []).find(el => el.tagName === 'TD' || el.tagName === 'TH')
+      if (!td) return null
+      const tableEl = td.closest('table') as HTMLTableElement | null
+      if (!tableEl || !view.dom.contains(tableEl)) return null
+      return tableEl
+    }
+    const onMouseMove = (e: MouseEvent) => {
+      const view = getView()
+      if (!view || view.isDestroyed) return
+      if (drag) return // 拖拽会话已由插件 handler 驱动（真实事件路径）
+      // 仅当事件 target 在桥层/非 view.dom 子树（被层截获）时接管
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      if (view.dom.contains(t)) return // 正常路径走插件 handleDOMEvents
+      if (!t.closest('.pm-table-clickbridge')) return // 只接管桥层截获的事件
+      const tableEl = pierce(e, view)
+      if (!tableEl) return
+      const z = Math.max(0.1, getZoom() || 1)
+      const tRect = tableEl.getBoundingClientRect()
+      const lx = (e.clientX - tRect.left) / z
+      const ly = (e.clientY - tRect.top) / z
+      const nearX = nearestIdx(colBoundaries(tableEl, z).xs, lx, EDGE_TOLERANCE)
+      const nearY = nearestIdx(rowBoundaries(tableEl, z), ly, EDGE_TOLERANCE)
+      tableEl.classList.toggle('pm-col-resize', nearX >= 0)
+      tableEl.classList.toggle('pm-row-resize', nearY >= 0 && nearX < 0)
+    }
+    // round64：mousedown 同样被层截获（拖拽启动失效 —— 用户报告拖不动）。
+    // 层截获的 mousedown → 穿层找到表格 → 边框命中 → 启动与插件 handler
+    // 等价的 startDrag 会话（同一闭包，直接调用）。
+    const onMouseDown = (e: MouseEvent) => {
+      const view = getView()
+      if (!view || view.isDestroyed) return
+      if (e.button !== 0 || drag) return
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      if (view.dom.contains(t)) return // 正常路径走插件 handleDOMEvents
+      if (!t.closest('.pm-table-clickbridge')) return
+      const tableEl = pierce(e, view)
+      if (!tableEl) return
+      const z = Math.max(0.1, getZoom() || 1)
+      const tRect = tableEl.getBoundingClientRect()
+      const lx = (e.clientX - tRect.left) / z
+      const ly = (e.clientY - tRect.top) / z
+      const { xs, gridIdx } = colBoundaries(tableEl, z)
+      const ys = rowBoundaries(tableEl, z)
+      const nearX = nearestIdx(xs, lx, EDGE_TOLERANCE)
+      const nearY = nearestIdx(ys, ly, EDGE_TOLERANCE)
+      let kind: 'col' | 'row' | null = null
+      let idx = -1
+      if (nearX >= 0 && (nearY < 0 || Math.abs(xs[nearX] - lx) <= Math.abs(ys[nearY] - ly))) { kind = 'col'; idx = nearX }
+      else if (nearY >= 0) { kind = 'row'; idx = nearY }
+      if (!kind || idx < 0) return
+      if (kind === 'row' && idx === 0) return // 表格上缘不调整
+      const tablePos = tablePosFromEl(view, tableEl)
+      if (tablePos < 0) return
+      e.preventDefault()
+      startDrag(view, e, kind, tableEl, tablePos, kind === 'col' ? (gridIdx[idx] ?? idx) : idx)
+      // 拖拽会话的 move/up 监听（与插件 handler 的路径等价）
+      const onMove2 = (ev: MouseEvent) => {
+        if (!drag) return
+        const z2 = Math.max(0.1, drag.zoom() || 1)
+        if (drag.kind === 'col' && drag.boundary !== undefined) {
+          const dx = (ev.clientX - drag.startX) / z2
+          drag.pendingWidths = widthsAfterDrag(drag.grid, drag.boundary, dx)
+        } else if (drag.kind === 'row') {
+          const dy = (ev.clientY - drag.startDy) / z2
+          drag.pendingRowH = Math.max(ROW_MIN_H, Math.round(drag.baseH + dy))
+        }
+        scheduleCommit()
+      }
+      const onUp2 = () => {
+        window.removeEventListener('mousemove', onMove2)
+        window.removeEventListener('mouseup', onUp2)
+        finishDrag()
+      }
+      window.addEventListener('mousemove', onMove2)
+      window.addEventListener('mouseup', onUp2)
+    }
+    window.document.addEventListener('mousemove', onMouseMove, true)
+    window.document.addEventListener('mousedown', onMouseDown, true)
+  }
+
   return new Plugin({
+    view(view: EditorView) {
+      // 惰性绑定 document 监听（getZoom 闭包已在外层）
+      bindDocListeners(() => view)
+      return { destroy() { /* 监听与 view 同生命周期由 PM 管理；window 级监听在插件销毁时移除 */ } }
+    },
     props: {
       handleDOMEvents: {
         mousemove(view: EditorView, event: Event) {
@@ -783,13 +1120,18 @@ export function createTableDragResizePlugin(getZoom: () => number) {
             e.preventDefault()
             return true
           }
-          // 悬停检测：光标靠近边框 → resize 光标（对齐 MS Word）
+          // 悬停检测：光标靠近边框 → resize 光标（对齐 MS Word）。
+          // round64 修复：cursor 不再直接写 table.style.cursor —— 分页装饰/
+          // NodeView update 会整体重写 wrapper 级 style/class，写入即被冲掉
+          //（探针实测 mousemove 设置成功、随后被清空）。改由 class 驱动：
+          // .pm-col-resize / .pm-row-resize 挂在 table 上，CSS 规则渲染光标
+          //（class 由 NodeView 维护，装饰只动 wrapper 不动 table 的 class）。
           const ctx = findTableCtx(view, e)
           if (!ctx) {
-            if (hoverTable) { hoverTable.style.cursor = ''; hoverTable = null }
+            if (hoverTable) { hoverTable.classList.remove('pm-col-resize', 'pm-row-resize'); hoverTable = null }
             return false
           }
-          if (hoverTable && hoverTable !== ctx.tableEl) hoverTable.style.cursor = ''
+          if (hoverTable && hoverTable !== ctx.tableEl) hoverTable.classList.remove('pm-col-resize', 'pm-row-resize')
           hoverTable = ctx.tableEl
           const z = Math.max(0.1, getZoom() || 1)
           const tRect = ctx.tableEl.getBoundingClientRect()
@@ -797,7 +1139,8 @@ export function createTableDragResizePlugin(getZoom: () => number) {
           const ly = (e.clientY - tRect.top) / z
           const nearX = nearestIdx(colBoundaries(ctx.tableEl, z).xs, lx, EDGE_TOLERANCE)
           const nearY = nearestIdx(rowBoundaries(ctx.tableEl, z), ly, EDGE_TOLERANCE)
-          ctx.tableEl.style.cursor = nearX >= 0 ? 'col-resize' : nearY >= 0 ? 'row-resize' : ''
+          ctx.tableEl.classList.toggle('pm-col-resize', nearX >= 0)
+          ctx.tableEl.classList.toggle('pm-row-resize', nearY >= 0 && nearX < 0)
           return false
         },
         mousedown(view: EditorView, event: Event): boolean {

@@ -332,17 +332,19 @@ function wrapInListWord(v: any, listType: string): boolean {
 // （普通文本选区原样返回 [from,to)；空选区返回空数组，由调用方走 storedMarks）。
 function selectionMarkRanges(state: any): Array<{ from: number; to: number }> {
   const sel = state.selection as any
-  if (sel && sel.$anchorCell && sel.$headCell) {
-    const from = Math.min(sel.from, sel.to)
-    const to = Math.max(sel.from, sel.to)
+  if (sel && sel.$anchorCell && sel.$headCell && typeof sel.forEachCell === 'function') {
+    // round64（用户报告：全选表格无法整体设置字体大小、颜色样式等）：
+    // 旧实现 nodesBetween(min(sel.from,sel.to), to+1) —— CellSelection 的
+    // from/to 是锚点格与头格的【起始位置】，整表选择时区间只从首格起点到
+    // 末格起点（末格内容不在内），斜向/整表选择时大量格子漏掉 ——
+    // 只有部分格子加粗/改字号。改用 prosemirror-tables 的 forEachCell
+    // （按 TableMap 矩形精确枚举全部选中格子），任何选区形态全覆盖。
     const ranges: Array<{ from: number; to: number }> = []
-    state.doc.nodesBetween(from, Math.min(to + 1, state.doc.content.size), (node: any, pos: number) => {
-      if (node.type && node.type.name === 'table_cell') {
+    try {
+      sel.forEachCell((node: any, pos: number) => {
         ranges.push({ from: pos + 1, to: pos + node.nodeSize - 1 })
-        return false // 单元格内部文本不再下钻（已覆盖整个内容区）
-      }
-      return true
-    })
+      })
+    } catch { /* forEachCell 异常兜底走原区间展开 */ }
     if (ranges.length) return ranges
   }
   const { from, to, empty } = state.selection
@@ -3306,10 +3308,30 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
 
   const setParaAttr = (attr: string, value: any, focusAfter = true) => {
     const v = viewRef.current; if (!v) return
-    const { $from, $to } = v.state.selection
+    const sel: any = v.state.selection
+    // round64（用户报告：全选表格无法整体设置居中/左右对齐）：
+    // CellSelection（整表/行/列选中）的 $from/$to 是锚点/头单元格位置，
+    // 旧 nodesBetween($from.pos,$to.pos) 只覆盖锚点格到头格的文档区间 ——
+    // 斜向/整表选择时中间之外的格子段落不在区间内，只有部分格子生效。
+    // 对齐方式是【段落属性】：把 CellSelection 展开为全部覆盖格的
+    // cell 内容区间（复用 selectionMarkRanges 思路，但 setNodeMarkup 需要
+    // 段落节点的精确 pos —— 直接 nodesBetween 全表区间即可：CellSelection
+    // 的 from..to 已覆盖锚点格到头格，配合 rect 遍历更稳）。
+    let from: number, to: number
+    if (sel && sel.$anchorCell && sel.$headCell) {
+      from = Math.min(sel.from, sel.to)
+      to = Math.max(sel.from, sel.to)
+      // 找到表格节点边界（anchor cell 所在表格）：整表处理
+      const $a = sel.$anchorCell
+      for (let d = $a.depth; d > 0; d--) {
+        if ($a.node(d).type.name === 'table') { from = $a.before(d); to = $a.before(d) + $a.node(d).nodeSize; break }
+      }
+    } else {
+      from = sel.$from.pos; to = sel.$to.pos
+    }
     const tr = v.state.tr
     let changed = false
-    v.state.doc.nodesBetween($from.pos, $to.pos, (node, pos) => {
+    v.state.doc.nodesBetween(from, to, (node, pos) => {
       if (node.type.name === 'paragraph' || node.type.name === 'heading') {
         tr.setNodeMarkup(pos, undefined, { ...node.attrs, [attr]: value })
         changed = true
