@@ -34,7 +34,10 @@ async function newDocWithTable(p) {
     const rows = []
     for (let ri = 0; ri < 3; ri++) {
       const cells = []
-      for (let ci = 0; ci < 3; ci++) cells.push(s.schema.nodes.table_cell.createAndFill(null, null, [P.createAndFill()]))
+      // round69 修正：createAndFill(attrs, content, marks) —— 第 3 参是 marks！
+      // 旧脚本误把段落数组传到 marks 槽 → cell 挂幽灵 mark → row 校验全炸（假根因③）。
+      // 产品真实路径（表格工具栏 onPick）正是 createAndFill(null, [paragraph])。
+      for (let ci = 0; ci < 3; ci++) cells.push(s.schema.nodes.table_cell.createAndFill(null, [P.createAndFill()]))
       rows.push(s.schema.nodes.table_row.createAndFill(null, cells))
     }
     v.dispatch(s.tr.replaceSelectionWith(s.schema.nodes.table.createAndFill(null, rows)))

@@ -677,8 +677,15 @@ export function setCellBorders(state: any, dispatch: any, preset: string, opts?:
         done.add(g.pos)
         const next = [...it.sides]
         it.p.forEach((pj, i) => { if (pj) next[i] = decision })
-        if (next.map(b => (b ? '1' : '0')).join('') !== it.sides.map(b => (b ? '1' : '0')).join('')) {
-          tr.setNodeMarkup(g.pos, undefined, mkAttrs(it.attrs, next), [])
+        // round69：颜色/线宽是独立维度 —— 边框编码未变时（已是目标预设）也要写入
+        // borderColor/borderW（用户改色/改宽后点预设，旧逻辑因 sides 不变直接跳过 →
+        // 颜色粗细永不生效 —— 两个 e2e 用例红色/3pt 失败的根因）。
+        const encSame = next.map(b => (b ? '1' : '0')).join('') === it.sides.map(b => (b ? '1' : '0')).join('')
+        const styled = mkAttrs(it.attrs, next)
+        const colorChanged = opts && opts.color && opts.color !== it.attrs.borderColor
+        const widthChanged = opts && opts.width !== undefined && opts.width !== it.attrs.borderW
+        if (!encSame || colorChanged || widthChanged) {
+          tr.setNodeMarkup(g.pos, undefined, styled, [])
           changed = true
         }
       }
