@@ -487,7 +487,7 @@ export function setCellAlign(state: any, dispatch: any, align: string): boolean 
   }
   if (!cellNode) return false
 
-  const tr = state.tr.setNodeMarkup(cellPos, undefined, { ...cellNode.attrs, align })
+  const tr = state.tr.setNodeMarkup(cellPos, undefined, { ...cellNode.attrs, align }, [])
   dispatch(tr)
   return true
 }
@@ -501,7 +501,7 @@ export function setCellVAlign(state: any, dispatch: any, vAlign: string): boolea
   state.doc.nodesBetween($from.pos, $to.pos, (node: any, pos: number) => {
     if (node.type.name === 'table_cell') {
       // 跳过被 rowspan 覆盖的占位（nodeAt 命中即真实单元格）
-      tr.setNodeMarkup(pos, undefined, { ...node.attrs, vAlign })
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, vAlign }, [])
       changed = true
       return false // 不深入单元格内部
     }
@@ -512,7 +512,7 @@ export function setCellVAlign(state: any, dispatch: any, vAlign: string): boolea
     for (let d = $from.depth; d > 0; d--) {
       const node = $from.node(d)
       if (node.type.name === 'table_cell') {
-        tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, vAlign })
+        tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, vAlign }, [])
         changed = true
         break
       }
@@ -678,7 +678,7 @@ export function setCellBorders(state: any, dispatch: any, preset: string, opts?:
         const next = [...it.sides]
         it.p.forEach((pj, i) => { if (pj) next[i] = decision })
         if (next.map(b => (b ? '1' : '0')).join('') !== it.sides.map(b => (b ? '1' : '0')).join('')) {
-          tr.setNodeMarkup(g.pos, undefined, mkAttrs(it.attrs, next))
+          tr.setNodeMarkup(g.pos, undefined, mkAttrs(it.attrs, next), [])
           changed = true
         }
       }
@@ -693,7 +693,7 @@ export function setCellBorders(state: any, dispatch: any, preset: string, opts?:
     }
   }
   for (const [pos, cur] of out) {
-    tr.setNodeMarkup(pos, undefined, mkAttrs(cur.attrs, cur.sides))
+    tr.setNodeMarkup(pos, undefined, mkAttrs(cur.attrs, cur.sides), [])
     changed = true
   }
   if (!changed) return false

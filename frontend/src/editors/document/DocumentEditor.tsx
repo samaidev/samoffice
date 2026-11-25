@@ -2603,6 +2603,22 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         return
       }
       const el = anchor.nodeType === 1 ? (anchor as HTMLElement) : anchor.parentElement
+      // round69：手柄全选（CellSelection）时 mousedown 被 preventDefault，浏览器把 DOM 选区
+      // 折到 ProseMirror 根 —— anchor 在 pmDom 内但不在 table DOM 里，旧代码直接
+      // setInTable(false)，把 dispatchTransaction 刚设置的 inTable=true 误清（用户看到：
+      // 点左上角手柄全选后表格工具栏不出现）。PM 状态里的 CellSelection 依然是权威选区，
+      // 先查 PM selection：是 CellSelection 或 $from 祖先含 table → 保持 inTable。
+      const psel = v!.state.selection as any
+      try {
+        if (psel && psel.$anchorCell && psel.$headCell) return // CellSelection 有效，不清
+        let pmInTable = false
+        if (psel && psel.$from) {
+          for (let d = psel.$from.depth; d > 0; d--) {
+            if (psel.$from.node(d).type.name === 'table') { pmInTable = true; break }
+          }
+        }
+        if (pmInTable) return // PM 光标在表格内，DOM anchor 滞后于 PM 状态，保持
+      } catch { /* ignore */ }
       setInTable(!!el?.closest?.('table'))
     }
     window.document.addEventListener('selectionchange', onSelChange)

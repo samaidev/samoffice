@@ -251,7 +251,7 @@ export class DocTableView {
             const cs = cell.attrs.colspan || 1
             let cw = 0
             for (let k = 0; k < cs; k++) cw += widths[c + k] || 0
-            if (cw > 0) tr3.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(cw)) })
+            if (cw > 0) tr3.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(cw)) }, [])
             c += cs
             cellOff += cell.nodeSize
           })
@@ -312,7 +312,7 @@ export class DocTableView {
                   const cs = cell.attrs.colspan || 1
                   let cw = 0
                   for (let k = 0; k < cs; k++) cw += widths[c + k] || 0
-                  if (cw > 0) tr3.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(cw)) })
+                  if (cw > 0) tr3.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(cw)) }, [])
                   c += cs
                   cellOff += cell.nodeSize
                 })
@@ -868,7 +868,7 @@ export function createTableDragResizePlugin(getZoom: () => number) {
           const cs = cell.attrs.colspan || 1
           let w = 0
           for (let k = 0; k < cs; k++) w += widths[c + k] || 0
-          if (w > 0) tr.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(w)) })
+          if (w > 0) tr.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(w)) }, [])
           c += cs
           cellOff += cell.nodeSize
         })
@@ -976,7 +976,7 @@ export function createTableDragResizePlugin(getZoom: () => number) {
           const cs = cell.attrs.colspan || 1
           let w = 0
           for (let k = 0; k < cs; k++) w += widths[c + k] || 0
-          if (w > 0) tr.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(w)) })
+          if (w > 0) tr.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(w)) }, [])
           c += cs
           cellOff += cell.nodeSize
         })
@@ -1355,7 +1355,7 @@ export function autoFitTable(view: EditorView, mode: 'content' | 'window' | 'fix
       const cs = cell.attrs.colspan || 1
       let w = 0
       for (let k = 0; k < cs; k++) w += widths[c + k] || 0
-      if (w > 0) tr.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(w)) })
+      if (w > 0) tr.setNodeMarkup(cellOff, undefined, { ...cell.attrs, colwidth: Math.max(CELL_MIN_W, Math.round(w)) }, [])
       c += cs
       cellOff += cell.nodeSize
     })
