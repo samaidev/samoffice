@@ -38,14 +38,14 @@ async function main() {
 
   // 正文 textarea（blank 布局）
   const contentPos = await p.evaluate(() => {
-    const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder && t.placeholder.includes('空白'))
+    const ta = document.querySelector('[data-richfield="content"]')
     if (!ta) return null
     const r = ta.getBoundingClientRect()
     return { x: r.x, y: r.y }
   })
   ok('正文输入框存在', !!contentPos)
   const readContentStyle = () => p.evaluate(() => {
-    const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder && t.placeholder.includes('空白'))
+    const ta = document.querySelector('[data-richfield="content"]')
     const cs = getComputedStyle(ta)
     return { fw: cs.fontWeight, ta: cs.textAlign, lh: cs.lineHeight }
   })
@@ -166,11 +166,11 @@ async function main() {
   // ══ 8. 保存 → 重开往返（标题/正文写盘不丢 —— round72 主修复）══
   // 先写正文文字
   await p.evaluate(() => {
-    const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder && t.placeholder.includes('空白'))
+    const ta = document.querySelector('[data-richfield="content"]')
     if (ta) {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
-      setter.call(ta, '往返验证文字')
-      ta.dispatchEvent(new Event('input', { bubbles: true }))
+      ta.focus()
+      document.execCommand('selectAll', false, null)
+      document.execCommand('insertText', false, '往返验证文字')
     }
   })
   await p.waitForTimeout(800)

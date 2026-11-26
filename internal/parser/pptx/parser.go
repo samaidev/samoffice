@@ -57,6 +57,9 @@ type runDef struct {
 	Italic    bool   `json:"italic,omitempty"`
 	Underline bool   `json:"underline,omitempty"`
 	Font      string `json:"font,omitempty"` // 字体族（latin）
+	// round73：删除线 + 字符间距（选定文字格式）
+	Strike bool `json:"strike,omitempty"`
+	Spc    int  `json:"spc,omitempty"` // pt×100
 }
 
 // paraDef 单个段落：对齐 + 多 run
@@ -2086,11 +2089,26 @@ func (p *Parser) Parse(r io.Reader) (*core.Document, []core.Warning, error) {
 				"pageH":        pageHEMU,
 				// round66：讲义母版（随首页携带 —— SlideEditor 讲义母版视图恢复）
 				"handoutMaster": handoutInfo,
+				// round73：占位符（标题/正文）富文本 paras —— 前端选定文字格式
+				// 重开还原（titleParas/contentParas）。占位符 shapes 里按 Ph 字段提取。
+				"titleParas":   phParas(slide.Shapes, "ctrTitle"),
+				"contentParas": phParas(slide.Shapes, "body"),
 			},
 		})
 	}
 
 	return doc, warnings, nil
+}
+
+// phParas 从幻灯片形状中按占位符类型（ctrTitle/body）提取富文本 paras
+// （round73：前端标题/正文选定文字格式重开还原）。非占位符 / 无 paras 返回 nil。
+func phParas(shapes []shapeDef, ph string) []paraDef {
+	for _, s := range shapes {
+		if s.Ph == ph && len(s.Paras) > 0 {
+			return s.Paras
+		}
+	}
+	return nil
 }
 
 // slideRelsName 由 ppt/slides/slideN.xml 得到 ppt/slides/_rels/slideN.xml.rels
@@ -2843,6 +2861,13 @@ func parseSlide(r io.Reader, name string, files map[string]*zip.File, rels map[s
 							curRun.Italic = a.Value == "1" || a.Value == "true"
 						case "u":
 							curRun.Underline = a.Value != "none" && a.Value != ""
+						// round73：删除线 + 字符间距（选定文字格式往返）
+						case "strike":
+							curRun.Strike = a.Value == "sngStrike" || a.Value == "1" || a.Value == "true"
+						case "spc":
+							if n := atoi(a.Value); n != 0 {
+								curRun.Spc = n
+							}
 						}
 					}
 				}

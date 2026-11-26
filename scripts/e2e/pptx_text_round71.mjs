@@ -30,14 +30,14 @@ async function main() {
 
   // 正文 textarea（新建 PPT 默认 blank 布局：空白幻灯片 placeholder）
   const contentPos = await p.evaluate(() => {
-    const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder && t.placeholder.includes('空白'))
+    const ta = document.querySelector('[data-richfield="content"]')
     if (!ta) return null
     const r = ta.getBoundingClientRect()
     return { x: r.x, y: r.y }
   })
   ok('正文输入框存在', !!contentPos)
   const readContentStyle = () => p.evaluate(() => {
-    const ta = [...document.querySelectorAll('textarea')].find(t => t.placeholder && t.placeholder.includes('空白'))
+    const ta = document.querySelector('[data-richfield="content"]')
     const cs = getComputedStyle(ta)
     return { color: cs.color, fs: cs.fontSize, ff: cs.fontFamily.slice(0, 30) }
   })
@@ -107,8 +107,8 @@ async function main() {
   await p.locator('button:has-text("标题")').first().click({ force: true }) // 🎯标题 布局
   await p.waitForTimeout(600)
   const titlePos = await p.evaluate(() => {
-    const inps = [...document.querySelectorAll('input')].filter(i => i.placeholder && i.placeholder.includes('标题'))
-    return inps.length ? { x: Math.round(inps[0].getBoundingClientRect().x), y: Math.round(inps[0].getBoundingClientRect().y) } : null
+    const inps = [document.querySelector('[data-richfield="title"]')]
+    return inps[0] ? { x: Math.round(inps[0].getBoundingClientRect().x), y: Math.round(inps[0].getBoundingClientRect().y) } : null
   })
   if (titlePos) {
     await p.mouse.click(titlePos.x + 100, titlePos.y + 10)
@@ -122,8 +122,8 @@ async function main() {
     })
     await p.waitForTimeout(700)
     const tColor = await p.evaluate(() => {
-      const inps = [...document.querySelectorAll('input')].filter(i => i.placeholder && i.placeholder.includes('标题'))
-      return inps.length ? getComputedStyle(inps[0]).color : 'no-input'
+      const inps = [document.querySelector('[data-richfield="title"]')]
+      return inps[0] ? getComputedStyle(inps[0]).color : 'no-input'
     })
     ok('标题绿色落盘', tColor === 'rgb(16, 185, 129)', tColor)
   } else {

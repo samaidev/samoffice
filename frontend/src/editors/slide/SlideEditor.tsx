@@ -15,13 +15,24 @@ interface Slide {
   transition: string; notes: string
   shapes: ShapeItem[]; artTexts: ArtTextItem[]
   animations: AnimItem[]
-  // round71：标题/正文的直接文字样式（用户在标题/正文输入框编辑文字时，
-  // 工具栏的颜色/字号/字体必须生效 —— 旧版三控件只认 selectedEl=shape，
-  // 对标题/正文文本全部无效）。fontSize 存 pt（渲染换算 px）。
-  // round72：扩展 bold/align/lineHeight/indent/bullet/numbered —— 加粗、对齐、
-  // 缩进、行距、项目符号/编号等 ribbon 命令同样对聚焦文本生效。
-  titleStyle?: { color?: string; fontSize?: number; fontFamily?: string; bold?: boolean; align?: 'left' | 'center' | 'right'; lineHeight?: number; indent?: number; bullet?: boolean; numbered?: boolean }
-  contentStyle?: { color?: string; fontSize?: number; fontFamily?: string; bold?: boolean; align?: 'left' | 'center' | 'right'; lineHeight?: number; indent?: number; bullet?: boolean; numbered?: boolean }
+  // round71/72：标题/正文的整段文字样式（颜色/字号/字体/加粗/对齐/行距/缩进/项目符号）。
+  // round73：新增 titleParas/contentParas —— 选定文字（选区）级样式：
+  // 字体、字号、颜色、加粗、斜体、下划线、删除线、字符间距按 run 拆分存储，
+  // 未选区命令回退写整段 style（与 MS PPT 语义一致）。
+  titleStyle?: { color?: string; fontSize?: number; fontFamily?: string; bold?: boolean; align?: 'left' | 'center' | 'right'; lineHeight?: number; indent?: number; bullet?: boolean; numbered?: boolean; charSpacing?: number }
+  contentStyle?: { color?: string; fontSize?: number; fontFamily?: string; bold?: boolean; align?: 'left' | 'center' | 'right'; lineHeight?: number; indent?: number; bullet?: boolean; numbered?: boolean; charSpacing?: number }
+  // round73：标题/正文的逐段逐 run 富文本（选定文字格式落点；与 title/content
+  // 平行存在 —— 有 paras 时渲染优先，纯文本回退 title/content）
+  titleParas?: TextPara[]
+  contentParas?: TextPara[]
+}
+
+// round73：富文本段落/run（标题/正文共用 —— 选定文字样式模型）
+interface TextPara { align?: string; bullet?: boolean; numbered?: boolean; runs: TextRun[] }
+interface TextRun {
+  text: string
+  bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean
+  color?: string; fontSize?: number; font?: string; spc?: number // spc = 字符间距 pt×100（OOXML 语义）
 }
 
 // 画布逻辑坐标：宽 6464 单位 = 808px（1px = 8 单位），高随页面比例变化。
@@ -111,7 +122,9 @@ interface ShapeItem {
   glowColor?: string; glowRadius?: number
   link?: string // 超链接 URL（形状点击打开）
   fontFamily?: string
-  paras?: { align?: string; runs: { text?: string; color?: string; fontSize?: number; bold?: boolean; italic?: boolean; underline?: boolean; font?: string }[] }[]
+  // round73：形状文字字符间距（pt×100）
+  charSpacing?: number
+  paras?: { align?: string; runs: { text?: string; color?: string; fontSize?: number; bold?: boolean; italic?: boolean; underline?: boolean; font?: string; strike?: boolean; spc?: number }[] }[]
   // 来自文件的形状：不画装饰边框，边框用文件里的 a:ln
   noDecor?: boolean
   groupId?: string // 所属组合 ID（同组成员整组选中/拖动，写回时包为 p:grpSp）
@@ -244,7 +257,198 @@ const fieldStyleToCSS = (
     textAlign: st?.align,
     lineHeight: st?.lineHeight,
     paddingLeft: st?.indent ? `${st.indent * 12}px` : undefined,
+    // round73：字符间距（pt → px 换算；OOXML spc=pt×100）
+    letterSpacing: st?.charSpacing != null ? `${(st.charSpacing / 100) * (ptToPx(72) / 72)}px` : undefined,
   }
+}
+
+// ════ round73：标题/正文富文本编辑器（contentEditable）════
+// 选定文字调整字体/字号/颜色/加粗/斜体/下划线/删除线/字符间距 —— 不再只对元素整体。
+// 方案：contentEditable div 渲 paras/runs（span 逐 run 带样式），选区命中时
+// 以“选区状态”驱动命令；命令把选区映射回 paras 的 run 拆分（与 MS PPT 同语义：
+// 选中文字应用格式；无选区时应用到整段/全部 run）。
+//
+// 序列化策略：onInput 时读 DOM 子树 → paras（按 <div> 段 + <span> run 还原
+// 样式）→ onChange(paras) 上抛。受控渲染用 key 重挂载防 cursor 抖动：
+// 仅在 paras 与 DOM 不同步（如撤销/换页）时重挂；输入中用 suppressContentEditableWarning。
+const runOfNode = (node: Node, inherited: Partial<TextRun>): Partial<TextRun> => {
+  const el = node instanceof HTMLElement ? node : (node.parentElement instanceof HTMLElement ? node.parentElement : null)
+  if (!el) return { ...inherited }
+  const r: Partial<TextRun> = { ...inherited }
+  const fw = el.style.fontWeight
+  if (fw === 'bold' || fw === '700') r.bold = true
+  else if (fw === 'normal' || fw === '400') r.bold = false
+  if (el.style.fontStyle === 'italic') r.italic = true
+  else if (el.style.fontStyle === 'normal') r.italic = false
+  const td = el.style.textDecoration || ''
+  if (td.includes('underline')) r.underline = true
+  if (td.includes('line-through')) r.strike = true
+  if (td === 'none') { r.underline = false; r.strike = false }
+  if (el.style.color) r.color = el.style.color
+  if (el.style.fontSize) {
+    const m = el.style.fontSize.match(/^([\d.]+)px$/)
+    if (m) r.fontSize = parseFloat(m[1]) // px 画布值；序列化时再换算 pt
+  }
+  if (el.style.fontFamily) r.font = el.style.fontFamily
+  if (el.style.letterSpacing) {
+    const m = el.style.letterSpacing.match(/^(-?[\d.]+)px$/)
+    if (m) r.spc = Math.round(parseFloat(m[1]) * 100) // px → pt×100（近似 1px=1pt 级差用 100 基准）
+  }
+  return r
+}
+
+// DOM 子树 → paras（每段 div；run = 直接文本节点或带样式 span）
+const extractParas = (root: HTMLElement): TextPara[] => {
+  const paras: TextPara[] = []
+  const blocks = [...root.childNodes].filter(n => n.nodeName === 'DIV' || n.nodeName === 'P')
+  const lines: Node[][] = blocks.length ? blocks.map(b => [...b.childNodes]) : [[...root.childNodes]]
+  for (const nodes of lines) {
+    const runs: TextRun[] = []
+    for (const n of nodes) {
+      if (n.nodeType === Node.TEXT_NODE) {
+        if (n.textContent) runs.push({ text: n.textContent })
+      } else if (n.nodeName === 'SPAN') {
+        const st = runOfNode(n, {})
+        const txt = n.textContent || ''
+        if (txt) runs.push({ ...st, text: txt } as TextRun)
+      } else if (n.nodeName === 'BR') {
+        runs.push({ text: '\n' })
+      }
+    }
+    paras.push({ runs })
+  }
+  return paras.filter(p => p.runs.length)
+}
+
+// paras → contentEditable 内部 HTML（span 逐 run；空段给 <br>）
+const parasToHTML = (paras: TextPara[], field: 'title' | 'content', base: React.CSSProperties): string => {
+  const styleOf = (r: TextRun): string => {
+    const s: string[] = []
+    if (r.bold) s.push('font-weight:700')
+    if (r.italic) s.push('font-style:italic')
+    const deco: string[] = []
+    if (r.underline) deco.push('underline')
+    if (r.strike) deco.push('line-through')
+    if (deco.length) s.push(`text-decoration:${deco.join(' ')}`)
+    if (r.color) s.push(`color:${r.color}`)
+    if (r.fontSize) s.push(`font-size:${r.fontSize}px`)
+    if (r.font) s.push(`font-family:${r.font}`)
+    if (r.spc != null) s.push(`letter-spacing:${r.spc / 100}px`)
+    return s.join(';')
+  }
+  const lines = paras.length ? paras.map(p => {
+    const spans = (p.runs.length ? p.runs : [{ text: '' }]).map(r => {
+      const st = styleOf(r)
+      return `<span${st ? ` style="${st}"` : ''}>${escHTML(r.text)}</span>`
+    }).join('')
+    return `<div>${spans || '<br>'}</div>`
+  }) : []
+  void field; void base
+  return lines.join('') || '<div><br></div>'
+}
+
+const escHTML = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+// RichField：受控 contentEditable（标题/正文富文本）
+// - paras/renderKey 变化时重写 DOM（选区命令更新 paras 后视图同步；
+//   撤销/换页/外部更新同路）
+// - onInput 上抛 paras；onFocus 上抛 focus 状态
+// - 选区命令（B/I/U/S 等）不直接改 DOM：父层通过 window.getSelection 找到
+//   本元素选区 → run 拆分写 paras → 本组件 effect 重绘
+// 重绘时保留选区（字符区间记录/恢复 —— MS PPT 点 B 后可继续点 I/U/S 连续操作）
+// placeholder 用 data-ph + CSS ::before（空时显示，对齐 input/textarea 观感）
+const richSelOffsets = (el: HTMLElement): { start: number; end: number } | null => {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0 || !sel.anchorNode || !el.contains(sel.anchorNode)) return null
+  const anchor = sel.anchorNode
+  const focus = sel.focusNode
+  const offsetOf = (node: Node, off: number): number => {
+    let total = 0
+    const walkInto = (n: Node): number => {
+      for (const c of Array.from(n.childNodes)) {
+        if (c === node) return total + off
+        if (c.contains(node)) { const r = walkInto(c); if (r >= 0) return r }
+        total += (c.textContent || '').length
+      }
+      return -1
+    }
+    return walkInto(el)
+  }
+  const start = offsetOf(anchor, sel.anchorOffset)
+  const end = focus ? offsetOf(focus, sel.focusOffset) : start
+  if (start < 0 || end < 0) return null
+  return { start: Math.min(start, end), end: Math.max(start, end) }
+}
+const setRichSelOffsets = (el: HTMLElement, start: number, end: number) => {
+  const sel = window.getSelection()
+  if (!sel) return
+  // 在文本节点树中找 [start,end) 的锚点
+  let off = 0
+  let sn: Node | null = null, so = 0, en: Node | null = null, eo = 0
+  const walk = (n: Node) => {
+    if (n.nodeType === Node.TEXT_NODE) {
+      const len = n.textContent!.length
+      if (sn === null && off + len > start) { sn = n; so = Math.max(0, start - off) }
+      if (en === null && off + len >= end) { en = n; eo = Math.max(0, end - off) }
+      off += len
+    } else {
+      for (const c of Array.from(n.childNodes)) walk(c)
+    }
+  }
+  walk(el)
+  if (!sn || !en) return
+  try {
+    const range = document.createRange()
+    range.setStart(sn, so)
+    range.setEnd(en, eo)
+    sel.removeAllRanges()
+    sel.addRange(range)
+  } catch { /* 忽略异常偏移 */ }
+}
+const RichField = ({ paras, plain, className, style, placeholder, onFocus, onInput, renderKey, field }: {
+  paras?: TextPara[]; plain: string; className?: string; style?: React.CSSProperties
+  placeholder?: string; onFocus?: () => void; onInput?: (paras: TextPara[] | null) => void
+  renderKey: string; field: 'title' | 'content'
+}) => {
+  const ref = useRef<HTMLDivElement | null>(null)
+  // 上一次渲染的 paras 引用 —— 变化时重写 DOM（选区命令路径）
+  const lastParasRef = useRef<TextPara[] | undefined>(undefined)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const html = paras && paras.length
+      ? parasToHTML(paras, field, {})
+      : (plain || '')
+    // 输入焦点在本元素时：保留选区重写（命令更新 paras 的主路径）；
+    // 非聚焦（换页/外部）直接重写
+    if (document.activeElement === el) {
+      const saved = richSelOffsets(el)
+      el.innerHTML = html
+      if (saved) setRichSelOffsets(el, saved.start, saved.end)
+    } else {
+      el.innerHTML = html
+    }
+    lastParasRef.current = paras
+  }, [paras, plain, renderKey])
+  return (
+    <div
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      data-richfield={field}
+      data-ph={placeholder}
+      className={className}
+      style={{ ...style, outline: 'none', background: 'transparent', minHeight: '1em', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+      onFocus={() => onFocus?.()}
+      onInput={() => {
+        const el = ref.current
+        if (!el) return
+        const text = el.innerText
+        if (!text.trim()) { onInput?.(null); return }
+        onInput?.(extractParas(el))
+      }}
+    />
+  )
 }
 
 // round72：带项目符号/编号的多行文本展示（bullet/numbered 只在展示层渲染符号，
@@ -414,6 +618,29 @@ function MenuItem({ label, icon, onClick, disabled, danger }: any) {
 export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?: SlideData[]; onSlidesChange?: (slides: SlideData[]) => void }) {
   const { t, tf } = useI18n()
 
+  // round73：占位符富文本 paras（sizePt EMU→画布 px 换算；spc/样式直存）
+  // 与 emuShapesToItems 的 run 换算一致（ptToPx = pt·914400·808/(72·pageW)）
+  const fieldParasFromData = (src: any, pageW: number): TextPara[] | undefined => {
+    if (!Array.isArray(src) || !src.length) return undefined
+    const ptToPx = (pt: number) => Math.round(pt * 914400 * 808 / (72 * pageW))
+    return src.map((p: any) => ({
+      align: p.align,
+      bullet: !!p.bullet,
+      numbered: !!p.numbered,
+      runs: autoSpaceRuns((p.runs || []).map((r: any) => ({
+        text: r.text || '',
+        color: r.color,
+        fontSize: r.sizePt ? ptToPx(r.sizePt) : undefined,
+        bold: r.bold,
+        italic: r.italic,
+        underline: r.underline,
+        strike: r.strike,
+        font: r.font,
+        spc: r.spc,
+      }))),
+    }))
+  }
+
   // 将真实 PPTX 解析出的 EMU 形状转换为内部 ShapeItem（等比坐标系：宽 6464 单位，高随页比例）
   const emuShapesToItems = (shapes?: SlideShape[], pageW = 12192000, pageH = 6858000): ShapeItem[] => {
     if (!shapes || !shapes.length) return []
@@ -524,6 +751,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           // round71：还原标题/正文文字样式（写盘端 slidesToData 同名字段透传）
           titleStyle: (s as any).titleStyle,
           contentStyle: (s as any).contentStyle,
+          // round73：还原选定文字富文本（sizePt→画布 px 与 shape paras 同换算；
+          // spc 为 pt×100 直存）
+          titleParas: fieldParasFromData((s as any).titleParas, pageW),
+          contentParas: fieldParasFromData((s as any).contentParas, pageW),
           shapes: emuShapesToItems(s.shapes, pageW, pageH),
           artTexts: [],
           animations: [],
@@ -834,6 +1065,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
               italic: r.italic,
               underline: r.underline,
               font: r.font,
+              // round73：删除线 + 字符间距（选定文字格式落盘）
+              strike: (r as any).strike || undefined,
+              spc: (r as any).spc != null ? Math.round((r as any).spc * 72 * PAGE_W / (914400 * 808)) : undefined,
             })),
           })) : undefined,
         })
@@ -862,6 +1096,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
         // round71：标题/正文文字样式随盘透传（读取端 353 行同名字段还原）
         titleStyle: (s as any).titleStyle || undefined,
         contentStyle: (s as any).contentStyle || undefined,
+        // round73：选定文字富文本（runs 带 bold/italic/underline/strike/color/sizePt/font/spc）——
+        // 写盘端占位符逐 run 写出；读取端还原回 titleParas/contentParas
+        titleParas: (s as any).titleParas || undefined,
+        contentParas: (s as any).contentParas || undefined,
         notes: s.notes,
         bg: s.bg,
         shapes,
@@ -978,8 +1216,25 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   }
 
   // 字号放大/缩小：同步顶层与所有 run（有 paras 的形状 run 级字号生效）
+  // round73：RichField 有选区 → 只步进选定文字；仅聚焦 → 整段基线步进
   const bumpFontSize = (delta: number) => {
-    // round71：标题/正文聚焦文本的字号步进（主诉②：旧版只认 shape）
+    const sel = richSelection()
+    if (sel) {
+      const paras = parasOfField(sel.field)
+      // 选区内基准字号（首个相交 run）→ 步进
+      let basePx: number | undefined
+      let off = 0
+      outer: for (const p of paras) for (const r of p.runs) {
+        const rs = off, re = off + r.text.length
+        off = re
+        if (Math.min(re, sel.end) - Math.max(rs, sel.start) > 0 && r.fontSize) { basePx = r.fontSize; break outer }
+      }
+      const st = textStyleOf(sel.field)
+      if (basePx === undefined) basePx = (st.fontSize ? ptToPxUI(st.fontSize) : undefined) || (sel.field === 'title' ? ptToPxUI(32) : ptToPxUI(18))
+      const next = Math.max(6, basePx + delta)
+      applyRunPatch(sel.field, sel, r => ({ fontSize: next }))
+      return
+    }
     if (focusField) {
       const key = focusField === 'title' ? 'titleStyle' : 'contentStyle'
       const cur = ((current as any)[key] || {}).fontSize || (focusField === 'title' ? 32 : 18)
@@ -1028,9 +1283,11 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     return ''
   })()
   // 将 pt 字号应用到选中元素（shape 同步顶层与全部 run，艺术字直存 pt）
-  // round71：标题/正文聚焦时写 titleStyle/contentStyle.fontSize（pt 直存，渲染换算）
+  // round73：RichField 有选区 → 只改选定文字；仅聚焦 → 整段基线 style.fontSize
   const applyFontSizePt = (pt: number) => {
     const npt = Math.max(8, Math.min(400, Math.round(pt)))
+    const sel = richSelection()
+    if (sel) { setRunStyle(sel.field, { fontSize: ptToPxUI(npt) }); return }
     if (focusField) { applyTextStyle(focusField, { fontSize: npt }); return }
     if (!selectedEl) { softHint(); return }
     if (selectedEl.type === 'art') { updateArtText(selectedEl.index, { fontSize: npt }); return }
@@ -1072,10 +1329,220 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       indent: st.indent,
       bullet: st.bullet,
       numbered: st.numbered,
+      charSpacing: st.charSpacing,
     }
   }
+  // ════ round73：选定文字命令引擎 ════
+  // 选区在 RichField（contentEditable）内时：把选区映射到 paras 的 run 拆分
+  // （字符区间 → 段/偏移 → 拆 run 应用样式再合并相邻同样式 run —— 与 shape
+  // 的 paras 结构一致，写盘直接消费）。无选区时回退整段全部 run。
+  //
+  // 落点：titleParas/contentParas（新富文本字段）。若字段为空（纯文本用户）
+  // 先从 title/content + style 基线合成初始 paras，保证任何命令后都有富文本。
+  const parasOfField = (field: 'title' | 'content'): TextPara[] => {
+    const pkey = field === 'title' ? 'titleParas' : 'contentParas'
+    const existing = (current as any)[pkey] as TextPara[] | undefined
+    if (existing && existing.length) return existing
+    const st = textStyleOf(field)
+    const plain = field === 'title' ? current.title : current.content
+    const pxSize = st.fontSize ? ptToPxUI(st.fontSize) : undefined
+    return (plain || '').split('\n').filter(l => l !== '').map(l => ({
+      runs: [{
+        text: l,
+        bold: st.bold,
+        color: st.color,
+        fontSize: pxSize,
+        font: st.fontFamily,
+      }],
+    }))
+  }
+  // run 样式合并（相邻同样式合并，写盘/渲染更紧凑）
+  const mergeRuns = (runs: TextRun[]): TextRun[] => {
+    const out: TextRun[] = []
+    for (const r of runs) {
+      if (!r.text) continue
+      const prev = out[out.length - 1]
+      if (prev
+        && (prev.bold || false) === (r.bold || false)
+        && (prev.italic || false) === (r.italic || false)
+        && (prev.underline || false) === (r.underline || false)
+        && (prev.strike || false) === (r.strike || false)
+        && (prev.color || '') === (r.color || '')
+        && (prev.fontSize || 0) === (r.fontSize || 0)
+        && (prev.font || '') === (r.font || '')
+        && (prev.spc ?? 0) === (r.spc ?? 0)) {
+        prev.text += r.text
+      } else {
+        out.push({ ...r })
+      }
+    }
+    return out
+  }
+  // 当前选区（在 RichField 内且非折叠）→ { field, 全文字符区间 }；否则 null
+  const richSelection = (): { field: 'title' | 'content'; start: number; end: number } | null => {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
+    const anchorNode = sel.anchorNode
+    const fieldEl = anchorNode instanceof HTMLElement
+      ? (anchorNode.closest('[data-richfield]') as HTMLElement | null)
+      : (anchorNode?.parentElement?.closest('[data-richfield]') as HTMLElement | null)
+    if (!fieldEl) return null
+    const field = fieldEl.getAttribute('data-richfield') as 'title' | 'content'
+    // 选区在全文字符坐标中的区间：遍历 DOM 文本节点累计偏移
+    const walk = (n: Node): number => {
+      let off = 0
+      for (const c of Array.from(n.childNodes)) {
+        if (c === anchorNode || (c.contains && c.contains(anchorNode))) {
+          return off + (c === anchorNode ? (sel.anchorOffset || 0) : walk(c))
+        }
+        off += (c.textContent || '').length
+      }
+      return off
+    }
+    const start = walk(fieldEl)
+    const focusNode = sel.focusNode
+    let end = start
+    if (focusNode) {
+      const walk2 = (n: Node): number => {
+        let off = 0
+        for (const c of Array.from(n.childNodes)) {
+          if (c === focusNode || (c.contains && c.contains(focusNode))) {
+            return off + (c === focusNode ? (sel.focusOffset || 0) : walk2(c))
+          }
+          off += (c.textContent || '').length
+        }
+        return off
+      }
+      end = walk2(fieldEl)
+    }
+    return { field, start: Math.min(start, end), end: Math.max(start, end) }
+  }
+  // 选区/整段应用 run 样式：patch(r) 返回新 run 字段
+  //   sel 为 null 时应用到全部 run（整段语义 —— MS PPT 无选区点 B = 整段切换）
+  const applyRunPatch = (field: 'title' | 'content', sel: { start: number; end: number } | null, patch: (r: TextRun) => Partial<TextRun>, toggle?: (r: TextRun) => boolean) => {
+    const paras = parasOfField(field)
+    let off = 0
+    let anyApplied = false
+    const nextParas = paras.map(p => {
+      let runs: TextRun[] = []
+      for (const r of p.runs) {
+        const len = r.text.length
+        const rs = off, re = off + len
+        off = re
+        if (sel == null || re <= sel.start || rs >= sel.end) { runs.push(r); continue }
+        // 与选区相交：拆前中后三段
+        const pre = rs < sel.start ? r.text.slice(0, sel.start - rs) : ''
+        const mid = r.text.slice(Math.max(0, sel.start - rs), Math.min(len, sel.end - rs))
+        const post = re > sel.end ? r.text.slice(sel.end - rs) : ''
+        if (pre) runs.push({ ...r, text: pre })
+        if (mid) { runs.push({ ...r, ...patch(r), text: mid }); anyApplied = true }
+        if (post) runs.push({ ...r, text: post })
+      }
+      return { ...p, runs: mergeRuns(runs) }
+    })
+    // 切换类命令的“反向”判定：选区全部已加粗 → 取消（对齐 MS）
+    void toggle
+    if (sel != null && !anyApplied) {
+      // 选区只在段间隙（空选）—— 全部 run 应用（等同整段）
+    }
+    const pkey = field === 'title' ? 'titleParas' : 'contentParas'
+    updateActive({ [pkey]: nextParas } as Partial<Slide>)
+    return nextParas
+  }
+  // 切换类选区命令（bold/italic/underline/strike）：选区内文字切换（全已开→取消；
+  // 否则全开）；无选区时整段基线 style 切换（对齐 MS：光标无选区 = 整段属性，
+  // 且空文本无 runs 也有语义）
+  const toggleRunStyle = (field: 'title' | 'content', key: 'bold' | 'italic' | 'underline' | 'strike') => {
+    const sel = richSelection()
+    if (!sel) {
+      // 无选区：整段基线（titleStyle/contentStyle 的 bold/italic 等）
+      if (!focusField) return false
+      const st = textStyleOf(focusField)
+      const cur = (st as any)[key] as boolean
+      applyTextStyle(focusField, { [key]: !cur } as any)
+      return true
+    }
+    const paras = parasOfField(sel.field)
+    let allOn = true
+    let seen = false
+    let off = 0
+    for (const p of paras) for (const r of p.runs) {
+      const rs = off, re = off + r.text.length
+      off = re
+      const inter = Math.min(re, sel.end) - Math.max(rs, sel.start)
+      if (inter > 0 && r.text.trim()) {
+        seen = true
+        if (!r[key]) allOn = false
+      }
+    }
+    const turnOn = !(seen && allOn)
+    applyRunPatch(sel.field, sel, () => ({ [key]: turnOn }) as Partial<TextRun>)
+    return true
+  }
+  // 设置类选区命令（颜色/字号/字体/字符间距）：直接赋值到选区 runs
+  const setRunStyle = (field: 'title' | 'content', patch: Partial<TextRun>): boolean => {
+    const sel = richSelection()
+    const targetField = sel?.field ?? field
+    if (!targetField) return false
+    applyRunPatch(targetField, sel, () => patch)
+    return true
+  }
+  // round73：RichField 输入提交 —— paras 落库 + 纯文本 title/content 同步
+  // （缩略图/大纲/放映读纯文本；写盘端 paras 优先）。null = 清空。
+  const commitFieldParas = (field: 'title' | 'content', paras: TextPara[] | null) => {
+    const pkey = field === 'title' ? 'titleParas' : 'contentParas'
+    const tkey = field === 'title' ? 'title' : 'content'
+    if (!paras || !paras.length) {
+      // 清空：paras 置空 + 纯文本空
+      updateActive({ [pkey]: undefined, [tkey]: '' } as Partial<Slide>, true)
+      return
+    }
+    const text = paras.map(p => p.runs.map(r => r.text).join('')).join('\n')
+    updateActive({ [pkey]: paras, [tkey]: text } as Partial<Slide>, true)
+  }
+  // round73：字符间距 —— 选区优先写 run.spc；无选区写 style.charSpacing（整段）
+  // spc = pt×100（OOXML rPr@spc 同语义；0/undefined = 常规）
+  const activeCharSpacing = (): number => {
+    const sel = richSelection()
+    const field = sel?.field || focusField
+    if (field) {
+      const paras = (current as any)[field === 'title' ? 'titleParas' : 'contentParas'] as TextPara[] | undefined
+      if (paras && paras.length) {
+        const spcs = new Set<number>()
+        if (sel) {
+          let off = 0
+          for (const p of paras) for (const r of p.runs) {
+            const rs = off, re = off + r.text.length
+            off = re
+            if (Math.min(re, sel.end) - Math.max(rs, sel.start) > 0 && r.text.trim()) spcs.add(r.spc ?? 0)
+          }
+        } else {
+          for (const p of paras) for (const r of p.runs) if (r.text.trim()) spcs.add(r.spc ?? 0)
+        }
+        if (spcs.size === 1) return [...spcs][0]
+        return 0
+      }
+      return textStyleOf(field).charSpacing || 0
+    }
+    return 0
+  }
+  const applyCharSpacing = (spc: number) => {
+    const sel = richSelection()
+    const field = sel?.field || focusField
+    if (field) {
+      if (sel) { setRunStyle(field, { spc: spc || undefined }); return }
+      applyTextStyle(field, { charSpacing: spc || undefined })
+      return
+    }
+    if (!selectedEl) { softHint(); return }
+    if (selectedEl.type === 'shape') updateShape(selectedEl.index, { charSpacing: spc || undefined } as any)
+  }
   // 颜色三路分发（含 run 级同步，否则 paras 渲染被 run 颜色覆盖看不到变化）
+  // round73：RichField 有选区 → 只改选定文字（run 拆分）；
+  // 仅聚焦（无选区）→ 整段基线 style.color（对齐 MS PPT：光标无选区=整段）
   const applyFontColor = (c: string) => {
+    const sel = richSelection()
+    if (sel) { setRunStyle(sel.field, { color: c }); closeAllPanels(); return }
     if (focusField) { applyTextStyle(focusField, { color: c }); closeAllPanels(); return }
     if (!selectedEl) { softHint(); closeAllPanels(); return }
     if (selectedEl.type === 'shape') styleShape(selectedEl.index, { fontColor: c }, () => ({ color: c }))
@@ -1083,18 +1550,21 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     closeAllPanels()
   }
   // 字体三路分发：shape 写顶层 font + run.font；标题/正文写 style；艺术字写 font
+  // round73：有选区 → 选定文字 runs；无选区 → 整段基线 style.fontFamily
   const applyFontFamily = (f: string) => {
+    const sel = richSelection()
+    if (sel) { setRunStyle(sel.field, { font: f || undefined }); return }
     if (focusField) { applyTextStyle(focusField, { fontFamily: f || undefined }); return }
     if (!selectedEl) return
     if (selectedEl.type === 'shape') styleShape(selectedEl.index, { font: f || undefined }, () => ({ font: f || undefined }))
     else updateArtText(selectedEl.index, { font: f || undefined } as any)
   }
-  // 标题/正文加粗（round72：真实切换 —— style.bold 显式存储，渲染消费；
-  // 旧版只弹「标题文字默认加粗」，用户点加粗无效）
+  // 标题/正文加粗（round72：整段切换；round73：选区内文字切换 —— 用户主诉
+  // 「选定文字调整而非元素整体」）
   const applyTextBold = () => {
-    if (!focusField) return
-    const st = textStyleOf(focusField)
-    applyTextStyle(focusField, { bold: !st.bold })
+    if (!toggleRunStyle(focusField || 'content', 'bold')) {
+      // focusField 为 null 且无选区（shape 分支已在 ribbon 处理）—— 不动作
+    }
   }
   // ════ round72：段落命令三路分发 ════
   // 加粗/对齐/缩进/行距/项目符号/编号 —— 标题/正文聚焦文本（style 字段）、
@@ -1261,7 +1731,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       .filter(sel => current.shapes[sel.index]?.groupId === gid)
   // 统一选择入口：shift 点击切换成员（组员按整组切换），普通点击整组/单成员选中；
   // 主选恒为集合最后一个。返回新的选中集合（供拖拽 items 捕获）。
+  // round73：点选形状/艺术字 = 目标切换 —— 清空 focusField（旧版残留时，
+  // 随后的字体/颜色命令误走标题/正文分支而非选中形状，round71 e2e 复现）。
   const pickSelection = (members: SelEl[], primary: SelEl, shift?: boolean): SelEl[] => {
+    if (focusField) setFocusField(null)
     if (shift) {
       const allIn = members.every(m => selectedEls.some(c => sameSel(c, m)))
       const next = allIn
@@ -1677,9 +2150,16 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
               ))}
             </select>
-            {/* 加粗：三路生效（round72：标题/正文聚焦文本真实切换 style.bold；
-                shape 切换所有 run 含 paras；艺术字切换 —— 旧版对艺术字只弹提示不生效） */}
-            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (focusField) { applyTextBold(); return }; if (!selectedEl) { softHint(); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeBold = runs.some(r => r.text && !r.bold) || (!runs.length && !sh.fontBold); styleShape(selectedEl.index, { fontBold: makeBold }, () => ({ bold: makeBold })) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { bold: !(at as any).bold } as any) } }} />
+            {/* round73：加粗/斜体/下划线/删除线 —— 选定文字优先（RichField 选区内
+                run 拆分）；无选区回退整段；shape 切换所有 run 含 paras；艺术字 bold。
+                旧版只有加粗且仅元素整体，用户主诉「要支持选定文字调整」。 */}
+            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (focusField || richSelection()) { applyTextBold(); return }; if (!selectedEl) { softHint(); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeBold = runs.some(r => r.text && !r.bold) || (!runs.length && !sh.fontBold); styleShape(selectedEl.index, { fontBold: makeBold }, () => ({ bold: makeBold })) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { bold: !(at as any).bold } as any) } }} />
+            {/* round73：斜体（选定文字） */}
+            <RibbonButton icon={<span style={{ fontStyle: 'italic', fontWeight: 700 }}>I</span> as any} label={t('slide.italic')} onClick={() => { if (focusField || richSelection()) { toggleRunStyle(focusField || 'content', 'italic'); return }; if (!selectedEl) { softHint(); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeIt = runs.some(r => r.text && !r.italic) || (!runs.length && !(sh as any).italic); styleShape(selectedEl.index, { italic: makeIt } as any, () => ({ italic: makeIt })) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { italic: !(at as any).italic } as any) } }} />
+            {/* round73：下划线（选定文字） */}
+            <RibbonButton icon={<span style={{ textDecoration: 'underline', fontWeight: 700 }}>U</span> as any} label={t('slide.underline')} onClick={() => { if (focusField || richSelection()) { toggleRunStyle(focusField || 'content', 'underline'); return }; if (!selectedEl) { softHint(); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeUl = runs.some(r => r.text && !r.underline) || (!runs.length && !(sh as any).underline); styleShape(selectedEl.index, { underline: makeUl } as any, () => ({ underline: makeUl })) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { underline: !(at as any).underline } as any) } }} />
+            {/* round73：删除线（选定文字） */}
+            <RibbonButton icon={<span style={{ textDecoration: 'line-through', fontWeight: 700 }}>S</span> as any} label={t('slide.strike')} onClick={() => { if (focusField || richSelection()) { toggleRunStyle(focusField || 'content', 'strike'); return }; if (selectedEl?.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeSt = runs.some(r => r.text && !(r as any).strike) || (!runs.length && !(sh as any).strike); styleShape(selectedEl.index, { strike: makeSt } as any, () => ({ strike: makeSt }) as any) } else if (!selectedEl) { softHint() } }} />
             <div className="relative">
               {/* round71：颜色 —— 对 shape 文字/艺术字/标题/正文聚焦文本三路生效
                   （旧版只认 selectedEl=shape → 标题正文改色无效，用户主诉①）。 */}
@@ -1717,6 +2197,19 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             {/* 字号调整：放大 / 缩小（同步顶层与所有 run） */}
             <RibbonButton icon="A+" label={t('slide.fontSizeUp')} onClick={() => bumpFontSize(2)} />
             <RibbonButton icon="A-" label={t('slide.fontSizeDown')} onClick={() => bumpFontSize(-2)} />
+            {/* round73：字符间距（新增控件 —— 用户主诉）。选定文字优先：选区 runs
+                写 spc；无选区写 style.charSpacing 整段。pt×100（OOXML spc 语义）。 */}
+            <div className="flex items-center gap-0.5" title={t('slide.charSpacingTip') || '先选定文字再调整间距'}>
+              <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>AV</span>
+              <select value={String(activeCharSpacing())} onChange={(e) => applyCharSpacing(parseFloat(e.target.value) || 0)} className="text-xs rounded-md px-1 py-1 ribbon-input" style={{ width: 58, height: 26, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
+                <option value="0">0</option>
+                <option value="50">0.5</option>
+                <option value="100">1.0</option>
+                <option value="200">2.0</option>
+                <option value="300">3.0</option>
+                <option value="500">5.0</option>
+              </select>
+            </div>
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
             {/* 行距（round72：三路 —— 聚焦文本 style.lineHeight / shape；旧版弹「请先选择元素」） */}
@@ -2349,31 +2842,31 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             {/* round58：背景纹理层（bgRef → 主题 blipFill + duotone；multiply 近似双色调） */}
             {current.bgImg && <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', ...bgImgStyle(current.bgImg, current.bgImgTileW, current.bgImgTileH) }} />}
             <div className="absolute inset-0 flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={e => { setSelectedEl(null); if (e.target === e.currentTarget) setFocusField(null) }}>
-              {/* 文字内容（round71：标题/正文直接应用 titleStyle/contentStyle；输入框聚焦时
-                  记录 focusField，工具栏颜色/字号/字体据此生效。
-                  round72：全部样式字段生效 —— 加粗/对齐/行距/缩进/项目符号/编号） */}
+              {/* 文字内容（round73：标题/正文改为 contentEditable 富文本 RichField ——
+                  支持选定文字调整字体/字号/颜色/加粗/斜体/下划线/删除线/字符间距，
+                  旧 input/textarea 只能整段样式。纯文本 title/content 与 paras 双轨同步。） */}
               {current.layout === 'title' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10">
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-2xl sm:text-3xl md:text-4xl text-center outline-none bg-transparent w-full" style={{ letterSpacing: '-0.02em', ...fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI) }} placeholder={t('slide.placeholder.title')} />
-                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="text-sm sm:text-base md:text-lg text-center mt-3 outline-none bg-transparent w-full" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.subtitle')} />
+                  <RichField field="title" paras={current.titleParas} plain={current.title} renderKey={`t-${active}`} className="text-2xl sm:text-3xl md:text-4xl text-center bg-transparent w-full" style={{ letterSpacing: '-0.02em', ...fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI) }} placeholder={t('slide.placeholder.title')} onFocus={() => setFocusField('title')} onInput={(ps) => commitFieldParas('title', ps)} />
+                  <RichField field="content" paras={current.contentParas} plain={current.content} renderKey={`c-${active}`} className="text-sm sm:text-base md:text-lg text-center mt-3 bg-transparent w-full" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.subtitle')} onFocus={() => setFocusField('content')} onInput={(ps) => commitFieldParas('content', ps)} />
                 </div>
               )}
               {current.layout === 'content' && (
                 <>
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-xl sm:text-2xl mb-4 outline-none bg-transparent relative z-10" style={fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI)} placeholder={t('slide.placeholder.title')} />
+                  <RichField field="title" paras={current.titleParas} plain={current.title} renderKey={`t-${active}`} className="text-xl sm:text-2xl mb-4 bg-transparent relative z-10" style={fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI)} placeholder={t('slide.placeholder.title')} onFocus={() => setFocusField('title')} onInput={(ps) => commitFieldParas('title', ps)} />
                   <div className="w-12 h-1 rounded mb-4" style={{ background: 'var(--color-primary)' }}></div>
-                  <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none relative z-10" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.content')} />
+                  <RichField field="content" paras={current.contentParas} plain={current.content} renderKey={`c-${active}`} className="flex-1 text-sm sm:text-base bg-transparent relative z-10" style={{ ...fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI), whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} placeholder={t('slide.placeholder.content')} onFocus={() => setFocusField('content')} onInput={(ps) => commitFieldParas('content', ps)} />
                 </>
               )}
               {current.layout === 'section' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10 px-10">
                   <div className="w-14 h-1.5 rounded mb-5" style={{ background: 'var(--color-primary)' }}></div>
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-3xl sm:text-4xl text-center outline-none bg-transparent w-full" style={fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI)} placeholder={t('slide.placeholder.title')} />
-                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="text-sm sm:text-base text-center mt-4 outline-none bg-transparent w-full" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.subtitle')} />
+                  <RichField field="title" paras={current.titleParas} plain={current.title} renderKey={`t-${active}`} className="text-3xl sm:text-4xl text-center bg-transparent w-full" style={fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI)} placeholder={t('slide.placeholder.title')} onFocus={() => setFocusField('title')} onInput={(ps) => commitFieldParas('title', ps)} />
+                  <RichField field="content" paras={current.contentParas} plain={current.content} renderKey={`c-${active}`} className="text-sm sm:text-base text-center mt-4 bg-transparent w-full" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.subtitle')} onFocus={() => setFocusField('content')} onInput={(ps) => commitFieldParas('content', ps)} />
                 </div>
               )}
               {current.layout === 'blank' && !current.shapes.length && (
-                <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.blank')} />
+                <RichField field="content" paras={current.contentParas} plain={current.content} renderKey={`c-${active}`} className="flex-1 text-sm bg-transparent relative z-10" style={{ ...fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI), whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} placeholder={t('slide.placeholder.blank')} onFocus={() => setFocusField('content')} onInput={(ps) => commitFieldParas('content', ps)} />
               )}
 
               {/* 母版/版式装饰层（对齐 MS PPT：每页底层渲染该页版式的非占位符形状；

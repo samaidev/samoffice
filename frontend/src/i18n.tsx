@@ -1039,6 +1039,12 @@ const dict: Record<string, { en: string; zh: string }> = {
   // 聚焦即为目标；形状/艺术字仍可点击选中）
   'slide.clickTextOrShape': { en: 'Click the title/content text or select a shape first', zh: '请先点击标题/正文文字，或选中形状/艺术字' },
   'slide.bold': { en: 'Bold', zh: '加粗' },
+  // round73：选定文字格式（用户主诉：字体/字号/颜色/加粗要支持选定文字；补充斜体/下划线/删除线/字符间距）
+  'slide.italic': { en: 'Italic', zh: '斜体' },
+  'slide.underline': { en: 'Underline', zh: '下划线' },
+  'slide.strike': { en: 'Strikethrough', zh: '删除线' },
+  'slide.charSpacing': { en: 'Character Spacing', zh: '字符间距' },
+  'slide.charSpacingTip': { en: 'Select text first, then adjust spacing', zh: '先选定文字再调整间距' },
   'slide.color': { en: 'Color', zh: '颜色' },
   'slide.paragraph': { en: 'Paragraph', zh: '段落' },
   'slide.lineSpacing': { en: 'Line Spacing', zh: '行距' },

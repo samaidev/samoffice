@@ -55,16 +55,20 @@ type textStyleWrite struct {
 }
 
 type slideWrite struct {
-        Bg         string       `json:"bg"`
-        Notes      string       `json:"notes"`
-        Transition string       `json:"transition,omitempty"` // ""/fade/push/wipe/cover/cut/zoom/morph
-        Shapes     []shapeWrite `json:"shapes"`
-        // round72：标题/正文直接文字（前端标题/正文输入框内容落盘 —— 旧版只透传
-        // 不写 XML，保存后标题正文丢失）。非空时写成 ctrTitle/body 占位符形状。
-        Title       string          `json:"title,omitempty"`
-        Content     string          `json:"content,omitempty"`
-        TitleStyle  *textStyleWrite `json:"titleStyle,omitempty"`
-        ContentStyle *textStyleWrite `json:"contentStyle,omitempty"`
+	Bg         string       `json:"bg"`
+	Notes      string       `json:"notes"`
+	Transition string       `json:"transition,omitempty"` // ""/fade/push/wipe/cover/cut/zoom/morph
+	Shapes     []shapeWrite `json:"shapes"`
+	// round72：标题/正文直接文字（前端标题/正文输入框内容落盘 —— 旧版只透传
+	// 不写 XML，保存后标题正文丢失）。非空时写成 ctrTitle/body 占位符形状。
+	Title       string          `json:"title,omitempty"`
+	Content     string          `json:"content,omitempty"`
+	TitleStyle  *textStyleWrite `json:"titleStyle,omitempty"`
+	ContentStyle *textStyleWrite `json:"contentStyle,omitempty"`
+	// round73：选定文字富文本（标题/正文逐段逐 run：颜色/字号/字体/加粗/斜体/
+	// 下划线/删除线/字符间距）—— 优先于 Title/Content 纯文本 + Style 整段样式
+	TitleParas   []paraWrite `json:"titleParas,omitempty"`
+	ContentParas []paraWrite `json:"contentParas,omitempty"`
 }
 
 type shapeWrite struct {
@@ -107,13 +111,16 @@ type paraWrite struct {
 }
 
 type runWrite struct {
-        Text      string `json:"text"`
-        Color     string `json:"color"`
-        SizePt    int    `json:"sizePt"`
-        Bold      bool   `json:"bold"`
-        Italic    bool   `json:"italic"`
-        Underline bool   `json:"underline"`
-        Font      string `json:"font"`
+	Text      string `json:"text"`
+	Color     string `json:"color"`
+	SizePt    int    `json:"sizePt"`
+	Bold      bool   `json:"bold"`
+	Italic    bool   `json:"italic"`
+	Underline bool   `json:"underline"`
+	Font      string `json:"font"`
+	// round73：删除线 + 字符间距（选定文字格式）
+	Strike bool `json:"strike,omitempty"` // rPr@strike="sngStrike"
+	Spc    int  `json:"spc,omitempty"`    // rPr@spc（pt×100）
 }
 
 // ---------- 公共入口 ----------
@@ -552,8 +559,10 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
         }
         // writePlaceholder 生成单个占位符 sp（ph=ctrTitle|body；文本多行逐段写出，
         // 样式：颜色/字号/字体/加粗/对齐/行距/缩进/项目符号/编号）
-        writePlaceholder := func(id int, phType, name, text string, st *textStyleWrite, defaultSz int, defaultBold bool) {
-                if strings.TrimSpace(text) == "" && st == nil {
+        // round73：paras 非空时逐段逐 run 写出（选定文字格式：斜体/下划线/删除线/
+        // 字符间距/颜色/字号/字体全 run 级），优先于纯文本 + 整段 style。
+        writePlaceholder := func(id int, phType, name, text string, st *textStyleWrite, defaultSz int, defaultBold bool, paras []paraWrite) {
+                if (strings.TrimSpace(text) == "" && st == nil) && len(paras) == 0 {
                         return
                 }
                 b.WriteString(`<p:sp><p:nvSpPr><p:cNvPr id="`)
@@ -564,6 +573,91 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
                 b.WriteString(phType)
                 b.WriteString(`"/></p:nvPr></p:nvSpPr><p:spPr/>`)
                 b.WriteString(`<p:txBody><a:bodyPr/><a:lstStyle/>`)
+                if len(paras) > 0 {
+                        // 富文本路径：逐段逐 run（run 级样式完整保真）
+                        for _, pa := range paras {
+                                b.WriteString(`<a:p>`)
+                                align := ""
+                                if pa.Align != "" {
+                                        align = pa.Align
+                                } else if st != nil {
+                                        align = phAlignToPptx(st.Align)
+                                }
+                                var lh float64
+                                var bullet, numbered bool
+                                var indent int
+                                if st != nil {
+                                        lh = st.LineHeight
+                                        bullet = st.Bullet
+                                        numbered = st.Numbered
+                                        indent = st.Indent
+                                }
+                                b.WriteString(paraPrXML(align, lh, bullet, numbered, indent))
+                                for _, rn := range pa.Runs {
+                                        if rn.Text == "" {
+                                                continue
+                                        }
+                                        runSz := rn.SizePt
+                                        if runSz <= 0 {
+                                                if st != nil && st.FontSize > 0 {
+                                                        runSz = st.FontSize
+                                                } else {
+                                                        runSz = defaultSz
+                                                }
+                                        }
+                                        runColor := normColor(rn.Color)
+                                        if runColor == "" {
+                                                if st != nil && normColor(st.Color) != "" {
+                                                        runColor = normColor(st.Color)
+                                                } else {
+                                                        runColor = "1F2937"
+                                                }
+                                        }
+                                        runBold := rn.Bold
+                                        if !runBold && st != nil && st.Bold != nil && *st.Bold && defaultBold {
+                                                // 默认粗标题语义下 run.bold=false 显式覆盖
+                                        }
+                                        b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
+                                        b.WriteString(fmt.Sprintf("%d", runSz*100))
+                                        b.WriteString(`"`)
+                                        if rn.Bold {
+                                                b.WriteString(` b="1"`)
+                                        }
+                                        if rn.Italic {
+                                                b.WriteString(` i="1"`)
+                                        }
+                                        if rn.Underline {
+                                                b.WriteString(` u="sng"`)
+                                        }
+                                        if rn.Strike {
+                                                b.WriteString(` strike="sngStrike"`)
+                                        }
+                                        if rn.Spc != 0 {
+                                                b.WriteString(fmt.Sprintf(` spc="%d"`, rn.Spc))
+                                        }
+                                        b.WriteString(`><a:solidFill><a:srgbClr val="`)
+                                        b.WriteString(runColor)
+                                        b.WriteString(`"/></a:solidFill>`)
+                                        if tf := normFont(rn.Font); tf != "" {
+                                                b.WriteString(`<a:latin typeface="`)
+                                                b.WriteString(xmlEsc(tf))
+                                                b.WriteString(`"/>`)
+                                        } else if st != nil && st.FontFamily != "" {
+                                                if tf2 := normFont(st.FontFamily); tf2 != "" {
+                                                        b.WriteString(`<a:latin typeface="`)
+                                                        b.WriteString(xmlEsc(tf2))
+                                                        b.WriteString(`"/>`)
+                                                }
+                                        }
+                                        b.WriteString(`</a:rPr><a:t>`)
+                                        b.WriteString(xmlEsc(rn.Text))
+                                        b.WriteString(`</a:t></a:r>`)
+                                }
+                                b.WriteString(`</a:p>`)
+                        }
+                        b.WriteString(`</p:txBody></p:sp>`)
+                        return
+                }
                 lines := strings.Split(text, "\n")
                 for _, line := range lines {
                         b.WriteString(`<a:p>`)
@@ -622,11 +716,11 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
         // 标题：默认 32pt 粗体（前端 title 布局语义）；正文：18pt 常规
         titleBold := true
         contentBold := false
-        if s.Title != "" || s.TitleStyle != nil {
-                writePlaceholder(2, "ctrTitle", "Title", s.Title, s.TitleStyle, 32, titleBold)
+        if s.Title != "" || s.TitleStyle != nil || len(s.TitleParas) > 0 {
+                writePlaceholder(2, "ctrTitle", "Title", s.Title, s.TitleStyle, 32, titleBold, s.TitleParas)
         }
-        if s.Content != "" || s.ContentStyle != nil {
-                writePlaceholder(3, "body", "Content", s.Content, s.ContentStyle, 18, contentBold)
+        if s.Content != "" || s.ContentStyle != nil || len(s.ContentParas) > 0 {
+                writePlaceholder(3, "body", "Content", s.Content, s.ContentStyle, 18, contentBold, s.ContentParas)
         }
 
         // 形状序列化（文本/图片/组合）——与母版 shapesXML 共用
@@ -772,6 +866,13 @@ func (w *pptxWriter) shapesXML(shapes []shapeWrite, mediaRels map[string]string,
                                         }
                                         if rn.Underline {
                                                 b.WriteString(` u="sng"`)
+                                        }
+                                        // round73：删除线 + 字符间距（run 级 —— 选定文字格式）
+                                        if rn.Strike {
+                                                b.WriteString(` strike="sngStrike"`)
+                                        }
+                                        if rn.Spc != 0 {
+                                                b.WriteString(fmt.Sprintf(` spc="%d"`, rn.Spc))
                                         }
                                         b.WriteString(`><a:solidFill><a:srgbClr val="`)
                                         b.WriteString(runColor)

@@ -23,6 +23,9 @@ export interface SlideRun {
   italic?: boolean
   underline?: boolean
   font?: string
+  // round73：删除线 + 字符间距（选定文字格式）
+  strike?: boolean
+  spc?: number
 }
 
 export interface SlidePara {
@@ -87,6 +90,9 @@ export interface SlideData {
   // round71：标题/正文直接文字样式（工具栏颜色/字号/字体对聚焦文本生效的落盘字段）
   titleStyle?: { color?: string; fontSize?: number; fontFamily?: string }
   contentStyle?: { color?: string; fontSize?: number; fontFamily?: string }
+  // round73：标题/正文选定文字富文本（runs 带 bold/italic/underline/strike/color/sizePt/font/spc）
+  titleParas?: SlidePara[]
+  contentParas?: SlidePara[]
 }
 
 export interface OpenDecision {
@@ -242,6 +248,9 @@ export function rawBlocksToSlides(doc: any): SlideData[] | null {
         // round66：讲义母版（随首页携带 —— 讲义母版视图编辑/恢复）
         handoutMaster: (d as any).handoutMaster && typeof (d as any).handoutMaster === 'object' && slides.length === 0
           ? (d as any).handoutMaster : undefined,
+        // round73：标题/正文选定文字富文本（占位符 paras —— runs 含 strike/spc）
+        titleParas: Array.isArray((d as any).titleParas) ? (d as any).titleParas : undefined,
+        contentParas: Array.isArray((d as any).contentParas) ? (d as any).contentParas : undefined,
       })
     }
   }

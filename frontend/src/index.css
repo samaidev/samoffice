@@ -1945,3 +1945,11 @@ table.pm-table.pm-col-resize,
 table.pm-table.pm-col-resize * { cursor: col-resize !important; }
 table.pm-table.pm-row-resize,
 table.pm-table.pm-row-resize * { cursor: row-resize !important; }
+
+/* round73：标题/正文富文本占位符（contentEditable 空态提示，对齐 input placeholder） */
+[data-richfield]:empty::before {
+  content: attr(data-ph);
+  color: var(--color-text-muted, #94a3b8);
+  opacity: 0.6;
+  pointer-events: none;
+}
