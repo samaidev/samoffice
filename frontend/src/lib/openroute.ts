@@ -84,6 +84,9 @@ export interface SlideData {
     fontSize: number    // 字号 pt
     color: string       // 文字颜色
   }
+  // round71：标题/正文直接文字样式（工具栏颜色/字号/字体对聚焦文本生效的落盘字段）
+  titleStyle?: { color?: string; fontSize?: number; fontFamily?: string }
+  contentStyle?: { color?: string; fontSize?: number; fontFamily?: string }
 }
 
 export interface OpenDecision {

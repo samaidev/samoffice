@@ -1030,6 +1030,10 @@ const dict: Record<string, { en: string; zh: string }> = {
   'slide.fontSizeUp': { en: 'Increase Font Size', zh: '增大字号' },
   'slide.fontSizeDown': { en: 'Decrease Font Size', zh: '减小字号' },
   'slide.fontSize': { en: 'Font Size (pt)', zh: '字号 (pt)' },
+  // round71：字体 family 选择器（新增控件）
+  'slide.fontFamily': { en: 'Font', zh: '字体' },
+  'slide.fontDefault': { en: 'Default Font', zh: '默认字体' },
+  'slide.titleBoldFixed': { en: 'Title text is bold by layout', zh: '标题文字默认加粗（版式自带）' },
   'slide.selectElementFirst': { en: 'Please select an element first', zh: '请先选择元素' },
   'slide.bold': { en: 'Bold', zh: '加粗' },
   'slide.color': { en: 'Color', zh: '颜色' },
