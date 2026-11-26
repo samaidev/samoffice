@@ -1471,8 +1471,27 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   // round70（问题3）：线色/线宽【立即应用】—— 有表格选区时直接把样式打到
   // 当前选区边框（preset 'all' 参与边全 true = 保持现有线，只带新 color/width）。
   // 旧版必须"改色/宽后再点一次预设"才生效，用户感知"选了没变化"。
+  // round70（压塌恢复）：菜单开着期间 Chromium 可能因选区内节点变动
+  //（分页/装饰重渲染）自行回卷 DOM 选区，PM 同步后把 CellSelection 压塌成
+  // 光标（实测第 3 次点预设时发生，边框只作用单格）。打开菜单时快照选区，
+  // 应用预设/样式前若已塌则先恢复 —— 只在边框菜单场景生效，零误伤。
+  const savedBorderSelRef = useRef<any>(null)
+  const ensureBorderSelection = (): any => {
+    const v = viewRef.current; if (!v) return null
+    const sel = v.state.selection as any
+    if (sel instanceof CellSelection) { savedBorderSelRef.current = sel; return v }
+    const saved = savedBorderSelRef.current
+    if (saved) {
+      try {
+        v.dispatch(v.state.tr.setSelection(saved))
+        savedBorderSelRef.current = saved.map ? saved.map(v.state.doc, v.state.tr.mapping) : saved
+        return v
+      } catch { savedBorderSelRef.current = null }
+    }
+    return v
+  }
   const applyBorderStyleNow = (kind: 'color' | 'width', val: string | number) => {
-    const v = viewRef.current; if (!v) return
+    const v = ensureBorderSelection(); if (!v) return
     const opts = kind === 'color' ? { color: String(val) } : { width: Number(val) }
     setCellBorders(v.state, v.dispatch, 'all', opts)
   }
@@ -2251,9 +2270,21 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
         // （特征：docChanged=false、selectionSet、meta 为空、来自 flush 调用栈）。
         // 仅对从 flush 栈内派发的这类事务恢复原选区；用户主动操作（Esc/点空白/点其它单元格）
         // 不经过 flush 栈，不受影响。
-        if (inDomObserverFlushRef.current && tr.selectionSet && !tr.docChanged &&
-            (tr as any).getMeta('pointer') === undefined && (tr as any).getMeta('app') === undefined && Object.keys((tr as any).meta || {}).length === 0 &&
-            prevSel instanceof CellSelection && !(tr.selection instanceof CellSelection)) {
+        // round70：另一条漏网路径 —— 焦点离开编辑器（点工具栏按钮打开边框菜单）后，
+        // 浏览器回卷 DOM 选区并经 dispatchTransaction 传入 selection-only 事务，
+        // 该事务带 PM 自动附加的 scrollIntoView meta（非空）→ 旧“meta 必须为空”
+        // 条件漏拦 → 第 3 次点预设时 CellSelection 已塌成光标（边框只作用单格，
+        // 实测事务特征：docChanged=false、selectionSet=true、meta 仅 scrollIntoView、
+        // 新选区是 3..5 这类非空小文本范围）。
+        // 判别用户意图的可靠依据是【编辑器焦点】：压塌事务发生时焦点在菜单按钮上
+        // （view.hasFocus()=false）；用户主动点击编辑器内单元格换选区时编辑器
+        // 必有焦点 —— 焦点不在编辑器时的 selection-only 塌陷都是 DOM 回卷的
+        // 忠实同步，不代表用户意图，一律恢复。
+        if (tr.selectionSet && !tr.docChanged &&
+            (tr as any).getMeta('pointer') === undefined && (tr as any).getMeta('app') === undefined &&
+            Object.keys((tr as any).meta || {}).every(k => k === 'scrollIntoView') &&
+            prevSel instanceof CellSelection && !(tr.selection instanceof CellSelection) &&
+            !view.hasFocus()) {
           tr = tr.setSelection(prevSel)
         }
         const ns = view.state.apply(tr); view.updateState(ns)
@@ -4817,7 +4848,9 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           <div className="toolbar-divider" />
           {/* 边框（对齐 MS Word）：预设菜单 + 线色 + 线宽，作用于选区（单格/多格/整行/整列） */}
           <div className="relative">
-            <button onClick={() => setShowTableBorderMenu(v => !v)} className={`toolbar-btn ${showTableBorderMenu ? 'active' : ''}`}
+            {/* 打开菜单时快照当前 CellSelection（若在表格内）—— 菜单开着期间
+                DOM 选区可能被 Chromium 回卷压塌，预设点击前用快照恢复 */}
+            <button onMouseDown={(e) => e.preventDefault()} onClick={() => { const vv = viewRef.current; if (vv && vv.state.selection instanceof CellSelection) savedBorderSelRef.current = vv.state.selection; setShowTableBorderMenu(v => !v) }} className={`toolbar-btn ${showTableBorderMenu ? 'active' : ''}`}
               title={t('doc.tblBorders') || '边框'} type="button">▦</button>
             {showTableBorderMenu && (
               <>
@@ -4844,7 +4877,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                   ] as [string, string][]).map(([preset, label]) => (
                     <button key={preset} type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => { const wn = Number(tableBorderWidthText); setCellBorders(viewRef.current!.state, viewRef.current!.dispatch, preset, { color: tableBorderColor, width: isNaN(wn) ? undefined : wn }); setShowTableBorderMenu(false) }}
+                      onClick={() => { const wn = Number(tableBorderWidthText); const v = ensureBorderSelection(); if (v) setCellBorders(v.state, v.dispatch, preset, { color: tableBorderColor, width: isNaN(wn) ? undefined : wn }); setShowTableBorderMenu(false) }}
                       className="flex w-full items-center px-3 py-1.5 text-xs transition-colors"
                       style={{ color: 'var(--color-text)' }}
                       onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-alt)' }}
