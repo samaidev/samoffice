@@ -1463,7 +1463,19 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   // 表格边框工具（对齐 MS Word 表格工具“边框”预设）：预设下拉 + 线色 + 线宽
   const [showTableBorderMenu, setShowTableBorderMenu] = useState(false)
   const [tableBorderColor, setTableBorderColor] = useState('#000000')
-  const [tableBorderWidth, setTableBorderWidth] = useState(1)
+  // round70（问题3）：线宽改为可输入数字的文本态（pt，支持小数如 2.25）
+  const [tableBorderWidthText, setTableBorderWidthText] = useState('1')
+  // round70（问题2）：自绘色板弹层开关（原生 input[type=color] 在 Wails WebView2
+  // 点击不弹系统取色器 → 用户"线色按钮点击无效"）
+  const [showTableBorderColorPicker, setShowTableBorderColorPicker] = useState(false)
+  // round70（问题3）：线色/线宽【立即应用】—— 有表格选区时直接把样式打到
+  // 当前选区边框（preset 'all' 参与边全 true = 保持现有线，只带新 color/width）。
+  // 旧版必须"改色/宽后再点一次预设"才生效，用户感知"选了没变化"。
+  const applyBorderStyleNow = (kind: 'color' | 'width', val: string | number) => {
+    const v = viewRef.current; if (!v) return
+    const opts = kind === 'color' ? { color: String(val) } : { width: Number(val) }
+    setCellBorders(v.state, v.dispatch, 'all', opts)
+  }
   // round52（问题1）：插入表格的 MS Word 式动态行列网格选择器
   const [showTableGridPopup, setShowTableGridPopup] = useState(false)
   const [tableGridHover, setTableGridHover] = useState({ rows: 0, cols: 0 })
@@ -4832,30 +4844,72 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                   ] as [string, string][]).map(([preset, label]) => (
                     <button key={preset} type="button"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => { setCellBorders(viewRef.current!.state, viewRef.current!.dispatch, preset, { color: tableBorderColor, width: tableBorderWidth }); setShowTableBorderMenu(false) }}
+                      onClick={() => { const wn = Number(tableBorderWidthText); setCellBorders(viewRef.current!.state, viewRef.current!.dispatch, preset, { color: tableBorderColor, width: isNaN(wn) ? undefined : wn }); setShowTableBorderMenu(false) }}
                       className="flex w-full items-center px-3 py-1.5 text-xs transition-colors"
                       style={{ color: 'var(--color-text)' }}
                       onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-bg-alt)' }}
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>{label}</button>
                   ))}
                   <div className="my-1 mx-3 h-px" style={{ background: 'var(--color-border)' }} />
+                  {/* round70（问题2）：input[type=color] 在 Wails WebView2 点击不弹
+                      系统取色器 → "线色按钮点击无效"。改自绘色板：预设色块 + hex 输入，
+                      选色立即应用到当前选区。 */}
                   <div className="flex items-center gap-2 px-3 py-1.5">
                     <span className="text-xs flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{t('doc.tblBorderLineColor') || '线色'}</span>
-                    <input type="color" value={tableBorderColor} onChange={e => setTableBorderColor(e.target.value)}
-                      className="w-7 h-6 cursor-pointer rounded border" style={{ borderColor: 'var(--color-border)' }} />
+                    <div className="relative">
+                      <button type="button" onClick={() => setShowTableBorderColorPicker(v => !v)}
+                        className="w-7 h-6 rounded border cursor-pointer"
+                        title={tableBorderColor}
+                        style={{ background: tableBorderColor, borderColor: 'var(--color-border)' }} />
+                      {showTableBorderColorPicker && (
+                        <>
+                          <div className="fixed inset-0" style={{ zIndex: 96 }} onMouseDown={() => setShowTableBorderColorPicker(false)} />
+                          <div className="absolute top-full left-0 mt-1 p-2 rounded-lg shadow-xl" style={{ zIndex: 97, background: 'var(--color-surface)', border: '1px solid var(--color-border)', width: 168 }}>
+                            <div className="grid grid-cols-6 gap-1.5">
+                              {['#000000', '#333333', '#666666', '#999999', '#cbd5e1', '#ffffff',
+                                '#dc2626', '#ea580c', '#d97706', '#16a34a', '#2563eb', '#7c3aed',
+                                '#db2777', '#0f766e', '#65a30d', '#0284c7', '#9333ea', '#c2410c'].map(c => (
+                                <button key={c} type="button" onClick={() => { setTableBorderColor(c); applyBorderStyleNow('color', c); setShowTableBorderColorPicker(false) }}
+                                  className="w-6 h-6 rounded-md transition-transform hover:scale-110"
+                                  style={{ background: c, border: '1px solid var(--color-border)' }} />
+                              ))}
+                            </div>
+                            <div className="flex items-center gap-1.5 mt-2">
+                              <input value={tableBorderColor.startsWith('#') ? tableBorderColor : '#' + tableBorderColor}
+                                onChange={e => { const v = e.target.value.startsWith('#') ? e.target.value : '#' + e.target.value; setTableBorderColor(v) }}
+                                onKeyDown={e => { if (e.key === 'Enter') { applyBorderStyleNow('color', tableBorderColor); setShowTableBorderColorPicker(false) } }}
+                                placeholder="#000000"
+                                className="text-xs px-1.5 py-1 rounded border flex-1 ribbon-input"
+                                style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)', width: 86 }} />
+                              <button type="button" onClick={() => { applyBorderStyleNow('color', tableBorderColor); setShowTableBorderColorPicker(false) }}
+                                className="text-xs px-2 py-1 rounded border"
+                                style={{ background: 'var(--color-primary)', color: 'white', borderColor: 'transparent' }}>{t('doc.ok') || '应用'}</button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
+                  {/* round70（问题3）：线宽改可输入数字文本框（pt 支持小数），
+                      回车/档位点击立即应用 —— 旧 select 不能输入、选择后也不立即生效。 */}
                   <div className="flex items-center gap-2 px-3 py-1.5">
                     <span className="text-xs flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{t('doc.tblBorderLineWidth') || '线宽'}</span>
-                    <select value={String(tableBorderWidth)} onChange={e => setTableBorderWidth(Number(e.target.value))}
-                      className="text-xs px-1 py-1 rounded border flex-1"
-                      style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>
-                      <option value="0">1px</option>
-                      <option value="0.5">0.5pt</option>
-                      <option value="1">1pt</option>
-                      <option value="1.5">1.5pt</option>
-                      <option value="2">2pt</option>
-                      <option value="3">3pt</option>
-                    </select>
+                    <div className="relative flex-1">
+                      <input value={tableBorderWidthText}
+                        onChange={e => setTableBorderWidthText(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { const n = Number(tableBorderWidthText); if (!isNaN(n) && n >= 0) applyBorderStyleNow('width', n); (e.target as HTMLInputElement).blur() } }}
+                        onBlur={() => { const n = Number(tableBorderWidthText); if (!isNaN(n) && n >= 0 && String(n) !== tableBorderWidthText) setTableBorderWidthText(String(n)) }}
+                        placeholder="pt"
+                        className="text-xs px-2 py-1 rounded border w-full ribbon-input"
+                        style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }} />
+                      <div className="flex gap-1 mt-1">
+                        {['0.5', '1', '1.5', '2', '3'].map(w => (
+                          <button key={w} type="button" onClick={() => { setTableBorderWidthText(w); applyBorderStyleNow('width', Number(w)) }}
+                            className={`text-[10px] px-1.5 py-0.5 rounded border flex-1 ${tableBorderWidthText === w ? 'active' : ''}`}
+                            style={{ background: 'var(--color-bg-alt)', color: 'var(--color-text)', borderColor: 'var(--color-border)' }}>{w}</button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </>

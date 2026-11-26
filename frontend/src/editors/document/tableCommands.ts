@@ -639,21 +639,25 @@ export function setCellBorders(state: any, dispatch: any, preset: string, opts?:
     }
   }
 
-  // 切换决策（MS Word 语义）：所有参与边当前全开 → 关；否则 → 开。
+  // round70（用户主诉①）：预设改为【应用语义】—— 预设 = 确保参与边存在。
+  // 旧 toggle 语义（全开→关）让"全框线表点内部框线"变成清空内线，用户看到
+  // "内部没出现框线反而外部有"，与按钮名称直觉相反。新语义：all=全开；
+  // none=全关；其余预设恒为【开】参与边。想清除请点「无框线」。
   const decision = preset === 'all' ? true
     : preset === 'none' ? false
     : (() => {
-      let any = false, allOn = true
-      for (const it of sel.values()) it.p.forEach((pj, i) => { if (pj) { any = true; if (!it.sides[i]) allOn = false } })
-      return any ? !allOn : null // 无参与边（如单格点"内部框线"）：无事可做
+      let any = false
+      for (const it of sel.values()) it.p.forEach(pj => { if (pj) any = true })
+      return any ? true : null // 无参与边（如单格点"内部框线"）：无事可做
     })()
   if (decision === null) return false
 
   let changed = false
-  const mkAttrs = (attrs: any, sides: boolean[]): any => {
+  const mkAttrs = (attrs: any, sides: boolean[], applyStyle = true): any => {
     const nxt: any = { ...attrs, borders: sides.map(b => (b ? '1' : '0')).join('') }
-    if (opts && opts.color) nxt.borderColor = opts.color
-    if (opts && opts.width !== undefined) nxt.borderW = opts.width
+    // round70：邻居传播格只关边不携带样式（选区内格才应用颜色/线宽）
+    if (applyStyle && opts && opts.color) nxt.borderColor = opts.color
+    if (applyStyle && opts && opts.width !== undefined) nxt.borderW = opts.width
     return nxt
   }
   // 选区外邻居的待写状态（可能被多条传播请求命中，需累积）
@@ -700,7 +704,7 @@ export function setCellBorders(state: any, dispatch: any, preset: string, opts?:
     }
   }
   for (const [pos, cur] of out) {
-    tr.setNodeMarkup(pos, undefined, mkAttrs(cur.attrs, cur.sides), [])
+    tr.setNodeMarkup(pos, undefined, mkAttrs(cur.attrs, cur.sides, false), [])
     changed = true
   }
   if (!changed) return false
