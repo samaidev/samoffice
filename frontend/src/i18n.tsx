@@ -1035,6 +1035,9 @@ const dict: Record<string, { en: string; zh: string }> = {
   'slide.fontDefault': { en: 'Default Font', zh: '默认字体' },
   'slide.titleBoldFixed': { en: 'Title text is bold by layout', zh: '标题文字默认加粗（版式自带）' },
   'slide.selectElementFirst': { en: 'Please select an element first', zh: '请先选择元素' },
+  // round72：软提示（旧弹窗文案让用户误以为"没法选择元素"—— 标题/正文本身不可"选中"，
+  // 聚焦即为目标；形状/艺术字仍可点击选中）
+  'slide.clickTextOrShape': { en: 'Click the title/content text or select a shape first', zh: '请先点击标题/正文文字，或选中形状/艺术字' },
   'slide.bold': { en: 'Bold', zh: '加粗' },
   'slide.color': { en: 'Color', zh: '颜色' },
   'slide.paragraph': { en: 'Paragraph', zh: '段落' },

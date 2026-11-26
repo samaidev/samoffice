@@ -40,11 +40,31 @@ type handoutWrite struct {
         Color    string `json:"color,omitempty"`
 }
 
+// round72：标题/正文文字样式（前端 titleStyle/contentStyle 落盘模型）。
+// 前端把标题/正文写成占位符形状（ph=ctrTitle/body），样式一并携带。
+type textStyleWrite struct {
+        Color      string  `json:"color,omitempty"`      // #RRGGBB
+        FontSize   int     `json:"fontSize,omitempty"`   // pt
+        FontFamily string  `json:"fontFamily,omitempty"` // 字体族
+        Bold       *bool   `json:"bold,omitempty"`       // 显式加粗（nil = 版式默认）
+        Align      string  `json:"align,omitempty"`      // left|center|right
+        LineHeight float64 `json:"lineHeight,omitempty"`  // 行距倍数
+        Indent     int     `json:"indent,omitempty"`     // 缩进层级
+        Bullet     bool    `json:"bullet,omitempty"`     // 项目符号
+        Numbered   bool    `json:"numbered,omitempty"`    // 编号列表
+}
+
 type slideWrite struct {
         Bg         string       `json:"bg"`
         Notes      string       `json:"notes"`
         Transition string       `json:"transition,omitempty"` // ""/fade/push/wipe/cover/cut/zoom/morph
         Shapes     []shapeWrite `json:"shapes"`
+        // round72：标题/正文直接文字（前端标题/正文输入框内容落盘 —— 旧版只透传
+        // 不写 XML，保存后标题正文丢失）。非空时写成 ctrTitle/body 占位符形状。
+        Title       string          `json:"title,omitempty"`
+        Content     string          `json:"content,omitempty"`
+        TitleStyle  *textStyleWrite `json:"titleStyle,omitempty"`
+        ContentStyle *textStyleWrite `json:"contentStyle,omitempty"`
 }
 
 type shapeWrite struct {
@@ -514,6 +534,100 @@ func (w *pptxWriter) slideXML(s slideWrite, mediaRels map[string]string, linkRel
         }
 
         b.WriteString(`<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>`)
+
+        // round72：标题/正文占位符形状（旧版 title/content 只透传不落盘，保存即丢）。
+        // 写成 ctrTitle/body 占位符 —— 解析端按 ph 提取回 slide.Title/Bullets，
+        // 应用内保存重开往返不丢。id 2/3（形状 idBase=10 起，不冲突）。
+        // paraPrXML 的 align 入参是 l|c|r（其内部 alignToPptx 转 ctr/r/l）
+        phAlignToPptx := func(a string) string {
+                switch a {
+                case "left":
+                        return "l"
+                case "right":
+                        return "r"
+                case "center":
+                        return "c"
+                }
+                return ""
+        }
+        // writePlaceholder 生成单个占位符 sp（ph=ctrTitle|body；文本多行逐段写出，
+        // 样式：颜色/字号/字体/加粗/对齐/行距/缩进/项目符号/编号）
+        writePlaceholder := func(id int, phType, name, text string, st *textStyleWrite, defaultSz int, defaultBold bool) {
+                if strings.TrimSpace(text) == "" && st == nil {
+                        return
+                }
+                b.WriteString(`<p:sp><p:nvSpPr><p:cNvPr id="`)
+                b.WriteString(fmt.Sprintf("%d", id))
+                b.WriteString(`" name="`)
+                b.WriteString(name)
+                b.WriteString(`"/><p:cNvSpPr/><p:nvPr><p:ph type="`)
+                b.WriteString(phType)
+                b.WriteString(`"/></p:nvPr></p:nvSpPr><p:spPr/>`)
+                b.WriteString(`<p:txBody><a:bodyPr/><a:lstStyle/>`)
+                lines := strings.Split(text, "\n")
+                for _, line := range lines {
+                        b.WriteString(`<a:p>`)
+                        // 段落属性：对齐/行距/项目符号/编号/缩进（占位符文本与普通文本一致）
+                        align := ""
+                        if st != nil {
+                                align = phAlignToPptx(st.Align)
+                        }
+                        var lh float64
+                        var bullet, numbered bool
+                        var indent int
+                        if st != nil {
+                                lh = st.LineHeight
+                                bullet = st.Bullet
+                                numbered = st.Numbered
+                                indent = st.Indent
+                        }
+                        b.WriteString(paraPrXML(align, lh, bullet, numbered, indent))
+                        if strings.TrimSpace(line) != "" {
+                                sz := defaultSz
+                                if st != nil && st.FontSize > 0 {
+                                        sz = st.FontSize
+                                }
+                                color := "1F2937"
+                                if st != nil && normColor(st.Color) != "" {
+                                        color = normColor(st.Color)
+                                }
+                                bold := defaultBold
+                                if st != nil && st.Bold != nil {
+                                        bold = *st.Bold
+                                }
+                                b.WriteString(`<a:r><a:rPr lang="en-US" sz="`)
+                                b.WriteString(fmt.Sprintf("%d", sz*100))
+                                b.WriteString(`"`)
+                                if bold {
+                                        b.WriteString(` b="1"`)
+                                }
+                                b.WriteString(`><a:solidFill><a:srgbClr val="`)
+                                b.WriteString(color)
+                                b.WriteString(`"/></a:solidFill>`)
+                                if st != nil && st.FontFamily != "" {
+                                        if tf := normFont(st.FontFamily); tf != "" {
+                                                b.WriteString(`<a:latin typeface="`)
+                                                b.WriteString(xmlEsc(tf))
+                                                b.WriteString(`"/>`)
+                                        }
+                                }
+                                b.WriteString(`</a:rPr><a:t>`)
+                                b.WriteString(xmlEsc(line))
+                                b.WriteString(`</a:t></a:r>`)
+                        }
+                        b.WriteString(`</a:p>`)
+                }
+                b.WriteString(`</p:txBody></p:sp>`)
+        }
+        // 标题：默认 32pt 粗体（前端 title 布局语义）；正文：18pt 常规
+        titleBold := true
+        contentBold := false
+        if s.Title != "" || s.TitleStyle != nil {
+                writePlaceholder(2, "ctrTitle", "Title", s.Title, s.TitleStyle, 32, titleBold)
+        }
+        if s.Content != "" || s.ContentStyle != nil {
+                writePlaceholder(3, "body", "Content", s.Content, s.ContentStyle, 18, contentBold)
+        }
 
         // 形状序列化（文本/图片/组合）——与母版 shapesXML 共用
         b.WriteString(w.shapesXML(s.Shapes, mediaRels, linkRels, 10))

@@ -18,8 +18,10 @@ interface Slide {
   // round71：标题/正文的直接文字样式（用户在标题/正文输入框编辑文字时，
   // 工具栏的颜色/字号/字体必须生效 —— 旧版三控件只认 selectedEl=shape，
   // 对标题/正文文本全部无效）。fontSize 存 pt（渲染换算 px）。
-  titleStyle?: { color?: string; fontSize?: number; fontFamily?: string }
-  contentStyle?: { color?: string; fontSize?: number; fontFamily?: string }
+  // round72：扩展 bold/align/lineHeight/indent/bullet/numbered —— 加粗、对齐、
+  // 缩进、行距、项目符号/编号等 ribbon 命令同样对聚焦文本生效。
+  titleStyle?: { color?: string; fontSize?: number; fontFamily?: string; bold?: boolean; align?: 'left' | 'center' | 'right'; lineHeight?: number; indent?: number; bullet?: boolean; numbered?: boolean }
+  contentStyle?: { color?: string; fontSize?: number; fontFamily?: string; bold?: boolean; align?: 'left' | 'center' | 'right'; lineHeight?: number; indent?: number; bullet?: boolean; numbered?: boolean }
 }
 
 // 画布逻辑坐标：宽 6464 单位 = 808px（1px = 8 单位），高随页面比例变化。
@@ -221,6 +223,44 @@ const bgImgStyle = (bgImg?: string, tileW?: number, tileH?: number): React.CSSPr
     backgroundSize: tiled ? `${tileW! / 1000}% ${tileH! / 1000}%` : 'cover',
     backgroundPosition: 'center',
   }
+}
+
+// round72：聚焦文本（标题/正文）样式 → 输入框 CSS 属性。
+// 消费 titleStyle/contentStyle 的全部字段（颜色/字号/字体/加粗/对齐/行距/缩进）；
+// bullet/numbered 由 BulletText 渲染符号行。
+const fieldStyleToCSS = (
+  st: Slide['titleStyle'],
+  field: 'title' | 'content',
+  isDark: boolean,
+  ptToPx: (pt: number) => number,
+): React.CSSProperties => {
+  const baseColor = field === 'title' ? (isDark ? '#f1f5f9' : '#0f172a') : (isDark ? '#cbd5e1' : '#334155')
+  return {
+    color: st?.color || baseColor,
+    fontSize: st?.fontSize ? `${ptToPx(st.fontSize)}px` : undefined,
+    fontFamily: st?.fontFamily,
+    // bold 显式设置优先；未设置时标题默认粗（版式语义），正文细
+    fontWeight: st?.bold === undefined ? (field === 'title' ? 700 : undefined) : (st.bold ? 700 : 400),
+    textAlign: st?.align,
+    lineHeight: st?.lineHeight,
+    paddingLeft: st?.indent ? `${st.indent * 12}px` : undefined,
+  }
+}
+
+// round72：带项目符号/编号的多行文本展示（bullet/numbered 只在展示层渲染符号，
+// 编辑仍在 textarea/input 中进行 —— 对齐 MS PPT 的占位符语义）
+const BulletText = ({ text, numbered, bullet }: { text: string; numbered?: boolean; bullet?: boolean }) => {
+  if (!numbered && !bullet) return null
+  return (
+    <div className="pointer-events-none absolute inset-0 flex flex-col justify-center" style={{ opacity: 0 }}>
+      {text.split('\n').map((line, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6 }}>
+          <span style={{ flex: '0 0 auto' }}>{numbered ? `${i + 1}.` : '•'}</span>
+          <span style={{ flex: 1 }}>{line || ' '}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 const SlideThumb = memo(function SlideThumb({ slide, width, aspect = 454 / 808, deco }: { slide: Slide; width: number; aspect?: number; deco?: ShapeItem[] }) {
@@ -946,7 +986,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
       applyTextStyle(focusField, { fontSize: Math.max(8, cur + delta) })
       return
     }
-    if (!selectedEl) { alert('请先选择元素'); return }
+    if (!selectedEl) { softHint(); return }
     if (selectedEl.type === 'art') {
       const at = current.artTexts[selectedEl.index]
       updateArtText(selectedEl.index, { fontSize: Math.max(8, (at.fontSize || 36) + delta) })
@@ -992,7 +1032,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   const applyFontSizePt = (pt: number) => {
     const npt = Math.max(8, Math.min(400, Math.round(pt)))
     if (focusField) { applyTextStyle(focusField, { fontSize: npt }); return }
-    if (!selectedEl) { alert(t('slide.selectElementFirst')) ; return }
+    if (!selectedEl) { softHint(); return }
     if (selectedEl.type === 'art') { updateArtText(selectedEl.index, { fontSize: npt }); return }
     const sh = current.shapes[selectedEl.index]
     if (!sh) return
@@ -1011,15 +1051,33 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   // ════ round71：三路文字样式（shape 文字 / 艺术字 / 标题·正文聚焦文本）════
   // 标题/正文聚焦时颜色/字号/字体/加粗直接写 titleStyle/contentStyle（主诉①③：
   // 旧版三控件只认 selectedEl=shape，对标题正文全部无效）。
-  const applyTextStyle = (field: 'title' | 'content', patch: { color?: string; fontSize?: number; fontFamily?: string }) => {
+  // round72：patch 扩展 bold/align/lineHeight/indent/bullet/numbered —— 全部
+  // ribbon 文字命令对聚焦文本生效（旧版弹「请先选择元素」）。
+  const applyTextStyle = (field: 'title' | 'content', patch: Partial<NonNullable<Slide['titleStyle']>>) => {
     const key = field === 'title' ? 'titleStyle' : 'contentStyle'
     const cur = (current as any)[key] || {}
     updateActive({ [key]: { ...cur, ...patch } } as Partial<Slide>)
   }
+  // round72：聚焦文本样式读取（未设置字段给布局默认 —— 标题粗/居中、正文细）
+  const textStyleOf = (field: 'title' | 'content'): Required<NonNullable<Slide['titleStyle']>> => {
+    const key = field === 'title' ? 'titleStyle' : 'contentStyle'
+    const st = (current as any)[key] || {}
+    return {
+      color: st.color,
+      fontSize: st.fontSize,
+      fontFamily: st.fontFamily,
+      bold: st.bold ?? (field === 'title'),
+      align: st.align ?? (field === 'title' ? 'center' as const : 'left' as const),
+      lineHeight: st.lineHeight,
+      indent: st.indent,
+      bullet: st.bullet,
+      numbered: st.numbered,
+    }
+  }
   // 颜色三路分发（含 run 级同步，否则 paras 渲染被 run 颜色覆盖看不到变化）
   const applyFontColor = (c: string) => {
     if (focusField) { applyTextStyle(focusField, { color: c }); closeAllPanels(); return }
-    if (!selectedEl) { alert('请先选择元素或点击标题/正文文字'); closeAllPanels(); return }
+    if (!selectedEl) { softHint(); closeAllPanels(); return }
     if (selectedEl.type === 'shape') styleShape(selectedEl.index, { fontColor: c }, () => ({ color: c }))
     else updateArtText(selectedEl.index, { color: c })
     closeAllPanels()
@@ -1031,10 +1089,51 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
     if (selectedEl.type === 'shape') styleShape(selectedEl.index, { font: f || undefined }, () => ({ font: f || undefined }))
     else updateArtText(selectedEl.index, { font: f || undefined } as any)
   }
-  // 标题/正文加粗（style 未含 bold 字段 —— title 布局本身 font-bold，这里保持轻量：
-  // 对 blank/content 布局正文生效需要 bold 字段，暂用 fontSize/color/fontFamily 之外的
-  // 方式：title 输入框本身有 font-bold class；正文无粗体诉求时先提示已应用）
-  const applyTextBold = () => { alert(t('slide.titleBoldFixed') || '标题文字默认加粗') }
+  // 标题/正文加粗（round72：真实切换 —— style.bold 显式存储，渲染消费；
+  // 旧版只弹「标题文字默认加粗」，用户点加粗无效）
+  const applyTextBold = () => {
+    if (!focusField) return
+    const st = textStyleOf(focusField)
+    applyTextStyle(focusField, { bold: !st.bold })
+  }
+  // ════ round72：段落命令三路分发 ════
+  // 加粗/对齐/缩进/行距/项目符号/编号 —— 标题/正文聚焦文本（style 字段）、
+  // shape 文字（含 paras/run 同步）、艺术字（bold/align 可存）全部生效。
+  // 旧版这些按钮只认 selectedEl，标题/正文必然弹「请先选择元素」。
+  const softHint = () => { alert(t('slide.clickTextOrShape') || '请先点击标题/正文文字，或选中形状/艺术字') }
+  // 对齐
+  const applyAlign = (a: 'left' | 'center' | 'right') => {
+    if (focusField) { applyTextStyle(focusField, { align: a }); return }
+    if (!selectedEl) { softHint(); return }
+    if (selectedEl.type === 'shape') styleShape(selectedEl.index, { textAlign: a }, undefined, a === 'left' ? 'l' : a === 'center' ? 'c' : 'r')
+    else updateArtText(selectedEl.index, { align: a } as any)
+  }
+  // 缩进步进（step = +1 / -1）
+  const applyIndent = (step: number) => {
+    if (focusField) { const st = textStyleOf(focusField); applyTextStyle(focusField, { indent: Math.max(0, (st.indent || 0) + step) }); return }
+    if (!selectedEl) { softHint(); return }
+    if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { indent: Math.max(0, (sh.indent || 0) + step) }) }
+  }
+  // 行距（聚焦文本 / shape）
+  const applyLineHeight = (lh: number) => {
+    if (focusField) { applyTextStyle(focusField, { lineHeight: lh }); return }
+    if (!selectedEl) { softHint(); return }
+    if (selectedEl.type === 'shape') updateShape(selectedEl.index, { lineHeight: lh })
+  }
+  // 项目符号 / 编号（聚焦文本生效；shape 走旧逻辑）
+  const applyBullet = (kind: 'bullet' | 'numbered') => {
+    if (focusField) {
+      const st = textStyleOf(focusField)
+      const on = kind === 'bullet' ? !st.bullet : !st.numbered
+      applyTextStyle(focusField, kind === 'bullet' ? { bullet: on, numbered: false } : { numbered: on, bullet: false })
+      return
+    }
+    if (!selectedEl) { softHint(); return }
+    if (selectedEl.type === 'shape') {
+      const sh = current.shapes[selectedEl.index]
+      updateShape(selectedEl.index, kind === 'bullet' ? { bullet: !sh.bullet, numbered: false } : { numbered: !sh.numbered, bullet: false })
+    }
+  }
   // 当前字体（三路读取，用于选择器回显）
   const activeFontFamily = (() => {
     if (focusField) {
@@ -1578,8 +1677,9 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
               ))}
             </select>
-            {/* 加粗：切换所有 run（含 paras），修复文件形状样式在 run 级导致的“无效” */}
-            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (focusField) { applyTextBold(); return }; if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeBold = runs.some(r => r.text && !r.bold) || (!runs.length && !sh.fontBold); styleShape(selectedEl.index, { fontBold: makeBold }, () => ({ bold: makeBold })) } else { alert('加粗已应用于选中元素') } }} />
+            {/* 加粗：三路生效（round72：标题/正文聚焦文本真实切换 style.bold；
+                shape 切换所有 run 含 paras；艺术字切换 —— 旧版对艺术字只弹提示不生效） */}
+            <RibbonButton icon="B" label={t('slide.bold')} onClick={() => { if (focusField) { applyTextBold(); return }; if (!selectedEl) { softHint(); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; const runs = (sh.paras || []).flatMap(p => p.runs || []); const makeBold = runs.some(r => r.text && !r.bold) || (!runs.length && !sh.fontBold); styleShape(selectedEl.index, { fontBold: makeBold }, () => ({ bold: makeBold })) } else { const at = current.artTexts[selectedEl.index]; updateArtText(selectedEl.index, { bold: !(at as any).bold } as any) } }} />
             <div className="relative">
               {/* round71：颜色 —— 对 shape 文字/艺术字/标题/正文聚焦文本三路生效
                   （旧版只认 selectedEl=shape → 标题正文改色无效，用户主诉①）。 */}
@@ -1619,10 +1719,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             <RibbonButton icon="A-" label={t('slide.fontSizeDown')} onClick={() => bumpFontSize(-2)} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
-            {/* 行距 */}
+            {/* 行距（round72：三路 —— 聚焦文本 style.lineHeight / shape；旧版弹「请先选择元素」） */}
             <div className="flex items-center gap-0.5">
               <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{t('slide.lineSpacing')}</span>
-              <select value={current.shapes[selectedEl?.type === 'shape' ? selectedEl.index : 0]?.lineHeight || 1} onChange={(e) => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') updateShape(selectedEl.index, { lineHeight: parseFloat(e.target.value) || 1 }) }} className="text-xs rounded-md px-1 py-1 ribbon-input" style={{ width: 64, height: 26, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
+              <select value={focusField ? String(textStyleOf(focusField).lineHeight || 1) : String(current.shapes[selectedEl?.type === 'shape' ? selectedEl.index : 0]?.lineHeight || 1)} onChange={(e) => applyLineHeight(parseFloat(e.target.value) || 1)} className="text-xs rounded-md px-1 py-1 ribbon-input" style={{ width: 64, height: 26, background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}>
                 <option value="1">1.0</option>
                 <option value="1.15">1.15</option>
                 <option value="1.5">1.5</option>
@@ -1630,18 +1730,18 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                 <option value="2.5">2.5</option>
               </select>
             </div>
-            {/* 缩进 */}
-            <RibbonButton icon="→|" label={t('slide.indentMore')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { indent: (sh.indent || 0) + 1 }) } }} />
-            <RibbonButton icon="|←" label={t('slide.indentLess')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { indent: Math.max(0, (sh.indent || 0) - 1) }) } }} />
-            {/* 项目符号 / 编号 */}
-            <RibbonButton icon="•" label={t('slide.bulletList')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { bullet: !sh.bullet, numbered: false }) } }} />
-            <RibbonButton icon="1." label={t('slide.numberedList')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { const sh = current.shapes[selectedEl.index]; updateShape(selectedEl.index, { numbered: !sh.numbered, bullet: false }) } }} />
+            {/* 缩进（round72：三路生效） */}
+            <RibbonButton icon="→|" label={t('slide.indentMore')} onClick={() => applyIndent(1)} />
+            <RibbonButton icon="|←" label={t('slide.indentLess')} onClick={() => applyIndent(-1)} />
+            {/* 项目符号 / 编号（round72：三路生效） */}
+            <RibbonButton icon="•" label={t('slide.bulletList')} onClick={() => applyBullet('bullet')} />
+            <RibbonButton icon="1." label={t('slide.numberedList')} onClick={() => applyBullet('numbered')} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.paragraph')}>
-            {/* 对齐：同时写 paras 每段的 align，否则被段落级对齐覆盖“无效” */}
-            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { styleShape(selectedEl.index, { textAlign: 'left' }, undefined, 'l') } else { alert('左对齐已应用于选中元素') } }} />
-            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { styleShape(selectedEl.index, { textAlign: 'center' }, undefined, 'c') } else { alert('居中对齐已应用于选中元素') } }} />
-            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => { if (!selectedEl) { alert('请先选择元素'); return }; if (selectedEl.type === 'shape') { styleShape(selectedEl.index, { textAlign: 'right' }, undefined, 'r') } else { alert('右对齐已应用于选中元素') } }} />
+            {/* 对齐（round72：三路 —— 聚焦文本写 style.align；shape 同时写 paras 每段 align） */}
+            <RibbonButton icon="⬅" label={t('slide.alignLeft')} onClick={() => applyAlign('left')} />
+            <RibbonButton icon="⬌" label={t('slide.alignCenter')} onClick={() => applyAlign('center')} />
+            <RibbonButton icon="➡" label={t('slide.alignRight')} onClick={() => applyAlign('right')} />
           </RibbonGroup>
         </>)}
 
@@ -1762,7 +1862,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           </RibbonGroup>
           <RibbonGroup label={t('slide.link')}>
             <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => {
-              if (!selectedEl || selectedEl.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择一个元素'); return }
+              if (!selectedEl || selectedEl.type !== 'shape') { softHint(); return }
               const url = prompt('URL:', current.shapes[selectedEl.index]?.link || 'https://')
               if (!url) return
               updateShape(selectedEl.index, { link: url })
@@ -1856,22 +1956,22 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           <RibbonGroup label={t('slide.shapeStyle')}>
             {/* 效果按钮作用于当前选中元素（未选时提示），不再默默作用于最后一个形状 */}
             <RibbonButton icon="🌈" label={t('slide.gradient')} onClick={() => {
-              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              if (selectedEl?.type !== 'shape') { softHint(); return }
               const sh = current.shapes[selectedEl.index]
               updateShape(selectedEl.index, { gradient: sh.gradient ? '' : '6366f1,818cf8' })
             }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.gradient)} />
             <RibbonButton icon="💫" label={t('slide.glow')} onClick={() => {
-              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              if (selectedEl?.type !== 'shape') { softHint(); return }
               const sh = current.shapes[selectedEl.index]
               updateShape(selectedEl.index, { glow: !sh.glow, glowColor: sh.glowColor || (sh.fill && !sh.fill.startsWith('url') ? sh.fill : '#818cf8') })
             }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.glow)} />
             <RibbonButton icon="🌑" label={t('slide.shadow')} onClick={() => {
-              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              if (selectedEl?.type !== 'shape') { softHint(); return }
               const sh = current.shapes[selectedEl.index]
               updateShape(selectedEl.index, { shadow: !sh.shadow })
             }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.shadow)} />
             <RibbonButton icon="🔄" label={t('slide.rotate')} onClick={() => {
-              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              if (selectedEl?.type !== 'shape') { softHint(); return }
               const sh = current.shapes[selectedEl.index]
               updateShape(selectedEl.index, { rotation: ((sh.rotation || 0) + 15) % 360 })
             }} />
@@ -1969,12 +2069,12 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           {/* 玻璃质感 */}
           <RibbonGroup label="Effects">
             <RibbonButton icon="🔮" label="Glass" onClick={() => {
-              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              if (selectedEl?.type !== 'shape') { softHint(); return }
               const sh = current.shapes[selectedEl.index]
               updateShape(selectedEl.index, { glow: !sh.glow, glowColor: sh.glowColor || '#94a3b8' })
             }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.glow)} />
             <RibbonButton icon="🌗" label="Shadow" onClick={() => {
-              if (selectedEl?.type !== 'shape') { alert(t('slide.pleaseSelect') || '请先选择元素'); return }
+              if (selectedEl?.type !== 'shape') { softHint(); return }
               const sh = current.shapes[selectedEl.index]
               updateShape(selectedEl.index, { shadow: !sh.shadow })
             }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.shadow)} />
@@ -2250,29 +2350,30 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             {current.bgImg && <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', ...bgImgStyle(current.bgImg, current.bgImgTileW, current.bgImgTileH) }} />}
             <div className="absolute inset-0 flex flex-col p-6 sm:p-10 md:p-14 relative" onMouseDown={e => { setSelectedEl(null); if (e.target === e.currentTarget) setFocusField(null) }}>
               {/* 文字内容（round71：标题/正文直接应用 titleStyle/contentStyle；输入框聚焦时
-                  记录 focusField，工具栏颜色/字号/字体据此生效） */}
+                  记录 focusField，工具栏颜色/字号/字体据此生效。
+                  round72：全部样式字段生效 —— 加粗/对齐/行距/缩进/项目符号/编号） */}
               {current.layout === 'title' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10">
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-2xl sm:text-3xl md:text-4xl font-bold text-center outline-none bg-transparent w-full" style={{ letterSpacing: '-0.02em', color: current.titleStyle?.color || (isDark ? '#f1f5f9' : '#0f172a'), fontSize: current.titleStyle?.fontSize ? `${ptToPxUI(current.titleStyle.fontSize)}px` : undefined, fontFamily: current.titleStyle?.fontFamily }} placeholder={t('slide.placeholder.title')} />
-                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="text-sm sm:text-base md:text-lg text-center mt-3 outline-none bg-transparent w-full" style={{ color: current.contentStyle?.color || (isDark ? '#cbd5e1' : '#64748b'), fontSize: current.contentStyle?.fontSize ? `${ptToPxUI(current.contentStyle.fontSize)}px` : undefined, fontFamily: current.contentStyle?.fontFamily }} placeholder={t('slide.placeholder.subtitle')} />
+                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-2xl sm:text-3xl md:text-4xl text-center outline-none bg-transparent w-full" style={{ letterSpacing: '-0.02em', ...fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI) }} placeholder={t('slide.placeholder.title')} />
+                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="text-sm sm:text-base md:text-lg text-center mt-3 outline-none bg-transparent w-full" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.subtitle')} />
                 </div>
               )}
               {current.layout === 'content' && (
                 <>
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-xl sm:text-2xl font-bold mb-4 outline-none bg-transparent relative z-10" style={{ color: current.titleStyle?.color || (isDark ? '#f1f5f9' : '#0f172a'), fontSize: current.titleStyle?.fontSize ? `${ptToPxUI(current.titleStyle.fontSize)}px` : undefined, fontFamily: current.titleStyle?.fontFamily }} placeholder={t('slide.placeholder.title')} />
+                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-xl sm:text-2xl mb-4 outline-none bg-transparent relative z-10" style={fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI)} placeholder={t('slide.placeholder.title')} />
                   <div className="w-12 h-1 rounded mb-4" style={{ background: 'var(--color-primary)' }}></div>
-                  <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none leading-relaxed relative z-10" style={{ color: current.contentStyle?.color || (isDark ? '#cbd5e1' : '#334155'), fontSize: current.contentStyle?.fontSize ? `${ptToPxUI(current.contentStyle.fontSize)}px` : undefined, fontFamily: current.contentStyle?.fontFamily }} placeholder={t('slide.placeholder.content')} />
+                  <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="flex-1 text-sm sm:text-base outline-none bg-transparent resize-none relative z-10" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.content')} />
                 </>
               )}
               {current.layout === 'section' && (
                 <div className="flex-1 flex flex-col justify-center items-center text-center relative z-10 px-10">
                   <div className="w-14 h-1.5 rounded mb-5" style={{ background: 'var(--color-primary)' }}></div>
-                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-3xl sm:text-4xl font-bold text-center outline-none bg-transparent w-full" style={{ color: current.titleStyle?.color || (isDark ? '#f1f5f9' : '#0f172a'), fontSize: current.titleStyle?.fontSize ? `${ptToPxUI(current.titleStyle.fontSize)}px` : undefined, fontFamily: current.titleStyle?.fontFamily }} placeholder={t('slide.placeholder.title')} />
-                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="text-sm sm:text-base text-center mt-4 outline-none bg-transparent w-full" style={{ color: current.contentStyle?.color || (isDark ? '#cbd5e1' : '#64748b'), fontSize: current.contentStyle?.fontSize ? `${ptToPxUI(current.contentStyle.fontSize)}px` : undefined, fontFamily: current.contentStyle?.fontFamily }} placeholder={t('slide.placeholder.subtitle')} />
+                  <input value={current.title} onChange={e => updateActive({ title: e.target.value })} onFocus={() => setFocusField('title')} className="text-3xl sm:text-4xl text-center outline-none bg-transparent w-full" style={fieldStyleToCSS(current.titleStyle, 'title', isDark, ptToPxUI)} placeholder={t('slide.placeholder.title')} />
+                  <input value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="text-sm sm:text-base text-center mt-4 outline-none bg-transparent w-full" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.subtitle')} />
                 </div>
               )}
               {current.layout === 'blank' && !current.shapes.length && (
-                <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={{ color: current.contentStyle?.color || (isDark ? '#f1f5f9' : '#334155'), fontSize: current.contentStyle?.fontSize ? `${ptToPxUI(current.contentStyle.fontSize)}px` : undefined, fontFamily: current.contentStyle?.fontFamily }} placeholder={t('slide.placeholder.blank')} />
+                <textarea value={current.content} onChange={e => updateActive({ content: e.target.value })} onFocus={() => setFocusField('content')} className="flex-1 text-sm outline-none bg-transparent resize-none relative z-10" style={fieldStyleToCSS(current.contentStyle, 'content', isDark, ptToPxUI)} placeholder={t('slide.placeholder.blank')} />
               )}
 
               {/* 母版/版式装饰层（对齐 MS PPT：每页底层渲染该页版式的非占位符形状；
