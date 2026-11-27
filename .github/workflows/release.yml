@@ -297,7 +297,7 @@ jobs:
           merge-multiple: true
 
       - name: List assets
-        run: ls -lh dist
+        run: find dist -type f -printf '%p\n' | sort
 
       - name: Create release and upload assets
         env:
@@ -338,7 +338,15 @@ jobs:
             gh release delete "$tag" --yes --cleanup-tag
           fi
           gh release create "$tag" --title "$title" --notes "$notes" --target "${{ github.sha }}"
-          gh release upload "$tag" dist/* --clobber
+          # 只上传文件：Windows 产物的 artifact 保留了 packaging/windows/dist 子目录结构，
+          # 直接 gh release upload dist/* 会把目录传给 gh 而报 "is a directory"。
+          mapfile -t ASSETS < <(find dist -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.tar.gz' \) | sort)
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "没有找到可上传的发布产物" >&2
+            exit 1
+          fi
+          printf 'upload: %s\n' "${ASSETS[@]}"
+          gh release upload "$tag" "${ASSETS[@]}" --clobber
           gh release view "$tag"
 
       - name: Prune old releases (keep latest 3)
