@@ -97,13 +97,26 @@ jobs:
       # 与发布流程走同一条路径，避免 CI 绿的代码打不出可用窗口版。
       - name: Package macOS .app
         if: matrix.goos == 'darwin'
+        shell: bash
         env:
           ARCH: ${{ matrix.arch }}
           SKIP_FRONTEND: '1'
-        run: ./packaging/macos/build_macos_app.sh "0.0.0-ci" dist-macos
+        run: |
+          set -o pipefail
+          ./packaging/macos/build_macos_app.sh "0.0.0-ci" dist-macos 2>&1 | tee macos-package.log
+
+      # 打包步骤失败时把日志尾部转成注解：没有 Actions 日志权限的人也能在 check-run 里看到原因
+      - name: Surface packaging failure
+        if: failure() && matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          echo "::error title=macOS packaging failed,file=packaging/macos/build_macos_app.sh::go build / packaging step failed"
+          tail -n 25 macos-package.log | while IFS= read -r line; do
+            echo "::error title=macOS packaging log::${line}"
+          done
 
       - name: Sanity check macOS bundle
-        if: matrix.goos == 'darwin'
+        if: matrix.goos == 'darwin' && success()
         run: |
           test -x dist-macos/SamOffice.app/Contents/MacOS/samoffice
           test -f dist-macos/SamOffice.app/Contents/Resources/AppIcon.icns
