@@ -35,6 +35,9 @@ func findSoffice() (string, bool) {
 			`C:\Program Files\LibreOffice\program\soffice.exe`,
 			`C:\Progra~1\LibreOffice\program\soffice.exe`,
 			`C:\Program Files (x86)\LibreOffice\program\soffice.exe`,
+			`/Applications/LibreOffice.app/Contents/MacOS/soffice`,
+			`/opt/homebrew/bin/soffice`,
+			`/usr/local/bin/soffice`,
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {

@@ -94,3 +94,7 @@ scripts/e2e-web/r63-shots/
 scripts/e2e-web/r63-results.json
 scripts/e2e-web/r64-shots/
 scripts/e2e-web/r64-results.json
+
+# macOS / Linux 打包产物（packaging/*/build_*_app.sh 输出）
+dist-macos/
+dist-linux/

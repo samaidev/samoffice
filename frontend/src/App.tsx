@@ -844,6 +844,9 @@ ${t('sample.md.more')}
     if (rt && typeof rt.EventsOn === 'function') {
       rt.EventsOn('second-instance-open', onSecondInstance)
     }
+    // 监听已就位：通知后端重放启动期间缓存的外部打开请求（macOS 双击文档冷启动时，
+    // odoc 事件往往早于本组件挂载，后端会先缓存再由此处触发）。
+    try { (window as any).go?.main?.App?.NotifyFrontendReady?.() } catch {}
 
     const checkMobile = () => setIsMobile(window.innerWidth <= 768)
     checkMobile()

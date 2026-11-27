@@ -23,6 +23,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/zai/samoffice/internal/core"
 	"github.com/zai/samoffice/internal/dict"
@@ -48,6 +49,14 @@ type App struct {
 	httpPort    int
 	logger      *zap.Logger
 	startupArgs []string
+	// startupMu 守护 startupArgs / externalOpen / frontendReady：macOS 的 OnFileOpen
+	// 可能在前端挂载前触发，需加锁避免数据竞争。
+	startupMu sync.Mutex
+	// externalOpen 缓存前端就绪前收到的外部打开请求（Finder 双击 / 「打开方式」）。
+	// 前端注册好 second-instance-open 监听后会调 NotifyFrontendReady 让后端重放，
+	// 否则冷启动时事件先于监听器发出会被丢弃（文档点开却没有反应）。
+	externalOpen  []string
+	frontendReady bool
 	// confirmedClose 为 true 表示前端已完成未保存更改的询问，OnBeforeClose 应放行。
 	confirmedClose bool
 	// dictsOnce 守护词典按需加载：首次拼写相关调用（审阅页手动"拼写检查"）时
@@ -225,6 +234,51 @@ func (a *App) pollPendingOpens() {
 	}
 }
 
+// handleExternalOpenFile 处理 macOS 的「双击文档 / 右键打开方式 / 拖到 Dock 图标」：
+// macOS 通过 Apple Event(odoc) 把文件路径交给 AppDelegate，不会出现在 os.Args 里，
+// 因此必须走 Wails 的 mac.Options.OnFileOpen，再复用 Windows 第二实例的那条
+// second-instance-open 事件通道交给前端在当前窗口打开。
+func (a *App) handleExternalOpenFile(filePath string) {
+	path := normalizePath(filePath)
+	if path == "" {
+		return
+	}
+	a.startupMu.Lock()
+	ready := a.frontendReady
+	if !ready {
+		a.externalOpen = append(a.externalOpen, path)
+	}
+	a.startupMu.Unlock()
+	if !ready {
+		// 前端还没挂载：等它注册好监听器后调 NotifyFrontendReady 再打开
+		return
+	}
+	a.deliverExternalOpen(path)
+}
+
+// deliverExternalOpen 通过事件通道让前端在当前窗口打开文档。
+func (a *App) deliverExternalOpen(path string) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "second-instance-open", []string{path})
+	runtime.WindowUnminimise(a.ctx)
+	runtime.WindowShow(a.ctx)
+}
+
+// NotifyFrontendReady 由前端在注册完 second-instance-open 监听后调用，
+// 重放启动期间缓存的外部打开请求（否则会丢第一个文档）。
+func (a *App) NotifyFrontendReady() {
+	a.startupMu.Lock()
+	a.frontendReady = true
+	pending := a.externalOpen
+	a.externalOpen = nil
+	a.startupMu.Unlock()
+	for _, p := range pending {
+		a.deliverExternalOpen(p)
+	}
+}
+
 // WindowMinimize minimizes the window
 func (a *App) WindowMinimize() {
 	if a.ctx == nil {
@@ -386,6 +440,8 @@ func (a *App) HTTPPort() int { return a.httpPort }
 // GetStartupArgs 返回启动时传入的命令行参数（右键"打开方式"/命令行打开的文件路径）。
 // 仅返回看起来像文档的路径（以常见扩展名结尾），其余忽略。
 func (a *App) GetStartupArgs() []string {
+	a.startupMu.Lock()
+	defer a.startupMu.Unlock()
 	out := []string{}
 	for _, arg := range a.startupArgs {
 		lower := strings.ToLower(arg)
@@ -592,13 +648,21 @@ func main() {
 			Assets: dist,
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
+		// macOS 专有：接收 Finder 双击/「打开方式」传来的文档路径
+		Mac: &mac.Options{
+			OnFileOpen: func(filePath string) {
+				app.handleExternalOpenFile(filePath)
+			},
+		},
 		OnStartup: func(ctx context.Context) {
 			app.ctx = ctx
 			// round24：词典改为按需加载（SpellCheck/Suggest 首次调用时 ensureDicts）。
 			// 默认启动不加载词典、不检查拼写 —— 用户在审阅页点"拼写检查"才加载。
 			// 捕获右键"打开方式"/命令行传入的文件路径（os.Args[1:]）
 			if len(os.Args) > 1 {
+				app.startupMu.Lock()
 				app.startupArgs = append(app.startupArgs, os.Args[1:]...)
+				app.startupMu.Unlock()
 			}
 			// 清空可能残留的"待打开文件"，并启动轮询第二个实例写入的路径
 			_ = os.WriteFile(pendingOpenPath(), []byte{}, 0o644)
