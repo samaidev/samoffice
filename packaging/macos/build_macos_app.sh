@@ -97,17 +97,28 @@ if command -v codesign >/dev/null 2>&1; then
 fi
 
 mkdir -p "$OUT_DIR"
+echo "==> 打包 zip"
 ZIP="$OUT_DIR/SamOffice-macos-${ARCH}-${VERSION}.zip"
 rm -f "$ZIP"
-# ditto 保留符号链接/权限，比 zip 更贴合 .app 结构
-ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP"
+if command -v ditto >/dev/null 2>&1; then
+  # ditto 保留符号链接/权限，比 zip 更贴合 .app 结构
+  ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP"
+else
+  ( cd "$OUT_DIR" && zip -qry "$(basename "$ZIP")" "${APP_NAME}.app" )
+fi
 echo "    $ZIP"
 
+# dmg 只是可选的“双击安装”外壳（一行安装脚本用 zip）：
+# hdiutil 在 CI runner 上偶发失败，不应连带整个打包步骤失败
+echo "==> 打包 dmg（可选）"
 if command -v hdiutil >/dev/null 2>&1; then
   DMG="$OUT_DIR/SamOffice-macos-${ARCH}-${VERSION}.dmg"
   rm -f "$DMG"
-  hdiutil create -volname "$APP_NAME" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG" >/dev/null
-  echo "    $DMG"
+  if hdiutil create -volname "$APP_NAME" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG" >/dev/null 2>&1; then
+    echo "    $DMG"
+  else
+    echo "    WARN: dmg 创建失败，已跳过（zip 产物不受影响）"
+  fi
 fi
 
 echo "==> 完成: $APP_DIR"
