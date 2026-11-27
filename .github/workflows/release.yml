@@ -1,7 +1,10 @@
 name: Release
 
-# 推送 v* 标签时：Windows 桌面构建 → Inno Setup 安装包 → 便携 zip →
-# 创建 GitHub Release 并清理只保留最近 3 个 release
+# 推送 v* 标签（或手动触发）时构建三平台桌面产物并发布 GitHub Release：
+#   Windows: Inno Setup 安装包 + 便携 zip
+#   macOS:   SamOffice.app（AppIcon.icns + Info.plist + ad-hoc 签名）→ zip / dmg，arm64 + x64
+#   Linux:   samoffice + samoffice.desktop + 图标 → tar.gz 便携包
+# 各平台 job 上传 artifact，release job 汇总上传，最后清理只保留最近 3 个 release。
 on:
   push:
     tags:
@@ -17,7 +20,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
+    name: Windows (amd64)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -126,43 +130,229 @@ jobs:
           Compress-Archive -Path stage/SamOffice-windows-x64 -DestinationPath "SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip" -Force
           Get-Item "SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip" | Select-Object Name, Length
 
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            packaging/windows/dist/SamOffice-setup-${{ steps.ver.outputs.version }}.exe
+            SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 已于 2026-11-02 退役；x64 只能用 macos-15-intel
+          - arch: arm64
+            os: macos-15
+          - arch: x64
+            os: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${{ github.ref_name }}"
+          fi
+          v="${v#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Build SamOffice.app (zip + dmg)
+        env:
+          ARCH: ${{ matrix.arch }}
+          SKIP_FRONTEND: '1'
+        run: ./packaging/macos/build_macos_app.sh "${{ steps.ver.outputs.version }}" dist-macos
+
+      - name: Verify bundle
+        run: |
+          test -x dist-macos/SamOffice.app/Contents/MacOS/samoffice
+          test -f dist-macos/SamOffice.app/Contents/Resources/AppIcon.icns
+          plutil -lint dist-macos/SamOffice.app/Contents/Info.plist
+          codesign --verify --deep dist-macos/SamOffice.app
+          ls -lh dist-macos
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: dist-macos/SamOffice-macos-${{ matrix.arch }}-${{ steps.ver.outputs.version }}.*
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux (amd64)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${{ github.ref_name }}"
+          fi
+          v="${v#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install desktop dependencies (GTK3 + WebKit2GTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.0-dev
+          pkg-config --exists gtk+-3.0 && pkg-config --exists webkit2gtk-4.0
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Build portable tarball
+        env:
+          SKIP_FRONTEND: '1'
+        run: ./packaging/linux/build_linux_package.sh "${{ steps.ver.outputs.version }}" dist-linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist-linux/SamOffice-linux-x64-${{ steps.ver.outputs.version }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${{ github.ref_name }}"
+          fi
+          v="${v#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist
+
       - name: Create release and upload assets
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v${{ steps.ver.outputs.version }}"
-          $title = "SamOffice v${{ steps.ver.outputs.version }}"
-          $notes = @(
-            "## SamOffice v${{ steps.ver.outputs.version }} Windows 桌面包",
-            "",
-            "- 下载 `SamOffice-setup-${{ steps.ver.outputs.version }}.exe` 双击安装（安装界面支持 English / 简体中文，无需管理员权限）",
-            "- 或下载便携版 zip 解压即用",
-            "",
-            "由 GitHub Actions 自动构建发布。"
-          ) -join "`n"
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          tag="v$V"
+          title="SamOffice v$V"
+          notes="$(
+            printf '%s\n' \
+              "## SamOffice v$V 桌面版（Windows / macOS / Linux）" \
+              "" \
+              "| 平台 | 文件 | 说明 |" \
+              "|------|------|------|" \
+              "| Windows | \`SamOffice-setup-$V.exe\` | 双击安装（安装界面支持 English / 简体中文，无需管理员权限）|" \
+              "| Windows | \`SamOffice-desktop-windows-x64-$V.zip\` | 便携版，解压即用 |" \
+              "| macOS (Apple Silicon) | \`SamOffice-macos-arm64-$V.zip\` / \`.dmg\` | \`.app\` 拖入 /Applications |" \
+              "| macOS (Intel) | \`SamOffice-macos-x64-$V.zip\` / \`.dmg\` | \`.app\` 拖入 /Applications |" \
+              "| Linux (x64) | \`SamOffice-linux-x64-$V.tar.gz\` | 便携包（二进制 + .desktop + 图标）|" \
+              "" \
+              "### 一行安装" \
+              "" \
+              "\`\`\`bash" \
+              "# macOS（自动识别 Apple Silicon / Intel，安装到 /Applications）" \
+              "curl -fsSL https://raw.githubusercontent.com/samaidev/samoffice/main/scripts/install-macos.sh | bash" \
+              "" \
+              "# Linux x64（安装到 ~/.local，无需 root）" \
+              "curl -fsSL https://raw.githubusercontent.com/samaidev/samoffice/main/scripts/install-linux.sh | bash" \
+              "\`\`\`" \
+              "" \
+              "macOS 包为 ad-hoc 签名（未公证）：安装脚本会自动去掉隔离标记；手动安装时首次请右键 → 打开。" \
+              "" \
+              "由 GitHub Actions 自动构建发布。"
+          )"
           # 已存在同 tag release 则删除重建（workflow_dispatch 重复发布场景）
-          $exist = gh release view $tag --json id 2>$null
-          if ($exist) { gh release delete $tag --yes --cleanup-tag }
-          gh release create $tag --title $title --notes $notes --target ${{ github.sha }}
-          gh release upload $tag "packaging/windows/dist/SamOffice-setup-${{ steps.ver.outputs.version }}.exe" "SamOffice-desktop-windows-x64-${{ steps.ver.outputs.version }}.zip" --clobber
-          gh release view $tag
+          if gh release view "$tag" --json id >/dev/null 2>&1; then
+            gh release delete "$tag" --yes --cleanup-tag
+          fi
+          gh release create "$tag" --title "$title" --notes "$notes" --target "${{ github.sha }}"
+          gh release upload "$tag" dist/* --clobber
+          gh release view "$tag"
 
       - name: Prune old releases (keep latest 3)
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releases = gh release list --limit 100 --json tagName,createdAt,isDraft | ConvertFrom-Json
-          $sorted = $releases | Sort-Object { [datetime]$_.createdAt } -Descending
-          $i = 0
-          foreach ($r in $sorted) {
-            $i++
-            if ($i -lt 3) { Write-Host "keep $($r.tagName)"; continue }
-            if ($i -eq 3) { Write-Host "keep $($r.tagName) (3rd)"; continue }
-            Write-Host "delete $($r.tagName)"
-            gh release delete $r.tagName --yes --cleanup-tag
-          }
+          set -euo pipefail
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName' \
+          | while read -r t; do
+              [ -n "$t" ] || continue
+              echo "delete $t"
+              gh release delete "$t" --yes --cleanup-tag
+            done
 
   # ---------------------------------------------------------------------------
   # Mirror release artifacts to ModelScope + HuggingFace and update the unified

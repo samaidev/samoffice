@@ -12,6 +12,20 @@ Core features: **Dual-mode architecture** (Wails desktop + standalone HTTP servi
 
 ---
 
+## Installation (one line)
+
+| Platform | Command |
+|----------|---------|
+| **macOS** (Apple Silicon / Intel, installs to `/Applications`) | `curl -fsSL https://raw.githubusercontent.com/samaidev/samoffice/main/scripts/install-macos.sh \| bash` |
+| **Linux** x64 (installs to `~/.local`, no root) | `curl -fsSL https://raw.githubusercontent.com/samaidev/samoffice/main/scripts/install-linux.sh \| bash` |
+| **Windows** | download `SamOffice-setup-<version>.exe` from the [latest release](../../releases/latest) and double-click (English / 简体中文, no admin rights) |
+
+The scripts fetch the newest matching asset from GitHub Releases: macOS takes `SamOffice-macos-<arch>-<version>.zip` and installs `SamOffice.app` (same `AppIcon.icns` / `Info.plist` set as the Windows packaging icons); Linux takes `SamOffice-linux-x64-<version>.tar.gz` and installs the binary, the `.desktop` menu entry and the icon.
+
+The macOS bundle is ad-hoc signed (not notarized), so the installer clears the quarantine flag for you. If you copy the `.app` somewhere by hand, use right-click → Open the first time.
+
+---
+
 ## 0. Quick Reference (At a Glance)
 
 | Item | Value |
@@ -24,7 +38,7 @@ Core features: **Dual-mode architecture** (Wails desktop + standalone HTTP servi
 | Build entry | `main.go` (desktop) / `cmd/samoffice-server` (service) |
 | Package manager | Go modules + npm (front-end) |
 | Tests | 116 e2e all passing (100%); Go unit tests `go test ./...` |
-| Install location | `C:\Program Files\SamOffice\` (Windows) |
+| Install location | `C:\Program Files\SamOffice\` (Windows) · `/Applications/SamOffice.app` (macOS) · `~/.local/opt/samoffice` (Linux) |
 
 **Windows build artifacts (as of 2026-07-19 install):**
 
@@ -61,6 +75,13 @@ Core features: **Dual-mode architecture** (Wails desktop + standalone HTTP servi
 
 # Windows: package NSIS installer (includes front-end build + Go compile + NSIS)
 packaging/windows/build_windows_package.bat
+
+# macOS: .app bundle (icon + Info.plist + ad-hoc signature) → dist-macos/*.zip|*.dmg
+./packaging/macos/build_macos_app.sh 0.8.22
+
+# Linux: portable tar.gz (binary + .desktop + icon) → dist-linux/*.tar.gz
+#   build deps: sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+./packaging/linux/build_linux_package.sh 0.8.22
 ```
 
 ### 2.2 Manual Compilation (equivalent commands, for troubleshooting)
@@ -165,6 +186,12 @@ samoffice/
 │   ├── build_windows_package.bat
 │   ├── samoffice_installer.nsi # NSIS script (installs to $PROGRAMFILES64\SamOffice)
 │   └── stage/                  # packaging staging area (exe + README/LICENSE)
+├── packaging/macos/          # macOS .app packaging
+│   ├── build_macos_app.sh    # .app → zip / dmg (arm64 + x64)
+│   └── Info.plist
+├── packaging/linux/          # Linux portable tarball
+│   ├── build_linux_package.sh
+│   └── samoffice.desktop
 ├── test-report.html            # test report (HTML)
 └── test-results.json           # test results (structured JSON)
 ```

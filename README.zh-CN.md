@@ -12,6 +12,20 @@
 
 ---
 
+## 安装（一行命令）
+
+| 平台 | 命令 |
+|------|------|
+| **macOS**（Apple Silicon / Intel，安装到 `/Applications`） | `curl -fsSL https://raw.githubusercontent.com/samaidev/samoffice/main/scripts/install-macos.sh \| bash` |
+| **Linux** x64（安装到 `~/.local`，无需 root） | `curl -fsSL https://raw.githubusercontent.com/samaidev/samoffice/main/scripts/install-linux.sh \| bash` |
+| **Windows** | 到[最新发布](../../releases/latest)下载 `SamOffice-setup-<版本>.exe` 双击安装（中英双语界面，无需管理员权限） |
+
+脚本从 GitHub Release 取最新的匹配产物：macOS 取 `SamOffice-macos-<arch>-<version>.zip`，装出 `SamOffice.app`（图标、`Info.plist` 与 Windows 打包同一套）；Linux 取 `SamOffice-linux-x64-<version>.tar.gz`，安装二进制、`.desktop` 菜单项与图标。
+
+macOS 安装包为 ad-hoc 签名（未做 Apple 公证）：脚本会自动去掉隔离属性；若手动拷贝 `.app`，首次打开请右键 → 打开。
+
+---
+
 ## 0. 速查表（一眼看懂）
 
 | 项 | 值 |
@@ -24,7 +38,7 @@
 | 构建入口 | `main.go`（桌面） / `cmd/samoffice-server`（服务）|
 | 包管理 | Go modules + npm（前端）|
 | 测试 | 116 个 e2e 全通过（100%）；Go 单测 `go test ./...` |
-| 安装位置 | `C:\Program Files\SamOffice\`（Windows）|
+| 安装位置 | `C:\Program Files\SamOffice\`（Windows）· `/Applications/SamOffice.app`（macOS）· `~/.local/opt/samoffice`（Linux）|
 
 **Windows 打包产物（截至 2026-07-19 安装）：**
 
@@ -61,6 +75,13 @@
 
 # Windows：打包 NSIS 安装器（含前端构建 + Go 编译 + NSIS）
 packaging/windows/build_windows_package.bat
+
+# macOS：打包 .app（图标 + Info.plist + ad-hoc 签名）→ dist-macos/*.zip|*.dmg
+./packaging/macos/build_macos_app.sh 0.8.22
+
+# Linux：打包便携 tar.gz（二进制 + .desktop + 图标）→ dist-linux/*.tar.gz
+#   构建依赖：sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+./packaging/linux/build_linux_package.sh 0.8.22
 ```
 
 ### 2.2 手动编译（等价命令，便于排查）
@@ -163,6 +184,12 @@ samoffice/
 │   ├── build_windows_package.bat
 │   ├── samoffice_installer.nsi # NSIS 脚本（安装到 $PROGRAMFILES64\SamOffice）
 │   └── stage/                  # 打包暂存区（exe + README/LICENSE）
+├── packaging/macos/          # macOS .app 打包
+│   ├── build_macos_app.sh    # .app → zip / dmg（arm64 + x64）
+│   └── Info.plist
+├── packaging/linux/          # Linux 便携 tar.gz 打包
+│   ├── build_linux_package.sh
+│   └── samoffice.desktop
 ├── test-report.html            # 测试报告（HTML）
 └── test-results.json           # 测试结果（结构化 JSON）
 ```

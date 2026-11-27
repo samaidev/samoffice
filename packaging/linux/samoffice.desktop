@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=SamOffice
+GenericName=Office Suite
+GenericName[zh_CN]=办公套件
+Comment=Cross-platform office suite (Documents, Spreadsheets, Presentations)
+Comment[zh_CN]=跨平台办公套件（文档 / 表格 / 演示）
+Exec=samoffice %F
+Icon=samoffice
+Terminal=false
+Categories=Office;WordProcessor;Spreadsheet;Presentation;
+Keywords=office;docx;xlsx;pptx;word;excel;powerpoint;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/msword;application/vnd.ms-excel;application/vnd.ms-powerpoint;text/csv;text/markdown;text/plain;text/html;application/pdf;
+StartupNotify=true
+StartupWMClass=samoffice

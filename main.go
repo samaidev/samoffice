@@ -12,12 +12,11 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"sync"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,7 +34,6 @@ import (
 	"github.com/zai/samoffice/internal/parser/xlsx"
 	"github.com/zai/samoffice/internal/server/api"
 	"go.uber.org/zap"
-	"golang.org/x/sys/windows"
 )
 
 //go:embed all:frontend/dist
@@ -133,50 +131,51 @@ func startBootWatchdog() {
 
 // tryEarlySingleInstance 在 wails.Run 之前做极早期单实例检测，避免第二个实例重复加载词典（慢）。
 // - 若已存在实例：把第二个实例的文档参数写入 pending 文件后立刻退出（毫秒级），由首个实例负责打开并最大化窗口。
-// - 否则：创建全局命名互斥体并持有，返回 true（本进程是首个实例）。
-// 非 Windows 平台退化为直接返回 true（不阻止多开）。
+// - 否则：持有平台单实例锁（Windows 全局命名互斥体 / macOS·Linux flock 文件锁），返回 true（本进程是首个实例）。
+// 平台差异收敛在 acquireSingleInstanceLock：singleinstance_windows.go / singleinstance_unix.go。
 func tryEarlySingleInstance() bool {
-	// 新建窗口模式：本进程由 NewWindow() 以 --new-window 启动，跳过单实例互斥，允许并发生成新窗口
+	// 新建窗口模式：本进程由 NewWindow() 以 --new-window 启动，跳过单实例锁，允许并发生成新窗口
 	for _, arg := range os.Args[1:] {
 		if arg == "--new-window" {
 			return true
 		}
 	}
-	const mutexName = "Global\\SamOffice-SingleInstance"
-	_, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(mutexName))
-	if err == nil {
-		// 创建成功：本进程是第一个，继续
+	if acquireSingleInstanceLock() {
 		return true
 	}
-	if errno, ok := err.(windows.Errno); ok && errno == windows.ERROR_ALREADY_EXISTS {
-		// 已存在实例：把文档参数写出并立即退出，跳过昂贵初始化
-		args := os.Args[1:]
-		files := []string{}
-		for _, a := range args {
-			// 去除 Windows "打开方式" 可能包裹的首尾引号/空白，再判断扩展名，
-			// 否则带引号路径（"C:\x.pdf"）会匹配失败导致pending不写入、第二实例不退。
-			clean := strings.Trim(strings.TrimSpace(a), "\"'")
-			lower := strings.ToLower(clean)
-			if strings.HasSuffix(lower, ".docx") || strings.HasSuffix(lower, ".doc") ||
-				strings.HasSuffix(lower, ".xlsx") || strings.HasSuffix(lower, ".xls") ||
-				strings.HasSuffix(lower, ".pdf") || strings.HasSuffix(lower, ".md") ||
-				strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") ||
-				strings.HasSuffix(lower, ".txt") {
-				files = append(files, clean)
+	// 已存在实例：把文档参数写出并立即退出，跳过昂贵初始化
+	if files := documentArgs(os.Args[1:]); len(files) > 0 {
+		if f, ferr := os.OpenFile(pendingOpenPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
+			for _, p := range files {
+				_, _ = f.WriteString(p + "\n")
 			}
+			f.Close()
 		}
-		if len(files) > 0 {
-			if f, ferr := os.OpenFile(pendingOpenPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
-				for _, p := range files {
-					_, _ = f.WriteString(p + "\n")
-				}
-				f.Close()
-			}
-		}
-		os.Exit(0)
 	}
-	// 其它创建错误：退化为允许多开
-	return true
+	os.Exit(0)
+	return false
+}
+
+// documentArgs 从命令行参数里挑出文档路径。
+// 先去掉「打开方式」可能包裹的首尾引号/空白再判断扩展名，否则带引号路径（"C:\x.pdf"）
+// 会匹配失败导致 pending 不写入、第二实例不退。
+func documentArgs(args []string) []string {
+	suffixes := []string{
+		".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".csv", ".tsv",
+		".pdf", ".md", ".markdown", ".html", ".htm", ".txt", ".sam",
+	}
+	files := []string{}
+	for _, a := range args {
+		clean := strings.Trim(strings.TrimSpace(a), "\"'")
+		lower := strings.ToLower(clean)
+		for _, ext := range suffixes {
+			if strings.HasSuffix(lower, ext) {
+				files = append(files, clean)
+				break
+			}
+		}
+	}
+	return files
 }
 
 // NewWindow 打开一个新的空 SamOffice 桌面窗口。
@@ -188,7 +187,6 @@ func (a *App) NewWindow() {
 		return
 	}
 	cmd := exec.Command(exe, "--new-window")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
 	_ = cmd.Start()
 }
 
