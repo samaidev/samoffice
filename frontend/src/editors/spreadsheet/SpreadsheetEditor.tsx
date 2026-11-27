@@ -2723,6 +2723,29 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     return true
   }
 
+  // 读取系统剪贴板文本（带超时）：某些浏览器/WebView 在未授权时会弹出权限提示并
+  // 挂起 Promise，若直接 await 会让粘贴动作好像「卡住」。限时 1.2s，失败返回空串。
+  const readSystemClipboard = async (): Promise<string> => {
+    const nav = navigator as Navigator & { clipboard?: { readText?: () => Promise<string> } }
+    if (!nav.clipboard?.readText) return ''
+    try {
+      return (await Promise.race([
+        nav.clipboard.readText(),
+        new Promise<string>(res => setTimeout(() => res(''), 1200)),
+      ])) || ''
+    } catch { return '' }
+  }
+
+  // 粘贴（智能）：优先粘贴本编辑器内复制的单元格块；本地没有内部剪贴板时
+  // 读取系统剪贴板文本，支持从 Excel / 记事本 / 网页 / 聊天窗口复制的内容。
+  // 右键菜单与功能区的粘贴都走这里 —— 旧实现只用内部 clipboard 且不可用时直接禁用，
+  // 导致从外部复制后「粘贴」灰掉或点了没反应。
+  const pasteSmart = async () => {
+    if (clipboard) { pasteCells(); return }
+    const txt = await readSystemClipboard()
+    if (txt && txt.length) pasteText(txt)
+  }
+
   // === 插入 / 删除 行列（重排所有单元格坐标） ===
   // 行列增删后迁移合并信息：按旧 key → 新 key 映射重建 mergeRange 与 hiddenBy。
   // 左上角或右下角被删除的合并区域整体拆分，避免错位损坏。
@@ -2817,12 +2840,15 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const deleteRows = (at: number, count: number) => {
     pushHistory()
+    // 删除后活动格/选区不能落在表外，否则方向键与后续操作会指向不存在的行（表现为「删了但不对」）
+    const maxRow = Math.max(0, Math.max(1, rows - count) - 1)
+    const keepRow = Math.min(at, maxRow)
     setData(d => rebuildRows(d, at, -count))
     setRows(r => Math.max(1, r - count))
     setRowHeights(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, -count) }))
     shiftPicAnchors('row', at, -count)
-    commitSelection({ r1: at, c1: selection.c1, r2: at, c2: selection.c1, mode: 'cell' })
-    setActive({ r: at, c: active.c })
+    commitSelection({ r1: keepRow, c1: selection.c1, r2: keepRow, c2: selection.c1, mode: 'cell' })
+    setActive({ r: keepRow, c: active.c })
   }
   const insertCols = (at: number, count: number) => {
     pushHistory()
@@ -2835,12 +2861,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   }
   const deleteCols = (at: number, count: number) => {
     pushHistory()
+    const maxCol = Math.max(0, Math.max(1, cols - count) - 1)
+    const keepCol = Math.min(at, maxCol)
     setData(d => rebuildCols(d, at, -count))
     setCols(c => Math.max(1, c - count))
     setColWidths(m => ({ ...m, [activeId]: shiftSizes(m[activeId] || {}, at, -count) }))
     shiftPicAnchors('col', at, -count)
-    commitSelection({ r1: selection.r1, c1: at, r2: selection.r1, c2: at, mode: 'cell' })
-    setActive({ r: active.r, c: at })
+    commitSelection({ r1: selection.r1, c1: keepCol, r2: selection.r1, c2: keepCol, mode: 'cell' })
+    setActive({ r: active.r, c: keepCol })
   }
 
   // === round61：浮动图表（完整模型：锚点/类型/系列/标题/图例/数据标签，随 xlsx 读写） ===
@@ -3479,7 +3507,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
         {ribbonTab === 'home' && (<>
           <RibbonGroup label={t('sheet.cell')}>
             <RibbonButton icon="⧉" label={t('sheet.copy')} onClick={() => copyCells(false)} onMouseDown={(e: any) => e.preventDefault()} />
-            <RibbonButton icon="📋" label={t('sheet.paste')} onClick={() => pasteCells()} disabled={!clipboard} onMouseDown={(e: any) => e.preventDefault()} />
+            <RibbonButton icon="📋" label={t('sheet.paste')} onClick={() => { void pasteSmart() }} onMouseDown={(e: any) => e.preventDefault()} />
           </RibbonGroup>
           {/* 撤销 / 重做（对接既有历史栈） */}
           <RibbonGroup label={tf('sheet.history', '历史')}>
@@ -4651,7 +4679,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
           <div className="fixed z-[100] py-1 rounded-lg shadow-xl border" style={{ left: menu.x, top: menu.y, background: 'var(--color-surface)', borderColor: 'var(--color-border)' }} onContextMenu={e => e.preventDefault()} onMouseDown={e => e.stopPropagation()}>
             {ctxItem(tf('sheet.cut', '剪切'), '✂', () => copyCells(true))}
             {ctxItem(tf('sheet.copy', '复制'), '⧉', () => copyCells(false))}
-            {ctxItem(tf('sheet.paste', '粘贴'), '📋', () => pasteCells(), !clipboard)}
+            {ctxItem(tf('sheet.paste', '粘贴'), '📋', () => { void pasteSmart() })}
             {sep}
             {ctxItem(tf('sheet.clearContent', '清除内容'), '⌫', () => clearCellsContent())}
             {ctxItem(tf('sheet.insertRowAbove', '在上方插入行'), '↥', () => insertRows(sr.r1, 1))}

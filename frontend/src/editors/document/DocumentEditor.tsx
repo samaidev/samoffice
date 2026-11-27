@@ -1508,6 +1508,9 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const contextMenuBoxRef = useRef<HTMLElement | null>(null)
   const [showShapePanel, setShowShapePanel] = useState(false)
   const [showArtPanel, setShowArtPanel] = useState(false)
+  // 艺术字样式面板的入口来源：开始▸字体 与 插入▸艺术字 共用同一个面板，
+  // 只渲染触发它的那个入口，避免两处同时弹出。
+  const [artAnchor, setArtAnchor] = useState<'home' | 'insert'>('insert')
   // 独立公式编辑器弹窗（全屏模态）
   const [showMathModal, setShowMathModal] = useState(false)
   const [mathEdit, setMathEdit] = useState<{ latex: string; inline: boolean; pos: number | null; fontSize: string; omml: string }>({ latex: '', inline: false, pos: null, fontSize: '', omml: '' })
@@ -1521,6 +1524,39 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
   const [showBgColorPopup, setShowBgColorPopup] = useState(false)
   // 迷你工具栏颜色弹出菜单 (统一改为 click 触发，与主 ribbon 保持一致)
   const [showMiniColorPopup, setShowMiniColorPopup] = useState(false)
+  // 艺术字样式面板：开始▸字体 与 插入▸艺术字 两个入口共用同一份 UI。
+  const renderArtStyles = (anchor: 'home' | 'insert') => {
+    if (!showArtPanel || artAnchor !== anchor) return null
+    const arts = [
+      { name: t('art.shadow') || '阴影', style: 'shadow', color: '#4f46e5' },
+      { name: t('art.gradient') || '渐变', style: 'gradient', color: '#667eea' },
+      { name: t('art.glow') || '发光', style: 'glow', color: '#10b981' },
+      { name: t('art.outline') || '描边', style: 'outline', color: '#3b82f6' },
+      { name: t('art.3d') || '3D', style: '3d', color: '#f59e0b' },
+      { name: t('art.red') || '红字', style: 'shadow', color: '#ef4444' },
+    ]
+    const insertArt = (p: { name: string; style: string; color: string }) => {
+      const text = prompt(t('doc.prompt.wordArt')); if (!text) return
+      const v = viewRef.current; if (!v) return
+      const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.wordArt.create({ style: p.style })]
+      if (p.style !== 'gradient' && p.style !== 'outline') marks.push(schema.marks.textColor.create({ color: p.color }))
+      v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, marks))))
+      focusNoJump(); setShowArtPanel(false)
+    }
+    return (
+      <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
+        <div className="grid grid-cols-3 gap-2">
+          {arts.map(p => (
+            <button key={p.name} onClick={() => insertArt(p)} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 72 }}>
+              <span style={{ fontSize: '18px', fontWeight: 700, color: p.color, textShadow: p.style === 'shadow' ? '2px 2px 4px rgba(0,0,0,0.4)' : p.style === 'glow' ? '0 0 10px ' + p.color : p.style === '3d' ? '1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 6px rgba(0,0,0,0.3)' : 'none' }}>{p.name.charAt(0)}a</span>
+              <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{p.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   // 弹出面板互斥：打开任一面板时关闭其他面板，避免多个弹出菜单重叠
   type PanelName = 'shape' | 'art' | 'color' | 'highlight' | 'shading' | 'bgColor'
   const openPanel = (which: PanelName) => {
@@ -4208,6 +4244,11 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                     </div>
                   )}
                 </div>
+                {/* 艺术字：开始▸字体 入口（对齐 MS Word 的「文本效果」，与 插入▸艺术字 同一面板） */}
+                <div className="relative">
+                  <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => { openPanel('art'); setArtAnchor('home') }} />
+                  {renderArtStyles('home')}
+                </div>
               </div>
             </div>
           </RibbonGroup>
@@ -4386,33 +4427,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
           </RibbonGroup>
           <RibbonGroup label={t('doc.wordArt')}>
             <div className="relative">
-              <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => openPanel('art')} />
-              {showArtPanel && (
-                <div className="absolute top-full ribbon-popup" style={{ left: 0, right: 'auto', zIndex: 50 }}>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { name: t('art.shadow') || '阴影', style: 'shadow', color: '#4f46e5', preview: 'text-shadow: 2px 2px 4px rgba(0,0,0,0.4)' },
-                      { name: t('art.gradient') || '渐变', style: 'gradient', color: '#667eea', preview: 'background: linear-gradient(135deg,#667eea,#764ba2); -webkit-background-clip:text; -webkit-text-fill-color:transparent' },
-                      { name: t('art.glow') || '发光', style: 'glow', color: '#10b981', preview: 'text-shadow: 0 0 10px rgba(16,185,129,0.6)' },
-                      { name: t('art.outline') || '描边', style: 'outline', color: '#3b82f6', preview: '-webkit-text-stroke: 1px #3b82f6; -webkit-text-fill-color:transparent' },
-                      { name: t('art.3d') || '3D', style: '3d', color: '#f59e0b', preview: 'text-shadow: 1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 6px rgba(0,0,0,0.3)' },
-                      { name: t('art.red') || '红字', style: 'shadow', color: '#ef4444', preview: 'color:#ef4444; text-shadow:2px 2px 4px rgba(0,0,0,0.3)' },
-                    ].map(p => (
-                      <button key={p.name} onClick={() => {
-                        const text = prompt(t('doc.prompt.wordArt')); if (!text) return
-                        const v = viewRef.current; if (!v) return
-                        const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.wordArt.create({ style: p.style })]
-                        if (p.style !== 'gradient' && p.style !== 'outline') marks.push(schema.marks.textColor.create({ color: p.color }))
-                        v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, marks))))
-                        focusNoJump(); setShowArtPanel(false)
-                      }} className="flex flex-col items-center gap-1 p-2 rounded-md transition-colors hover:bg-slate-100" style={{ minWidth: 72 }}>
-                        <span style={{ fontSize: '18px', fontWeight: 700, color: p.color, textShadow: p.style === 'shadow' ? '2px 2px 4px rgba(0,0,0,0.4)' : p.style === 'glow' ? '0 0 10px ' + p.color : p.style === '3d' ? '1px 1px 0 #ccc, 2px 2px 0 #bbb, 3px 3px 6px rgba(0,0,0,0.3)' : 'none' }}>{p.name.charAt(0)}a</span>
-                        <span style={{ fontSize: '10px', color: 'var(--color-text-secondary)' }}>{p.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => { openPanel('art'); setArtAnchor('insert') }} />
+              {renderArtStyles('insert')}
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('doc.flowchart')}>

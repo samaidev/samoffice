@@ -20,7 +20,7 @@ import { decideOpen } from './lib/openroute'
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.8.18'
+const APP_VERSION = 'v0.8.23'
 // [err-report-v2] 暴露版本给 window —— index.html 的崩溃覆盖层报送时读取
 ;(window as any).samofficeVersion = APP_VERSION
 
