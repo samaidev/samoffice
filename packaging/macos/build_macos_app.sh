@@ -57,6 +57,12 @@ fi
 echo "==> 编译桌面二进制 darwin/$GOARCH"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
+# Wails v2.13 的 darwin 代码（WailsContext.m 的文件对话框）用了 macOS 11+ 的
+# UniformTypeIdentifiers（UTType），但它自己的 #cgo LDFLAGS 只带了
+# Foundation/Cocoa/WebKit，直接 go build 链接会报：
+#   Undefined symbols: "_OBJC_CLASS_$_UTType"
+# 这里显式补上该 framework。
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -framework UniformTypeIdentifiers"
 CGO_ENABLED=1 GOOS=darwin GOARCH="$GOARCH" \
   go build -tags desktop,production -trimpath -ldflags "-s -w" -o "$BIN" .
 chmod +x "$BIN"
