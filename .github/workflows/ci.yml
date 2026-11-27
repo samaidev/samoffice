@@ -78,6 +78,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.0-dev
           pkg-config --exists gtk+-3.0 && pkg-config --exists webkit2gtk-4.0
 
+      - name: Download Go modules
+        run: go mod download
+
       - name: Build frontend
         working-directory: frontend
         run: |
@@ -105,14 +108,22 @@ jobs:
           set -o pipefail
           ./packaging/macos/build_macos_app.sh "0.0.0-ci" dist-macos 2>&1 | tee macos-package.log
 
-      # 打包步骤失败时把日志尾部转成注解：没有 Actions 日志权限的人也能在 check-run 里看到原因
-      - name: Surface packaging failure
+      # 打包步骤失败时把日志尾部/错误行转成注解（GitHub 每个 step 最多收 10 条）：
+      # 没有 Actions 日志权限的人也能在 check-run 里看到原因
+      - name: Surface packaging log tail
         if: failure() && matrix.goos == 'darwin'
         shell: bash
         run: |
-          echo "::error title=macOS packaging failed,file=packaging/macos/build_macos_app.sh::go build / packaging step failed"
-          tail -n 25 macos-package.log | while IFS= read -r line; do
-            echo "::error title=macOS packaging log::${line}"
+          tail -n 10 macos-package.log | while IFS= read -r line; do
+            echo "::error title=macOS packaging tail::${line}"
+          done
+
+      - name: Surface packaging errors
+        if: failure() && matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          grep -Ei "error|cannot|denied|no space|undefined|fatal|exit status" macos-package.log | tail -n 10 | while IFS= read -r line; do
+            echo "::error title=macOS packaging error::${line}"
           done
 
       - name: Sanity check macOS bundle
