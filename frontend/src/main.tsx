@@ -2,7 +2,11 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { I18nProvider } from './i18n'
+import { installWindowShim } from './lib/windowShim'
 import './index.css'
+
+// WKWebView（macOS）没有 alert/prompt 实现，先换上应用内实现再渲染
+installWindowShim()
 
 function logError(text: string) {
   let tries = 0

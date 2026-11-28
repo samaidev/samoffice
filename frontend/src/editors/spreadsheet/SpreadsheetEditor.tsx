@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { askText } from '../../lib/askText'
 import { useI18n } from '../../i18n'
 import { CN_FONT_SIZES } from '../../lib/cnFontSizes'
 import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
@@ -704,6 +705,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 标头右键对齐 MS Excel：先选中整列/整行（已在选区内则保留多选），再弹对应菜单。
   const [menu, setMenu] = useState<{ x: number; y: number; r: number; c: number; kind?: 'cell' | 'col' | 'row' | 'pic' | 'chart'; picId?: string } | null>(null)
   const [clipboard, setClipboard] = useState<{ r1: number; c1: number; r2: number; c2: number; cells: Record<string, Cell>; isCut: boolean } | null>(null)
+  // 上次「表格内复制」写入系统剪贴板的文本，用于区分内部复制与外部复制
+  const lastCopyTextRef = useRef<string>('')
   const [sheets, setSheets] = useState(initialSheetList)
   const activeId = sheets.find(s => s.active)?.id ?? 1
   // 每个 sheet 的列宽（0 基列号 → px）、行高（仅当前会话生效，不持久化）、浮动图片与冻结锚点
@@ -2654,7 +2657,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       }
       txt += rowTxt + (r === r2 ? '' : '\n')
     }
-    navigator.clipboard?.writeText(txt).catch(() => {})
+    lastCopyTextRef.current = txt
+    writeSystemClipboard(txt)
     setClipboard({ r1, c1, r2, c2, cells, isCut: cut })
   }
   const pasteCells = () => {
@@ -2725,7 +2729,31 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
 
   // 读取系统剪贴板文本（带超时）：某些浏览器/WebView 在未授权时会弹出权限提示并
   // 挂起 Promise，若直接 await 会让粘贴动作好像「卡住」。限时 1.2s，失败返回空串。
+  const writeSystemClipboard = (text: string) => {
+    const rt = (window as any).runtime
+    try {
+      if (rt?.ClipboardSetText) { void rt.ClipboardSetText(text); return }
+    } catch {}
+    navigator.clipboard?.writeText(text).catch(() => {})
+  }
+
   const readSystemClipboard = async (): Promise<string> => {
+    // macOS 的 WKWebView 里 navigator.clipboard.readText 不可用（无权限/无实现），
+    // 优先走 Wails 原生剪贴板，保证从 Excel / 记事本 / 浏览器复制后能粘贴进来。
+    try {
+      const rt = (window as any).runtime
+      if (rt?.ClipboardGetText) {
+        const t = await rt.ClipboardGetText()
+        if (typeof t === 'string' && t.length) return t
+      }
+    } catch {}
+    try {
+      const wailsApp = (window as any).go?.main?.App
+      if (wailsApp?.ClipboardGetText) {
+        const t = await wailsApp.ClipboardGetText()
+        if (typeof t === 'string' && t.length) return t
+      }
+    } catch {}
     const nav = navigator as Navigator & { clipboard?: { readText?: () => Promise<string> } }
     if (!nav.clipboard?.readText) return ''
     try {
@@ -2741,9 +2769,13 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
   // 右键菜单与功能区的粘贴都走这里 —— 旧实现只用内部 clipboard 且不可用时直接禁用，
   // 导致从外部复制后「粘贴」灰掉或点了没反应。
   const pasteSmart = async () => {
-    if (clipboard) { pasteCells(); return }
     const txt = await readSystemClipboard()
-    if (txt && txt.length) pasteText(txt)
+    const last = lastCopyTextRef.current
+    // 系统剪贴板里的内容与上次「表格内复制」写入的不一致 → 说明用户在别处复制了新内容，
+    // 以系统剪贴板为准（否则会一直粘回很久之前复制的那块单元格）。
+    if (txt && txt !== last) { if (pasteText(txt)) return }
+    if (clipboard) { pasteCells(); return }
+    if (txt) { pasteText(txt) }
   }
 
   // === 插入 / 删除 行列（重排所有单元格坐标） ===
@@ -2973,7 +3005,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     if (history) pushHistory()
     updateCharts(list => list.map(c => selPics.includes(c.id) ? { ...c, ...patch, edited: true } : c))
   }
-  const chartCommand = (cmd: ChartCommand) => {
+  const chartCommand = async (cmd: ChartCommand) => {
     const sel = curCharts.filter(c => selPics.includes(c.id))
     const c0 = sel[0]
     if (!c0 && !cmd.startsWith('arrange') && !cmd.startsWith('align')) return
@@ -2991,7 +3023,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
     }
     if (cmd === 'data:select') {
       if (!c0) return
-      const input = prompt(tf('sheet.chartRangePrompt', '数据区域（含表头，如 B1:D4）：'), c0.rangeRef || '')
+      const input = await askText(tf('sheet.chartRangePrompt', '数据区域（含表头，如 B1:D4）：'), c0.rangeRef || '')
       if (!input) return
       const rg = parseRange(input.trim().toUpperCase())
       if (!rg) { alert(tf('sheet.chartRangeBad', '区域格式应为 B1:D4 这样的形式')); return }
@@ -3582,8 +3614,8 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <RibbonButton icon="⏎" label={tf('sheet.wrapText', '换行')} onClick={() => setCellFmtRange({ wrap: !getCell(active.r, active.c).wrap })} active={!!getCell(active.r, active.c).wrap} title={tf('sheet.wrapTextTitle', '自动换行')} />
           </RibbonGroup>
           <RibbonGroup label={tf('sheet.merge', '合并')}>
-            <RibbonButton icon="⊟" label={tf('sheet.mergeCenter', '合并居中')} onClick={() => {
-              const range = prompt(tf('sheet.mergePrompt', '输入合并范围 (如 A1:B2):'), `${colName(active.c)}${active.r + 1}:${colName(active.c + 1)}${active.r + 2}`)
+            <RibbonButton icon="⊟" label={tf('sheet.mergeCenter', '合并居中')} onClick={async () => {
+              const range = await askText(tf('sheet.mergePrompt', '输入合并范围 (如 A1:B2):'), `${colName(active.c)}${active.r + 1}:${colName(active.c + 1)}${active.r + 2}`)
               if (!range) return
               const m = range.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/)
               if (m) {
@@ -3751,14 +3783,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             </div>
             <RibbonButton icon="🔢" label={t('sheet.textToColumns')} onClick={() => { const v = getCell(active.r, active.c).value; if (v) { pushHistory(); const parts = v.split(/[\s,;\t]+/); const nd = { ...data }; parts.forEach((p, i) => { const k = `${active.r}-${active.c + i}`; nd[k] = { ...(nd[k] || { value: '' }), value: p } }); setData(nd) } }} title={t('sheet.textToColumnsTitle')} />
             <RibbonButton icon="🔗" label={t('sheet.removeDup')} onClick={() => { pushHistory(); const seen = new Set<string>(); const newData: Record<string, Cell> = {}; for (let r = 0; r < rows; r++) { const v = getCell(r, active.c).value; if (v) { if (seen.has(v)) continue; seen.add(v) } for (let c = 0; c < cols; c++) { const cell = getCell(r, c); if (cell.value) newData[`${r}-${c}`] = cell } } setData(newData) }} title={t('sheet.removeDupTitle')} />
-            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={() => { const v = prompt(tf('sheet.whatIfPrompt', '输入公式（如 =SUM(A1:A5)*2）：'), '='); if (v && v.startsWith('=')) { setCell(active.r, active.c, String(evalFormula(v, data))) } }} title={t('sheet.whatIfTitle')} />
+            <RibbonButton icon="📉" label={t('sheet.whatIf')} onClick={async () => { const v = await askText(tf('sheet.whatIfPrompt', '输入公式（如 =SUM(A1:A5)*2）：'), '='); if (v && v.startsWith('=')) { setCell(active.r, active.c, String(evalFormula(v, data))) } }} title={t('sheet.whatIfTitle')} />
             <RibbonButton icon="🔮" label={t('sheet.forecast')} onClick={forecastTrend} title={tf('sheet.forecastTitle2', '按活动列线性趋势续写 5 行')} />
             <RibbonButton icon="📊" label={t('sheet.group')} onClick={groupRows} active={rowGroups.length > 0} title={tf('sheet.groupTitle2', '将选中行创建为可折叠分组')} />
             <RibbonButton icon="⊟" label={t("sheet.ungroup")} onClick={ungroupRows} disabled={!rowGroups.length} title={t('sheet.ungroupTitle')} />
           </RibbonGroup>
           {/* MS Office 风格获取和转换数据 */}
           <RibbonGroup label={t('sheet.getTransform')}>
-            <RibbonButton icon="📥" label={t('sheet.fromWeb')} onClick={() => { const url = prompt('URL:'); if (url) { fetch(url).then(r => r.text()).then(text => { text.split('\n').slice(0, rows).forEach((line, r) => { line.split(/\t|,/).slice(0, cols).forEach((v, c) => setCell(r, c, v.trim())) }) }).catch(e => alert(e.message)) } }} title={t('sheet.fromWebTitle')} />
+            <RibbonButton icon="📥" label={t('sheet.fromWeb')} onClick={async () => { const url = await askText('URL:'); if (url) { fetch(url).then(r => r.text()).then(text => { text.split('\n').slice(0, rows).forEach((line, r) => { line.split(/\t|,/).slice(0, cols).forEach((v, c) => setCell(r, c, v.trim())) }) }).catch(e => alert(e.message)) } }} title={t('sheet.fromWebTitle')} />
             <RibbonButton icon="📄" label={t('sheet.fromText')} onClick={() => { const input = document.createElement('input'); input.type='file'; input.accept='.txt'; input.onchange = async () => { const f = input.files?.[0]; if (!f) return; const text = await f.text(); text.split('\n').slice(0, rows).forEach((line, r) => { line.split(/\t|,|\s+/).slice(0, cols).forEach((v, c) => setCell(r, c, v.trim())) }) }; input.click() }} title={t('sheet.fromTextTitle')} />
             <RibbonButton icon="🗂" label={t('sheet.fromCsv')} onClick={() => {
               const input = document.createElement('input')
@@ -3830,16 +3862,16 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             <RibbonButton icon="📄" label={t('sheet.normal')} onClick={() => { setViewMode('normal'); setZoom(100) }} active={viewMode === 'normal'} title={t('sheet.normalTitle')} />
             <RibbonButton icon="🖨" label={t('sheet.pageBreakPreview')} onClick={() => setViewMode(viewMode === 'pageBreak' ? 'normal' : 'pageBreak')} active={viewMode === 'pageBreak'} title={tf('sheet.pageBreakTitle2', '显示分页参考线（虚线为打印分页位置）')} />
             <RibbonButton icon="📐" label={t('sheet.pageLayout')} onClick={() => setViewMode(viewMode === 'pageLayout' ? 'normal' : 'pageLayout')} active={viewMode === 'pageLayout'} title={tf('sheet.pageLayoutTitle2', '页面布局视图（页边距参考线）')} />
-            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={() => {
+            <RibbonButton icon="⚙️" label={t("sheet.customViews")} onClick={async () => {
               // 自定义视图：把当前视图状态存为命名视图，可随时恢复
-              const name = prompt(tf('sheet.viewSavePrompt', '输入视图名称保存当前视图（已有：' + (customViewNames.join(', ') || '无') + '）：'))
+              const name = await askText(tf('sheet.viewSavePrompt', '输入视图名称保存当前视图（已有：' + (customViewNames.join(', ') || '无') + '）：'))
               if (!name) return
               const views = JSON.parse(localStorage.getItem('sam-xlsx-views') || '{}')
               views[name] = { zoom, showGrid, showHeadings, showFormulaBar, freezeAt, viewMode }
               localStorage.setItem('sam-xlsx-views', JSON.stringify(views))
               const names = Object.keys(views)
               setCustomViewNames(names)
-              const load = prompt(tf('sheet.viewLoadPrompt', '输入要恢复的视图名称（留空取消）：'), name)
+              const load = await askText(tf('sheet.viewLoadPrompt', '输入要恢复的视图名称（留空取消）：'), name)
               if (load && views[load]) {
                 const v = views[load]
                 setZoom(v.zoom); setShowGrid(v.showGrid); setShowHeadings(v.showHeadings); setShowFormulaBar(v.showFormulaBar)
@@ -4660,14 +4692,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
               {!isCol && ctxItem(tf('sheet.deleteRows', '删除行'), '🗑', () => deleteRows(sr.r1, sr.r2 - sr.r1 + 1))}
               {sep}
               {ctxItem(tf('sheet.clearContent', '清除内容'), '⌫', () => clearCellsContent())}
-              {isCol && ctxItem(tf('sheet.colWidth', '列宽'), '↔', () => {
-                const v = prompt(tf('sheet.colWidthPrompt', '输入列宽(px，80 为默认)：'), String(curColWidths[menu.c] || 80))
+              {isCol && ctxItem(tf('sheet.colWidth', '列宽'), '↔', async () => {
+                const v = await askText(tf('sheet.colWidthPrompt', '输入列宽(px，80 为默认)：'), String(curColWidths[menu.c] || 80))
                 if (v === null) return
                 const w = Math.max(40, Math.min(600, Number(v) || 80))
                 setColWidths(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.c]: w } }))
               })}
-              {!isCol && ctxItem(tf('sheet.rowHeight', '行高'), '↕', () => {
-                const v = prompt(tf('sheet.rowHeightPrompt', '输入行高(px，28 为默认)：'), String(rowH(menu.r)))
+              {!isCol && ctxItem(tf('sheet.rowHeight', '行高'), '↕', async () => {
+                const v = await askText(tf('sheet.rowHeightPrompt', '输入行高(px，28 为默认)：'), String(rowH(menu.r)))
                 if (v === null) return
                 const h = Math.max(20, Math.min(400, Number(v) || 28))
                 setRowHeights(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.r]: h } }))
@@ -4691,14 +4723,14 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
             {ctxItem(tf('sheet.deleteCols', '删除列'), '🗑', () => deleteCols(sr.c1, sr.c2 - sr.c1 + 1))}
             {sep}
             {/* 行高 / 列宽（prompt 输入 px；行高仅当前会话生效，列宽保存时写回 xlsx） */}
-            {ctxItem(tf('sheet.rowHeight', '行高'), '↕', () => {
-              const v = prompt(tf('sheet.rowHeightPrompt', '输入行高(px，28 为默认)：'), String(rowH(menu.r)))
+            {ctxItem(tf('sheet.rowHeight', '行高'), '↕', async () => {
+              const v = await askText(tf('sheet.rowHeightPrompt', '输入行高(px，28 为默认)：'), String(rowH(menu.r)))
               if (v === null) return
               const h = Math.max(20, Math.min(400, Number(v) || 28))
               setRowHeights(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.r]: h } }))
             })}
-            {ctxItem(tf('sheet.colWidth', '列宽'), '↔', () => {
-              const v = prompt(tf('sheet.colWidthPrompt', '输入列宽(px，80 为默认)：'), String(curColWidths[menu.c] || 80))
+            {ctxItem(tf('sheet.colWidth', '列宽'), '↔', async () => {
+              const v = await askText(tf('sheet.colWidthPrompt', '输入列宽(px，80 为默认)：'), String(curColWidths[menu.c] || 80))
               if (v === null) return
               const w = Math.max(40, Math.min(600, Number(v) || 80))
               setColWidths(m => ({ ...m, [activeId]: { ...(m[activeId] || {}), [menu.c]: w } }))
@@ -4714,7 +4746,7 @@ export function SpreadsheetEditor({ initialRows = 30, initialCols = 12, title, i
       <div className="px-2 py-1 flex items-center gap-1 overflow-x-auto flex-shrink-0" style={{ background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)' }}>
         {sheets.map(s => (
           <button key={s.id} onClick={() => switchSheet(s.id)}
-            onDoubleClick={() => { const name = prompt(tf('sheet.renamePrompt', '重命名工作表：'), s.name); if (name && name.trim()) renameSheet(s.id, name.trim()) }}
+            onDoubleClick={async () => { const name = await askText(tf('sheet.renamePrompt', '重命名工作表：'), s.name); if (name && name.trim()) renameSheet(s.id, name.trim()) }}
             title={tf('sheet.renameHint', '双击重命名')}
             className={`px-3 py-1 text-xs rounded-t-md transition-all whitespace-nowrap ${s.active ? 'font-semibold' : 'opacity-60 hover:opacity-100'}`}
             style={{ background: s.active ? 'var(--color-primary-light)' : 'transparent', color: s.active ? 'var(--color-primary)' : 'var(--color-text-secondary)', borderBottom: s.active ? '2px solid var(--color-primary)' : '2px solid transparent' }}>{s.name}</button>

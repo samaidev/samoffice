@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { askText } from '../../lib/askText'
 import { EditorState, NodeSelection, TextSelection, Plugin, PluginKey } from 'prosemirror-state'
 import { DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view'
@@ -1345,11 +1346,11 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     }
     setCommentLinks(links)
   }
-  const editComment = (id: string) => {
+  const editComment = async (id: string) => {
     const v = viewRef.current; if (!v) return
     const idx = comments.findIndex(c => c.id === id); if (idx < 0) return
     const cur = comments[idx]
-    const newText = prompt(t('doc.prompt.comment') || '编辑批注：', cur.text)
+    const newText = await askText(t('doc.prompt.comment') || '编辑批注：', cur.text)
     if (newText === null) return
     const node = v.state.doc.nodeAt(cur.pos)
     if (!node || node.type.name !== 'comment_mark') return
@@ -1535,8 +1536,8 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
       { name: t('art.3d') || '3D', style: '3d', color: '#f59e0b' },
       { name: t('art.red') || '红字', style: 'shadow', color: '#ef4444' },
     ]
-    const insertArt = (p: { name: string; style: string; color: string }) => {
-      const text = prompt(t('doc.prompt.wordArt')); if (!text) return
+    const insertArt = async (p: { name: string; style: string; color: string }) => {
+      const text = await askText(t('doc.prompt.wordArt')); if (!text) return
       const v = viewRef.current; if (!v) return
       const marks: any[] = [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.wordArt.create({ style: p.style })]
       if (p.style !== 'gradient' && p.style !== 'outline') marks.push(schema.marks.textColor.create({ color: p.color }))
@@ -2775,10 +2776,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     setStyles((prev) => ({ ...prev, [name]: fmt }))
   }
 
-  const createStyleFromSelection = () => {
+  const createStyleFromSelection = async () => {
     const v = viewRef.current
     if (!v) return
-    const name = prompt(t('doc.newStyleName') || '样式名称')
+    const name = await askText(t('doc.newStyleName') || '样式名称')
     if (!name) return
     const { state } = v
     const { $from } = state.selection
@@ -2961,10 +2962,10 @@ export function DocumentEditor({ document, spellErrors = [], onChange, onManualS
     setTimeout(() => updateTocPageNumbers(), 400)
   }
 
-  const insertManualToc = () => {
+  const insertManualToc = async () => {
     const v = viewRef.current
     if (!v) return
-    const text = prompt(t('doc.prompt.tocEntry'))
+    const text = await askText(t('doc.prompt.tocEntry'))
     if (!text) return
     const lines = text.split('\n').filter((l) => l.trim())
     const tr = v.state.tr
@@ -3146,7 +3147,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     }
   }
 
-  const exec = (cmd: string) => {
+  const exec = async (cmd: string) => {
     const v = viewRef.current; if (!v) return; const sel = v.state.selection
     const selNode = sel instanceof NodeSelection ? sel.node : null
     switch (cmd) {
@@ -3275,7 +3276,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       case 'tableAlignCenter': { alignTable(v, 'center'); break }
       case 'tableAlignRight': { alignTable(v, 'right'); break }
       case 'footnote': {
-        const text = prompt(t('doc.prompt.footnote') || '输入脚注内容'); if (!text) break
+        const text = await askText(t('doc.prompt.footnote') || '输入脚注内容'); if (!text) break
         const { state, dispatch } = v
         let footnoteCount = 0
         state.doc.descendants(node => { if (node.type.name === 'footnote') footnoteCount++ })
@@ -3299,9 +3300,9 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
         focusNoJump()
         break
       }
-      case 'bookmark': { const name = prompt(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
+      case 'bookmark': { const name = await askText(t('doc.prompt.bookmark')); if (name) v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.bookmark.create({ name }))); break }
       case 'comment': {
-        const text = prompt(t('doc.prompt.comment'))
+        const text = await askText(t('doc.prompt.comment'))
         if (text && !sel.empty) {
           const id = Date.now().toString()
           const node = schema.nodes.comment_mark.create({ id, author: 'User', text })
@@ -3885,11 +3886,11 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     requestAnimationFrame(() => { syncLockRef.current = false })
   }
 
-  const toggleProtect = () => {
+  const toggleProtect = async () => {
     const v = viewRef.current; if (!v) return
     if (!protectedMode) {
       // 设置保护：输入密码，将哈希写入 document.protect 并持久化
-      const pwd = prompt(t('doc.protectSetPwd'))
+      const pwd = await askText(t('doc.protectSetPwd'))
       if (!pwd) return
       const hash = hashPwd(pwd)
       // 用 ref 取最新文档，避免闭包捕获到旧 props 而把刚编辑的正文回退
@@ -3906,7 +3907,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
       v.setProps({ editable: () => false })
     } else {
       // 取消保护：需要先验证密码
-      const pwd = prompt(t('doc.protectEnterPwd'))
+      const pwd = await askText(t('doc.protectEnterPwd'))
       if (pwd == null) return
       if (hashPwd(pwd) === (document.protect?.hash ?? '')) {
         const base: any = documentRef.current ?? document
@@ -3982,8 +3983,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     return () => { cleanup(); (window as any).__samStartRowDrag = undefined }
   }, [])
 
-  const insertWordArt = () => { const text = prompt(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); focusNoJump() } }
-  const applyWatermark = () => { const wm = prompt(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
+  const insertWordArt = async () => { const text = await askText(t('doc.prompt.wordArt')); if (text) { const v = viewRef.current; if (!v) return; v.dispatch(v.state.tr.replaceSelectionWith(schema.nodes.paragraph.create({ align: 'center' }, schema.text(text, [schema.marks.bold.create(), schema.marks.fontSize.create({ size: '36px' }), schema.marks.textColor.create({ color: '#4f46e5' })])))); focusNoJump() } }
+  const applyWatermark = async () => { const wm = await askText(t('doc.prompt.watermark'), watermark); if (wm !== null) setWatermark(wm) }
   const insertImage = () => {
     // 注意：组件作用域内 document 是 UDM Document prop，DOM 对象须用 window.document
     const input = window.document.createElement('input')
@@ -4025,7 +4026,7 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
     }
     input.click()
   }
-  const insertLink = () => { const url = prompt('URL:'); if (url) { const v = viewRef.current; if (!v) return; const sel = v.state.selection; if (!sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.link.create({ href: url }))) } }
+  const insertLink = async () => { const url = await askText('URL:'); if (url) { const v = viewRef.current; if (!v) return; const sel = v.state.selection; if (!sel.empty) v.dispatch(v.state.tr.addMark(sel.from, sel.to, schema.marks.link.create({ href: url }))) } }
 
   // 拼写装饰同步：仅当错误【内容】真正变化时才 dispatch —— 引用相同或内容一致时
   // 直接跳过（v.updateState(v.state) + setTick 会整体重渲染，旧版每次 fetch 回包都执行，
@@ -4243,11 +4244,6 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                       <ColorGrid colors={HL_COLORS} onPick={c => { setHighlight(c); closeAllPanels() }} onClear={() => { setHighlight(''); closeAllPanels() }} clearLabel={t('doc.noColor')} />
                     </div>
                   )}
-                </div>
-                {/* 艺术字：开始▸字体 入口（对齐 MS Word 的「文本效果」，与 插入▸艺术字 同一面板） */}
-                <div className="relative">
-                  <RibbonButton icon="🎨" label={t('doc.wordArt')} onClick={() => { openPanel('art'); setArtAnchor('home') }} />
-                  {renderArtStyles('home')}
                 </div>
               </div>
             </div>
@@ -4561,8 +4557,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 ]}
               />
             </div>
-            <RibbonButton icon="📄" label={t('doc.margins')} onClick={() => {
-              const preset = prompt(t('doc.marginsPrompt') + ' (top,bottom,left,right cm)', '2.54,2.54,2.54,2.54')
+            <RibbonButton icon="📄" label={t('doc.margins')} onClick={async () => {
+              const preset = await askText(t('doc.marginsPrompt') + ' (top,bottom,left,right cm)', '2.54,2.54,2.54,2.54')
               if (preset) {
                 const parts = preset.split(',').map(s => parseFloat(s.trim()))
                 if (parts.length === 4 && parts.every(v => !isNaN(v) && v > 0)) {
@@ -4571,8 +4567,8 @@ const isFooterSameAsPageNumberTemplate = (text: string, fmt?: string) => {
                 }
               }
             }} title={t('doc.marginsTitle')} />
-            <RibbonButton icon="ǁ" label={t('doc.columns')} onClick={() => {
-              const n = parseInt(prompt(t('doc.columnsPrompt'), '2') || '1')
+            <RibbonButton icon="ǁ" label={t('doc.columns')} onClick={async () => {
+              const n = parseInt(await askText(t('doc.columnsPrompt'), '2') || '1')
               if (n > 0 && n <= 4) setDocColumns(n)
             }} title={t('doc.columnsTitle')} />
             <RibbonButton icon="🔢" label={t('doc.lineNumber')} onClick={() => setDocLineNumbers(!docLineNumbers)} active={docLineNumbers} title={t('doc.lineNumberTitle')} />

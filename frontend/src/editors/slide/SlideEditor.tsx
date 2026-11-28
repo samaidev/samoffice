@@ -1,4 +1,5 @@
 import { useState, useMemo, memo, useEffect, useRef } from 'react'
+import { askText } from '../../lib/askText'
 import { useI18n } from '../../i18n'
 import { PrintDialog, PAPER_SIZES } from '../../components/PrintDialog'
 import { Dropdown } from '../../components/Dropdown'
@@ -1616,8 +1617,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
   })()
 
   // 艺术字操作
-  const addArtText = (preset: any) => {
-    const text = prompt(t('slide.prompt.wordArt'), 'SamOffice')
+  const addArtText = async (preset: any) => {
+    const text = await askText(t('slide.prompt.wordArt'), 'SamOffice')
     if (!text) return
     const newArt: ArtTextItem = {
       text, x: 100 * PXU, y: 100 * PXU, w: 400 * PXU, h: 80 * PXU,
@@ -2354,16 +2355,16 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             }} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.link')}>
-            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={() => {
+            <RibbonButton icon="🔗" label={t('slide.hyperlink')} onClick={async () => {
               if (!selectedEl || selectedEl.type !== 'shape') { softHint(); return }
-              const url = prompt('URL:', current.shapes[selectedEl.index]?.link || 'https://')
+              const url = await askText('URL:', current.shapes[selectedEl.index]?.link || 'https://')
               if (!url) return
               updateShape(selectedEl.index, { link: url })
             }} active={!!(selectedEl?.type === 'shape' && current.shapes[selectedEl.index]?.link)} title={t('slide.hyperlinkTitle') || '为选中元素添加超链接'} />
           </RibbonGroup>
           <RibbonGroup label={t('slide.text')}>
-            <RibbonButton icon="📝" label={t('slide.footnote')} onClick={() => {
-              const n = prompt(t('slide.prompt.notes'), current.notes || '')
+            <RibbonButton icon="📝" label={t('slide.footnote')} onClick={async () => {
+              const n = await askText(t('slide.prompt.notes'), current.notes || '')
               if (n === null) return
               const txt = n.trim()
               if (!txt) return
@@ -2414,8 +2415,8 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
                   style={{ background: c.value, borderColor: current.bg === c.value ? 'var(--color-primary)' : 'var(--color-border)' }} title={c.name} />
               ))}
             </div>
-            <RibbonButton icon="🎨" label={t('slide.bgFormat')} onClick={() => {
-              const color = prompt(t('slide.bgFormatPrompt'), current.bg)
+            <RibbonButton icon="🎨" label={t('slide.bgFormat')} onClick={async () => {
+              const color = await askText(t('slide.bgFormatPrompt'), current.bg)
               if (color) updateActive({ bg: color })
             }} title={t('slide.bgFormatTitle')} />
             <RibbonButton icon="🖼" label={t('slide.bgImage')} onClick={() => {
@@ -2436,10 +2437,10 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
           <RibbonGroup label={t('slide.slideSize')}>
             <RibbonButton icon="📺" label={t('slide.widescreen')} onClick={() => { recordHistory(); setDeckW(DECK_W_169); setDeckH(DECK_H_169) }} active={deckW === DECK_W_169 && deckH === DECK_H_169} title={t('slide.widescreenTitle')} />
             <RibbonButton icon="🖥" label={t('slide.standard')} onClick={() => { recordHistory(); setDeckW(DECK_W_43); setDeckH(DECK_H_43) }} active={deckW === DECK_W_43 && deckH === DECK_H_43} title={t('slide.standardTitle')} />
-            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={() => {
-              const wpx = prompt(t('slide.customSize') + ' (px, 96dpi):', String(Math.round(deckW / 9525)))
+            <RibbonButton icon="⚙️" label={t('slide.customSize')} onClick={async () => {
+              const wpx = await askText(t('slide.customSize') + ' (px, 96dpi):', String(Math.round(deckW / 9525)))
               if (!wpx) return
-              const hpx = prompt('height (px):', String(Math.round(deckH / 9525)))
+              const hpx = await askText('height (px):', String(Math.round(deckH / 9525)))
               if (!hpx) return
               const w = Math.round(parseFloat(wpx) * 9525), h = Math.round(parseFloat(hpx) * 9525)
               if (!w || !h || w < 10 || h < 10) { alert('Invalid size'); return }
@@ -2650,7 +2651,7 @@ export function SlideEditor({ initialSlides, onSlidesChange }: { initialSlides?:
             </div>
           </RibbonGroup>
           <RibbonGroup label={t('slide.notes')}>
-            <RibbonButton icon="📝" label={t('slide.speakerNotes')} onClick={() => { const n = prompt(t('slide.prompt.notes'), current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
+            <RibbonButton icon="📝" label={t('slide.speakerNotes')} onClick={async () => { const n = await askText(t('slide.prompt.notes'), current.notes); if (n !== null) updateActive({ notes: n }) }} active={!!current.notes} />
           </RibbonGroup>
         </>)}
 

@@ -14,13 +14,14 @@ import { useI18n } from './i18n'
 import { usePopupAutoFlip } from './hooks/usePopupAutoFlip'
 import { Dropdown } from './components/Dropdown'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { AskTextHost } from './lib/askText'
 import type { ConfirmChoice } from './components/ConfirmDialog'
 import { decideOpen } from './lib/openroute'
 
 type Tab = 'document' | 'spreadsheet' | 'slide' | 'markdown' | 'html' | 'pdf' | 'about'
 
 // 应用版本号（底部状态栏展示；发版时同步更新）
-const APP_VERSION = 'v0.8.23'
+const APP_VERSION = 'v0.8.24'
 // [err-report-v2] 暴露版本给 window —— index.html 的崩溃覆盖层报送时读取
 ;(window as any).samofficeVersion = APP_VERSION
 
@@ -2289,6 +2290,9 @@ ${t('sample.md.more')}
           </div>
         </div>
       )}
+
+      {/* 应用内文本输入框：替代 WKWebView 不支持的 window.prompt */}
+      <AskTextHost />
 
       {/* 底部状态栏 */}
       <footer
